@@ -1,6 +1,7 @@
 import os
 import importlib.util
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -27,7 +28,7 @@ CLAUDE_PLUGIN_ROOT_CHECKOUT_GUARD_COMMAND = (
 )
 CODEX_PLUGIN_ROOT_CHECKOUT_GUARD_FRAGMENT = 'python3 -B "${PLUGIN_ROOT}/claude/hooks/root_checkout_guard.py"'
 MINIMUM_VERIFIED_DELIVERY_FRAGMENTS = (
-    "Escapement optimizes for minimum verified delivery.",
+    "Escapement optimizes for minimum verified delivery",
     "YAGNI forbids speculative",
     "never weakens the outcome oracle",
     "current user/business outcome still passes its independent verification",
@@ -67,9 +68,11 @@ def test_minimum_verified_delivery_guidance_without_oracle_guardrail_fails(tmp_p
     for rel_path in ("agent-surfaces/onboarding/outcome-oracle.md", "AGENTS.md", "CLAUDE.md"):
         path = temp_root / rel_path
         path.write_text(
-            path.read_text().replace(
+            replace_normalized_phrase(
+                path.read_text(),
                 "never weakens the outcome oracle",
                 "prefers fewer files",
+                rel_path,
             )
         )
 
@@ -609,6 +612,13 @@ def assert_minimum_verified_delivery_guidance(root):
         text = " ".join((root / rel_path).read_text().split())
         for fragment in MINIMUM_VERIFIED_DELIVERY_FRAGMENTS:
             assert fragment in text, f"{rel_path} missing minimum verified delivery fragment: {fragment}"
+
+
+def replace_normalized_phrase(text, required, replacement, rel_path):
+    pattern = r"\s+".join(re.escape(token) for token in required.split())
+    mutated, count = re.subn(pattern, replacement, text, count=1)
+    assert count == 1, f"mutation prerequisite missing from {rel_path}"
+    return mutated
 
 
 CLAUDE_PLUGIN = ROOT / "plugins" / "escapement-claude"

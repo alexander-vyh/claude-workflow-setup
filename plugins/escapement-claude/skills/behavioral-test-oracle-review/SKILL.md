@@ -36,6 +36,7 @@ Reject the test plan if the named fragile implementation would pass every releva
 - No positive control, so an empty result could pass
 - Final output is not checked
 - Intermediate artifact is tested when the user cares about downstream output
+- Reported path is fixed while another consumer of the same invariant remains broken
 
 ## Handoff
 
@@ -46,4 +47,3 @@ Before implementation begins, state:
 - the fragile implementation that must fail
 - the tests/checks that reject it
 - the final outcome verification surface
-
