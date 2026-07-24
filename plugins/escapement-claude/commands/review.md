@@ -92,7 +92,7 @@ TARGET: {files or PR reference from step 1}
 
 Review strategy:
 1. Read all changed files
-2. For each change, ask: "Is this the simplest way to achieve this? Could this be 3 lines instead of 30?"
+2. For each change, ask: "Is this the simplest coherent way to achieve the outcome without weakening contracts, failure handling, or tests?"
 3. Check for: premature abstractions, unnecessary indirection, over-engineering, dead code, unused imports, copy-paste that should be (or should NOT be) extracted
 4. Check for: config/options that will never vary, error handling for impossible cases, backwards-compat shims for code that has no external consumers
 5. Only flag real simplification opportunities — do not suggest changes that trade one complexity for another
