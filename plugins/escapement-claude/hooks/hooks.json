@@ -47,6 +47,17 @@
         "matcher": "ScheduleWakeup"
       }
     ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/hooks/escapement_session_context.py\"",
+            "type": "command"
+          }
+        ],
+        "matcher": ""
+      }
+    ],
     "PreToolUse": [
       {
         "hooks": [
@@ -494,7 +505,7 @@
       {
         "hooks": [
           {
-            "command": "bd prime",
+            "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/hooks/escapement_session_context.py\"",
             "type": "command"
           }
         ],

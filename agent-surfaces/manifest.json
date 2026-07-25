@@ -29,9 +29,9 @@
   },
   "hooks": [
     {
-      "id": "bd_prime",
-      "description": "Load live beads workflow context at lifecycle boundaries.",
-      "source": "bd",
+      "id": "escapement_session_context",
+      "description": "Load Escapement-owned task-state and landing policy context at lifecycle boundaries.",
+      "source": "claude/hooks/escapement_session_context.py",
       "hosts": {
         "codex": {
           "status": "ready",
@@ -39,16 +39,16 @@
             {
               "event": "SessionStart",
               "matcher": "",
-              "command": "bd prime"
+              "command": "python3 -B claude/hooks/escapement_session_context.py"
             },
             {
               "event": "PreCompact",
               "matcher": "",
-              "command": "bd prime"
+              "command": "python3 -B claude/hooks/escapement_session_context.py"
             }
           ],
           "fixtures": [
-            "tests/test_agent_surfaces.py::test_codex_hooks_include_prime_and_behavioral_gate"
+            "tests/test_agent_surfaces.py::test_codex_hooks_include_escapement_session_context_and_behavioral_gate"
           ]
         },
         "claude": {
@@ -57,11 +57,17 @@
             {
               "event": "SessionStart",
               "matcher": "",
-              "command": "bd prime"
+              "command": "python3 -B ~/.claude/hooks/escapement_session_context.py"
+            },
+            {
+              "event": "PreCompact",
+              "matcher": "",
+              "command": "python3 -B ~/.claude/hooks/escapement_session_context.py"
             }
           ],
           "fixtures": [
-            "claude/settings.template.json"
+            "claude/hooks/tests/test_escapement_session_context.py::test_precompact_reinjects_the_same_authoritative_contract",
+            "tests/test_agent_surfaces.py::test_escapement_context_is_reinjected_for_both_hosts_and_lifecycle_events"
           ]
         }
       }
@@ -1447,7 +1453,7 @@
       "manifest": ".codex-plugin/plugin.json",
       "hooks_target": ".codex-plugin/hooks.json",
       "skills": ".agents/skills/",
-      "notes": "Plugin ships bd-prime (SessionStart/PreCompact) + 3 verified-Codex-safe gates (test_oracle_brief_gate, implementation_echo_test_gate, oracle_downgrade_warning_gate) via ${PLUGIN_ROOT} paths + statusMessage UX. Repo-resident surfaces (AGENTS.md, .codex/hooks.json, .agents/skills/) remain for project-local use."
+      "notes": "Plugin ships Escapement-owned session context (SessionStart/PreCompact) + 3 verified-Codex-safe gates (test_oracle_brief_gate, implementation_echo_test_gate, oracle_downgrade_warning_gate) via ${PLUGIN_ROOT} paths + statusMessage UX. Repo-resident surfaces (AGENTS.md, .codex/hooks.json, .agents/skills/) remain for project-local use."
     }
   },
   "skills": [

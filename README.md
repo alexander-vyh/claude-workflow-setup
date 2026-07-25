@@ -81,7 +81,7 @@ Escapement is **host-neutral at the core** — beads, OpenSpec, test-oracle disc
 | Skills | `claude/skills/` | `.agents/skills/` |
 | Plugin packaging | `.claude-plugin/plugin.json` | `plugins/escapement/.codex-plugin/` *(generated)* |
 
-The portable core runs on both: beads context loading (`bd prime`) and the verified test-oracle and outcome gates (Test Oracle Brief, discovery, spec-ID, implementation-echo, oracle-downgrade, outcome-assertion) are wired into `.codex/hooks.json` and **fixture-tested against Codex's payload shape**. The write/edit TDD gate remains Claude Code-specific because its Serena tool matching is not portable to Codex.
+The portable core runs on both: Escapement-owned task-state and landing-policy context and the verified test-oracle and outcome gates (Test Oracle Brief, discovery, spec-ID, implementation-echo, oracle-downgrade, outcome-assertion) are wired into `.codex/hooks.json` and **fixture-tested against Codex's payload shape**. The write/edit TDD gate remains Claude Code-specific because its Serena tool matching is not portable to Codex.
 
 The adapters expose different native capabilities. Per the `agent-surface-parity` spec, Claude Code-specific features — multi-agent `TeamCreate` teams and `ScheduleWakeup` continuation — are *excluded* from Codex surfaces rather than faked: a Codex hook is marked blocking only when a fixture proves it works against the current Codex payload. New shared behavior is added to the manifest first, then rendered to whichever host surface can actually enforce it.
 

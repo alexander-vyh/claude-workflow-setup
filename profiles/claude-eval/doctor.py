@@ -29,9 +29,7 @@ SETTINGS_BY_PROFILE = {
     "workflow": WORKFLOW_SETTINGS,
 }
 
-ALLOWED_EXTERNAL_COMMANDS = {
-    "bd prime",
-}
+ALLOWED_EXTERNAL_COMMANDS: set[str] = set()
 
 
 def load_json(path: Path) -> dict:

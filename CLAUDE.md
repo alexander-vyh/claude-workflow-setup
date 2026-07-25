@@ -33,8 +33,9 @@ theater rather than useful workflow machinery. See
 
 # Beads
 
-Run `bd prime` at session start or after context recovery. It is the live source
-for workflow context, tracker rules, memories, and close protocol.
+Beads is the task-state system, not the workflow-policy authority.
+Git, pull-request, merge, deployment, completion, memory, and agent-behavior
+policy come from Escapement and the repository's `.escapement/repo.json`.
 
 Issues live in the local Dolt database under `.beads`; `.beads/issues.jsonl` is
 a passive export and must not be treated as the wire protocol. Use `bd ready`,
