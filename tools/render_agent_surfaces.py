@@ -277,7 +277,7 @@ _PLUGIN_PATH_REWRITES = (
 
 def _claude_plugin_command(command: str) -> str:
     # Rewrite a deployed ~/.claude/{hooks,harness/bin}/<script> command to its
-    # vendored plugin path. Non-hook commands (e.g. `bd prime`) pass through.
+    # vendored plugin path. Commands outside those managed paths pass through.
     for prefix, repl in _PLUGIN_PATH_REWRITES:
         if prefix in command:
             head, tail = command.split(prefix, 1)
@@ -641,10 +641,15 @@ def validate_codex_surfaces(targets: dict[Path, str], manifest: dict[str, Any]) 
         for item in event_items
         for hook in item["hooks"]
     ]
-    if "bd prime" not in commands:
-        errors.append("Codex hooks must include bd prime")
-    if not any(command != "bd prime" for command in commands):
-        errors.append("Codex hooks must include at least one behavioral gate beyond bd prime")
+    context_command = "python3 -B claude/hooks/escapement_session_context.py"
+    if any("bd prime" in command for command in commands):
+        errors.append("Codex hooks must not delegate workflow policy to bd prime")
+    if context_command not in commands:
+        errors.append("Codex hooks must include Escapement-owned session context")
+    if not any(command != context_command for command in commands):
+        errors.append(
+            "Codex hooks must include at least one behavioral gate beyond session context"
+        )
 
     plugin_commands = [
         hook["command"]

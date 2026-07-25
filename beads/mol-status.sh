@@ -1,6 +1,6 @@
 #!/bin/bash
 # mol-status.sh — Output active molecule state for Claude Code SessionStart
-# Called alongside bd prime to give Claude molecule-aware context.
+# Called by the workflow profile to give Claude task-state context.
 # Lives at ~/.beads/mol-status.sh (global, works with any beads project)
 
 # Only run if we're in a beads project

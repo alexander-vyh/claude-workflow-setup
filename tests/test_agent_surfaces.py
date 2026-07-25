@@ -22,6 +22,13 @@ EXPECTED_CODEX_GATE = {
 }
 CODEX_FINAL_RESPONSE_GAP_COMMAND = "python3 -B claude/hooks/codex_final_response_gap.py"
 CODEX_PLUGIN_FINAL_RESPONSE_GAP_FRAGMENT = 'python3 -B "${PLUGIN_ROOT}/claude/hooks/codex_final_response_gap.py"'
+ESCAPEMENT_CONTEXT_COMMAND = "python3 -B claude/hooks/escapement_session_context.py"
+CODEX_PLUGIN_CONTEXT_FRAGMENT = (
+    'python3 -B "${PLUGIN_ROOT}/claude/hooks/escapement_session_context.py"'
+)
+CLAUDE_PLUGIN_CONTEXT_COMMAND = (
+    'python3 -B "${CLAUDE_PLUGIN_ROOT}/hooks/escapement_session_context.py"'
+)
 ROOT_CHECKOUT_GUARD_COMMAND = "python3 -B claude/hooks/root_checkout_guard.py"
 CLAUDE_PLUGIN_ROOT_CHECKOUT_GUARD_COMMAND = (
     'python3 -B "${CLAUDE_PLUGIN_ROOT}/hooks/root_checkout_guard.py"'
@@ -61,6 +68,39 @@ def test_generated_docs_ban_stop_solicitation():
         text = " ".join((ROOT / rel_path).read_text().split())
         assert "Do not ask whether to stop, keep going, wrap, pause" in text
         assert "If there is a next in-scope action, take it." in text
+
+
+def test_generated_docs_make_escapement_the_workflow_policy_authority():
+    paths = (
+        ROOT / "agent-surfaces" / "onboarding" / "beads.md",
+        ROOT / "AGENTS.md",
+        ROOT / "CLAUDE.md",
+    )
+
+    for path in paths:
+        text = " ".join(path.read_text(encoding="utf-8").split())
+        assert "bd prime" not in text, path
+        assert "Beads is the task-state system, not the workflow-policy authority." in text
+        assert (
+            "Git, pull-request, merge, deployment, completion, memory, and "
+            "agent-behavior policy come from Escapement"
+        ) in text
+
+
+def test_active_distributions_do_not_depend_on_beads_policy_injection():
+    paths = (
+        ROOT / "README.md",
+        ROOT / "agent-surfaces" / "manifest.json",
+        ROOT / "profiles" / "claude-eval" / "manifest.json",
+        ROOT / "profiles" / "claude-eval" / "settings.workflow.json",
+        ROOT / "profiles" / "claude-eval" / "doctor.py",
+        ROOT / "beads" / "formulas" / "mol-feature.formula.json",
+        ROOT / "beads" / "mol-status.sh",
+        ROOT / "docs" / "VOCABULARY.md",
+    )
+
+    for path in paths:
+        assert "bd prime" not in path.read_text(encoding="utf-8"), path
 
 
 def test_minimum_verified_delivery_guidance_without_oracle_guardrail_fails(tmp_path):
@@ -222,7 +262,8 @@ def test_codex_plugin_wrapper_hooks_are_self_contained_and_codex_shaped():
         for hook in item["hooks"]
     ]
 
-    assert "bd prime" in commands
+    assert "bd prime" not in commands
+    assert CODEX_PLUGIN_CONTEXT_FRAGMENT in commands
     assert any("test_oracle_brief_gate.py" in command for command in commands)
     assert any("implementation_echo_test_gate.py" in command for command in commands)
     assert any("oracle_downgrade_warning_gate.py" in command for command in commands)
@@ -246,7 +287,7 @@ def test_codex_plugin_wrapper_hooks_are_self_contained_and_codex_shaped():
     assert ready_hook_sources <= packaged_hook_sources
 
 
-def test_codex_hooks_include_prime_and_behavioral_gate():
+def test_codex_hooks_include_escapement_session_context_and_behavioral_gate():
     hooks = json.loads((ROOT / ".codex" / "hooks.json").read_text())["hooks"]
     commands = [
         hook["command"]
@@ -254,8 +295,126 @@ def test_codex_hooks_include_prime_and_behavioral_gate():
         for item in event_items
         for hook in item["hooks"]
     ]
-    assert "bd prime" in commands
+    assert "bd prime" not in commands
+    assert ESCAPEMENT_CONTEXT_COMMAND in commands
     assert EXPECTED_CODEX_GATE["command"] in commands
+
+
+def test_generated_hooks_never_delegate_workflow_policy_to_bd_prime():
+    """The known fragile implementation keeps bd prime and appends stronger prose."""
+    hook_paths = (
+        ROOT / ".codex" / "hooks.json",
+        CODEX_WRAPPER / "hooks" / "hooks.json",
+        ROOT / "plugins" / "escapement-claude" / "hooks" / "hooks.json",
+    )
+
+    for hook_path in hook_paths:
+        hooks = json.loads(hook_path.read_text())["hooks"]
+        commands = [
+            hook["command"]
+            for event_items in hooks.values()
+            for item in event_items
+            for hook in item["hooks"]
+        ]
+        assert all("bd prime" not in command for command in commands), hook_path
+
+
+def test_escapement_context_is_reinjected_for_both_hosts_and_lifecycle_events():
+    repo_hooks = json.loads((ROOT / ".codex" / "hooks.json").read_text())["hooks"]
+    codex_plugin_hooks = json.loads(
+        (CODEX_WRAPPER / "hooks" / "hooks.json").read_text()
+    )["hooks"]
+    claude_plugin_hooks = json.loads(
+        (ROOT / "plugins" / "escapement-claude" / "hooks" / "hooks.json").read_text()
+    )["hooks"]
+
+    for event in ("SessionStart", "PreCompact"):
+        repo_commands = [
+            hook["command"]
+            for item in repo_hooks.get(event, [])
+            for hook in item["hooks"]
+        ]
+        codex_plugin_commands = [
+            hook["command"]
+            for item in codex_plugin_hooks.get(event, [])
+            for hook in item["hooks"]
+        ]
+        claude_plugin_commands = [
+            hook["command"]
+            for item in claude_plugin_hooks.get(event, [])
+            for hook in item["hooks"]
+        ]
+
+        assert ESCAPEMENT_CONTEXT_COMMAND in repo_commands
+        assert CODEX_PLUGIN_CONTEXT_FRAGMENT in codex_plugin_commands
+        assert CLAUDE_PLUGIN_CONTEXT_COMMAND in claude_plugin_commands
+
+    assert (
+        CODEX_WRAPPER / "claude" / "hooks" / "escapement_session_context.py"
+    ).is_file()
+    assert (
+        ROOT
+        / "plugins"
+        / "escapement-claude"
+        / "hooks"
+        / "escapement_session_context.py"
+    ).is_file()
+
+
+@pytest.mark.parametrize(
+    "hook_path",
+    (
+        CODEX_WRAPPER / "claude" / "hooks" / "escapement_session_context.py",
+        ROOT
+        / "plugins"
+        / "escapement-claude"
+        / "hooks"
+        / "escapement_session_context.py",
+    ),
+)
+def test_vendored_escapement_context_executes_with_packaged_resolver(
+    hook_path,
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    nested = repo / "nested" / "deeper"
+    nested.mkdir(parents=True)
+    subprocess.run(
+        ["git", "init", "--initial-branch=main"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    policy_dir = repo / ".escapement"
+    policy_dir.mkdir()
+    (policy_dir / "repo.json").write_text(
+        json.dumps(
+            {
+                "intended_outcome": "merged-and-deployed",
+                "auto_merge_on_green": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [sys.executable, str(hook_path)],
+        cwd=nested,
+        input=json.dumps(
+            {"hook_event_name": "SessionStart", "cwd": str(nested)}
+        ),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    context = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
+    assert "intended_outcome=merged-and-deployed" in context
+    assert "auto_merge_on_green=true" in context
+    assert "source=declared" in context
+    assert "feature branch" in context
+    assert "pull request" in context
 
 
 def test_codex_repo_relative_python_hooks_disable_bytecode():

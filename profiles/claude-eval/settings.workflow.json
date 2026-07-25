@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bd prime",
+            "command": "python3 -B ~/.claude/hooks/escapement_session_context.py",
             "timeout": 10000
           },
           {
@@ -17,6 +17,17 @@
           {
             "type": "command",
             "command": "python3 -B ~/.claude/hooks/mol_status_check.py",
+            "timeout": 10000
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -B ~/.claude/hooks/escapement_session_context.py",
             "timeout": 10000
           }
         ]

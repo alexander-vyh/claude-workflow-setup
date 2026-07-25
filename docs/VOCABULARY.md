@@ -162,8 +162,9 @@ the git remote; `.beads/issues.jsonl` is a *passive export*, not the source of t
   *In repo:* `claude/hooks/spec_id_enforcement.py` validates the reference resolves to a
   real spec + anchor.
 
-- **`bd remember` / memory** — Persistent knowledge stored in beads (not in MEMORY.md
-  files), surfaced via `bd prime` in future sessions.
+- **Beads memory** — Persistent knowledge stored by Beads. Escapement does not
+  inject it automatically or treat it as workflow policy; durable project
+  guidance belongs in Escapement-owned repository surfaces.
 
 ---
 

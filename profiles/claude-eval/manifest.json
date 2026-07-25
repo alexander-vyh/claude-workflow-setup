@@ -39,7 +39,7 @@
     "stop_hook.py"
   ],
   "required_workflow_hooks": [
-    "bd prime",
+    "escapement_session_context.py",
     "session_status.py",
     "mol_status_check.py",
     "discovery-gate.py",

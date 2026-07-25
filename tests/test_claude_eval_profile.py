@@ -60,7 +60,7 @@ def test_claude_eval_profile_wires_required_gates():
     assert "Stop" in settings["hooks"]
 
 
-def test_claude_eval_workflow_profile_wires_beads_and_openspec():
+def test_claude_eval_workflow_profile_wires_escapement_context_and_openspec():
     manifest = json.loads(MANIFEST.read_text())
     commands = _commands(WORKFLOW_SETTINGS)
 
@@ -69,7 +69,12 @@ def test_claude_eval_workflow_profile_wires_beads_and_openspec():
 
     settings = json.loads(WORKFLOW_SETTINGS.read_text())
     assert "SessionStart" in settings["hooks"]
+    assert "PreCompact" in settings["hooks"]
     assert "Stop" in settings["hooks"]
+    assert all("bd prime" not in command for command in commands)
+    assert sum(
+        "escapement_session_context.py" in command for command in commands
+    ) == 2
 
     matchers = [
         item.get("matcher")
@@ -88,8 +93,6 @@ def test_claude_eval_workflow_profile_wires_beads_and_openspec():
 
 def test_claude_eval_profile_commands_reference_packaged_sources():
     for command in _commands() + _commands(WORKFLOW_SETTINGS):
-        if command == "bd prime":
-            continue
         refs = _refs(command)
         assert refs, f"hook command should reference ~/.claude: {command}"
         for ref in refs:
