@@ -48,7 +48,8 @@
             }
           ],
           "fixtures": [
-            "tests/test_agent_surfaces.py::test_codex_hooks_include_escapement_session_context_and_behavioral_gate"
+            "tests/test_agent_surfaces.py::test_codex_escapement_session_context_is_reinjected_for_both_hosts_and_lifecycle_events",
+            "tests/test_agent_surfaces.py::test_codex_plugin_is_the_sole_hook_owner"
           ]
         },
         "claude": {
@@ -67,7 +68,7 @@
           ],
           "fixtures": [
             "claude/hooks/tests/test_escapement_session_context.py::test_precompact_reinjects_the_same_authoritative_contract",
-            "tests/test_agent_surfaces.py::test_escapement_context_is_reinjected_for_both_hosts_and_lifecycle_events"
+            "tests/test_agent_surfaces.py::test_codex_escapement_session_context_is_reinjected_for_both_hosts_and_lifecycle_events"
           ]
         }
       }
@@ -1453,10 +1454,23 @@
       "manifest": ".codex-plugin/plugin.json",
       "hooks_target": ".codex-plugin/hooks.json",
       "skills": ".agents/skills/",
-      "notes": "Plugin ships Escapement-owned session context (SessionStart/PreCompact) + 3 verified-Codex-safe gates (test_oracle_brief_gate, implementation_echo_test_gate, oracle_downgrade_warning_gate) via ${PLUGIN_ROOT} paths + statusMessage UX. Repo-resident surfaces (AGENTS.md, .codex/hooks.json, .agents/skills/) remain for project-local use."
+      "notes": "The plugin is the sole owner of Codex hook registration and ships Escapement-owned session context plus all verified-Codex-safe gates via ${PLUGIN_ROOT} paths. The generated repo .codex/hooks.json is intentionally empty so a plugin install and an Escapement checkout cannot double-fire lifecycle hooks. AGENTS.md and .agents/skills remain repo-local source surfaces and are packaged into the plugin."
     }
   },
   "skills": [
+    {
+      "id": "beads-execution",
+      "target": ".agents/skills/beads-execution/SKILL.md",
+      "hosts": {
+        "codex": {
+          "status": "ready"
+        },
+        "claude": {
+          "status": "unsupported",
+          "unsupported_reason": "Claude uses its host-specific beads-execution skill."
+        }
+      }
+    },
     {
       "id": "openspec-apply-change",
       "target": ".agents/skills/openspec-apply-change/SKILL.md",

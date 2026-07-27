@@ -118,22 +118,10 @@ def _render_document(root: Path, manifest: dict[str, Any], host: str) -> str:
 
 
 def _render_codex_hooks(manifest: dict[str, Any]) -> str:
-    hooks: dict[str, list[dict[str, Any]]] = {}
-    for hook in manifest.get("hooks", []):
-        host = hook.get("hosts", {}).get("codex", {})
-        if host.get("status") != "ready":
-            continue
-        for event in host.get("events", []):
-            command = event["command"]
-            item: dict[str, Any] = {
-                "matcher": event.get("matcher", ""),
-                "hooks": [{"type": "command", "command": command}],
-            }
-            timeout = event.get("timeout_seconds")
-            if timeout is not None:
-                item["hooks"][0]["timeout"] = timeout
-            hooks.setdefault(event["event"], []).append(item)
-    return json.dumps({"hooks": hooks}, indent=2, sort_keys=True) + "\n"
+    # The installable plugin is the sole Codex hook owner. Keep this generated
+    # compatibility surface empty so opening the Escapement repository while the
+    # plugin is installed cannot execute every lifecycle hook twice.
+    return json.dumps({"hooks": {}}, indent=2, sort_keys=True) + "\n"
 
 
 def _codex_plugin_command(command: str) -> str:
@@ -541,7 +529,7 @@ def _validate_codex_skill(root: Path, skill: dict[str, Any], errors: list[str]) 
             errors.append(f"skill {item_id}: frontmatter missing description")
 
     lowered = text.lower()
-    if "openspec" not in lowered:
+    if item_id.startswith("openspec-") and "openspec" not in lowered:
         errors.append(f"skill {item_id}: Codex skill lacks OpenSpec workflow content")
     for token in CODEX_SKILL_FORBIDDEN:
         if token in text:
@@ -634,21 +622,10 @@ def validate_codex_surfaces(targets: dict[Path, str], manifest: dict[str, Any]) 
     if "${CLAUDE_PLUGIN_ROOT}" in plugin_hooks:
         errors.append("Codex plugin hooks must not use CLAUDE_PLUGIN_ROOT")
 
-    hooks = json.loads(codex_hooks)["hooks"]
-    commands = [
-        hook["command"]
-        for event_items in hooks.values()
-        for item in event_items
-        for hook in item["hooks"]
-    ]
-    context_command = "python3 -B claude/hooks/escapement_session_context.py"
-    if any("bd prime" in command for command in commands):
-        errors.append("Codex hooks must not delegate workflow policy to bd prime")
-    if context_command not in commands:
-        errors.append("Codex hooks must include Escapement-owned session context")
-    if not any(command != context_command for command in commands):
+    repo_hooks = json.loads(codex_hooks)["hooks"]
+    if repo_hooks:
         errors.append(
-            "Codex hooks must include at least one behavioral gate beyond session context"
+            "repo-local Codex hooks must be empty because the plugin is the sole hook owner"
         )
 
     plugin_commands = [
@@ -657,6 +634,15 @@ def validate_codex_surfaces(targets: dict[Path, str], manifest: dict[str, Any]) 
         for item in event_items
         for hook in item["hooks"]
     ]
+    if any("bd prime" in command for command in plugin_commands):
+        errors.append("Codex hooks must not delegate workflow policy to bd prime")
+    if not any("escapement_session_context.py" in command for command in plugin_commands):
+        errors.append("Codex plugin hooks must include Escapement-owned session context")
+    if not any("gate.py" in command for command in plugin_commands):
+        errors.append(
+            "Codex plugin hooks must include at least one behavioral gate beyond session context"
+        )
+
     for required in (
         "test_oracle_brief_gate.py",
         "implementation_echo_test_gate.py",
