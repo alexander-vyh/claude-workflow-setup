@@ -117,18 +117,18 @@ codex plugin marketplace add https://github.com/alexander-vyh/escapement
 codex plugin add escapement@escapement
 ```
 
-If an older Escapement install created
-`~/.agents/skills/beads-execution/SKILL.md`, migrate only the recognized legacy
-version after updating the checkout:
+For later upgrades, update the checkout and run the authoritative updater:
 
 ```bash
-python3 scripts/migrate_codex_beads_skill.py \
-  .agents/skills/beads-execution/SKILL.md \
-  "$HOME/.agents/skills/beads-execution/SKILL.md"
+git pull --ff-only
+./scripts/codex-plugin-update.sh
 ```
 
-The migration backs up and replaces known Escapement legacy content. It refuses
-to overwrite an unrecognized user-authored skill.
+The updater refreshes the plugin, then backs up and replaces only exact known
+Escapement legacy versions of
+`~/.agents/skills/beads-execution/SKILL.md`. It refuses to overwrite an
+unrecognized or customized user-authored skill, and verifies the effective
+installed source before reporting success.
 
 ---
 

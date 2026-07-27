@@ -14,17 +14,8 @@ from pathlib import Path
 
 KNOWN_LEGACY_SHA256 = {
     "2096820ff0d7a712aa4b58ca2590979f80f2d0fd168a23bda788a024f47792e0",
+    "c65855a32ece63079c692332a968174748187b9fb8e1a57bf3803dcc76beb402",
 }
-LEGACY_FRONTMATTER_DESCRIPTION = (
-    'description: Use when the user mentions beads, bead, bd, or asks to '
-    'execute/work on/run/start a bead task or issue (e.g. "execute bead '
-    'cake-4cq.1.1", "work on task X", "run the beads tasks", "start bead work"). '
-    "Reads tasks from bd ready, dispatches subagents, writes status back to beads."
-)
-LEGACY_CONTENT_MARKERS = (
-    "# Beads-Driven Execution",
-    "**Core principle:** `bd ready` drives dispatch.",
-)
 
 
 def _sha256(content: bytes) -> str:
@@ -32,14 +23,7 @@ def _sha256(content: bytes) -> str:
 
 
 def _is_recognized_legacy(content: bytes, recognized_hashes: set[str]) -> bool:
-    if _sha256(content) in recognized_hashes:
-        return True
-    text = content.decode("utf-8", errors="strict").replace("\r\n", "\n")
-    return (
-        "\nname: beads-execution\n" in text
-        and LEGACY_FRONTMATTER_DESCRIPTION in " ".join(text.split())
-        and all(marker in text for marker in LEGACY_CONTENT_MARKERS)
-    )
+    return _sha256(content) in recognized_hashes
 
 
 def migrate(source: Path, target: Path, recognized_hashes: set[str]) -> int:
