@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 from legacy_codex_skill_fixture import historical_legacy_skill_bytes
+from scripts import migrate_codex_beads_skill
 
 ROOT = Path(__file__).resolve().parents[1]
 MIGRATOR = ROOT / "scripts" / "migrate_codex_beads_skill.py"
@@ -98,6 +100,39 @@ def test_unknown_user_skill_is_preserved_byte_for_byte(tmp_path: Path) -> None:
     assert target.read_bytes() == user_content
     assert list(tmp_path.glob("SKILL.md.backup-*")) == []
     assert "unrecognized" in result.stderr.lower()
+
+
+def test_concurrent_target_change_is_not_overwritten(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    source = tmp_path / "safe.md"
+    target = tmp_path / "SKILL.md"
+    legacy = b"recognized historical Escapement skill\n"
+    concurrent_content = b"user edit made during migration\n"
+    source.write_text("safe explicit-execution skill\n", encoding="utf-8")
+    target.write_bytes(legacy)
+    real_copy2 = shutil.copy2
+
+    def copy_then_change(source_path: Path, backup_path: Path) -> None:
+        real_copy2(source_path, backup_path)
+        target.write_bytes(concurrent_content)
+
+    monkeypatch.setattr(migrate_codex_beads_skill.shutil, "copy2", copy_then_change)
+
+    result = migrate_codex_beads_skill.migrate(
+        source,
+        target,
+        {hashlib.sha256(legacy).hexdigest()},
+    )
+
+    assert result == 2
+    assert target.read_bytes() == concurrent_content
+    backups = list(tmp_path.glob("SKILL.md.backup-*"))
+    assert len(backups) == 1
+    assert backups[0].read_bytes() == legacy
+    assert "changed during migration" in capsys.readouterr().err
 
 
 def test_migration_preserves_unrelated_skill_tree_metadata(tmp_path: Path) -> None:

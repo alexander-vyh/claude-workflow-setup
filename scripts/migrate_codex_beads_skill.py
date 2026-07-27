@@ -54,6 +54,12 @@ def migrate(source: Path, target: Path, recognized_hashes: set[str]) -> int:
     try:
         temporary.write_bytes(source_content)
         shutil.copymode(source, temporary)
+        if not target.exists() or target.read_bytes() != target_content:
+            print(
+                f"refusing to replace global skill changed during migration: {target}",
+                file=sys.stderr,
+            )
+            return 2
         os.replace(temporary, target)
     finally:
         temporary.unlink(missing_ok=True)

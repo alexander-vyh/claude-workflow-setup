@@ -86,6 +86,10 @@ fi
             "hooks/hooks.json",
             b'{"hooks":{"SessionStart":[{"matcher":"","hooks":[]}]}}\n',
         ),
+        (
+            ".codex-plugin/plugin.json",
+            b'{"name":"escapement","version":"stale-test-fixture"}\n',
+        ),
     ),
 )
 def test_updater_rejects_stale_installed_surface(
