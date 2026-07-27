@@ -36,6 +36,24 @@ PLUGIN = {
 }
 
 
+SESSION_CONTEXT_PLUGIN = {
+    "hooks": {
+        "PreCompact": [
+            {
+                "hooks": [
+                    {
+                        "command": (
+                            'python3 -B "${CLAUDE_PLUGIN_ROOT}/hooks/'
+                            'escapement_session_context.py"'
+                        )
+                    }
+                ]
+            }
+        ]
+    }
+}
+
+
 def test_plugin_owned_scripts_extracts_basenames():
     assert plugin_owned_scripts(PLUGIN) == {
         "validate_no_shirking.py",
@@ -51,6 +69,83 @@ def test_prunes_plugin_owned_registration_across_path_styles():
     }
     pruned = prune_hooks(settings, plugin_owned_scripts(PLUGIN))
     assert pruned["hooks"] == {}, "plugin-owned Stop hook should be removed, and the empty event dropped"
+
+
+def test_session_context_migration_prunes_legacy_prime_command():
+    settings = {
+        "hooks": {
+            "PreCompact": [
+                {"hooks": [{"command": "bd prime"}]},
+            ]
+        }
+    }
+    pruned = prune_hooks(
+        settings,
+        plugin_owned_scripts(SESSION_CONTEXT_PLUGIN),
+    )
+    assert pruned["hooks"] == {}
+
+
+def test_older_plugin_without_session_context_preserves_legacy_prime_command():
+    settings = {
+        "hooks": {
+            "PreCompact": [
+                {"matcher": "", "hooks": [{"command": "bd prime"}]},
+            ]
+        }
+    }
+    pruned = prune_hooks(settings, plugin_owned_scripts(PLUGIN))
+    assert pruned == settings
+
+
+def test_session_context_migration_preserves_prime_outside_lifecycle_events():
+    settings = {
+        "hooks": {
+            "PreToolUse": [
+                {
+                    "matcher": "Bash",
+                    "hooks": [{"command": "bd prime"}],
+                },
+            ]
+        }
+    }
+    pruned = prune_hooks(
+        settings,
+        plugin_owned_scripts(SESSION_CONTEXT_PLUGIN),
+    )
+    assert pruned == settings
+
+
+def test_session_context_migration_preserves_personal_hook_metadata():
+    personal_group = {
+        "matcher": "manual",
+        "custom": "preserve-me",
+        "hooks": [
+            {
+                "type": "command",
+                "command": "~/.claude/hooks/pre-compact-save.sh",
+                "timeout": 17,
+                "statusMessage": "Saving personal context",
+            }
+        ],
+    }
+    settings = {
+        "model": "opus",
+        "hooks": {
+            "PreCompact": [
+                personal_group,
+                {"hooks": [{"command": "bd prime"}]},
+            ]
+        },
+    }
+    pruned = prune_hooks(
+        settings,
+        plugin_owned_scripts(SESSION_CONTEXT_PLUGIN),
+    )
+    assert pruned == {
+        "model": "opus",
+        "hooks": {"PreCompact": [personal_group]},
+    }
 
 
 def test_preserves_user_owned_hooks():
