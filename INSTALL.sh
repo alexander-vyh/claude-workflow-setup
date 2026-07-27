@@ -332,13 +332,47 @@ resolve_effective_pin_dir() {
 # user's own hooks (not shipped by escapement) are preserved verbatim.
 merge_settings() {
   local live="$CLAUDE_DIR/settings.json"
-  local plugin_hooks
-  # `|| true`: when the plugin cache dir does not exist yet (fresh machine, plugin
-  # not installed), `find` exits non-zero and `pipefail` propagates it, which under
-  # `set -e` would abort the whole install BEFORE the graceful branch below can run.
-  # Tolerate it so the "plugin not installed" hint actually fires (escapement-w4sn).
-  plugin_hooks=$(find "$CLAUDE_DIR/plugins/cache/escapement/escapement" -maxdepth 2 \
-    -name hooks.json -path '*/hooks/*' 2>/dev/null | head -1) || true
+  local plugin_hooks=""
+  local plugin_registry="$CLAUDE_DIR/plugins/installed_plugins.json"
+  local plugin_install=""
+  local plugin_entry=""
+
+  # Use Claude's installed-plugin registry rather than scanning cache siblings.
+  # Multiple historical cache versions may coexist; only installPath identifies
+  # the plugin version Claude actually loads.
+  if [[ -f "$plugin_registry" ]]; then
+    if ! plugin_entry=$(jq -c '
+      (.plugins // .) as $plugins
+      | if ($plugins | type) != "object" then
+          error("plugin registry must contain an object")
+        else
+          ($plugins["escapement@escapement"] // null)
+          | if . == null then
+              null
+            elif type != "array" then
+              error("escapement plugin registry entry must be an array")
+            else
+              ([.[] | select(type == "object" and .scope == "user")] | first // null)
+            end
+        end
+    ' "$plugin_registry" 2>&1); then
+      echo "ERROR: cannot migrate settings hooks: invalid plugin registry: $plugin_entry" >&2
+      return 1
+    fi
+    if [[ "$plugin_entry" != "null" ]]; then
+      if ! plugin_install=$(jq -er '
+        .installPath | select(type == "string" and length > 0)
+      ' <<<"$plugin_entry" 2>/dev/null); then
+        echo "ERROR: cannot migrate settings hooks: user plugin entry has no valid installPath." >&2
+        return 1
+      fi
+      plugin_hooks="$plugin_install/hooks/hooks.json"
+      if [[ ! -f "$plugin_hooks" ]]; then
+        echo "ERROR: cannot migrate settings hooks: registered plugin hooks not found: $plugin_hooks" >&2
+        return 1
+      fi
+    fi
+  fi
 
   if [[ -z "$plugin_hooks" ]]; then
     echo "    ⚠  escapement plugin not installed — cannot prune settings hooks."

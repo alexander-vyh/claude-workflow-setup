@@ -11,6 +11,8 @@ The plugin is now the sole owner. This prunes the settings-side duplicates.
     The user's own hooks (never shipped by escapement) are preserved verbatim.
   - BASENAME-MATCHED: the same script appears as ``~/.claude/hooks/x.py`` in
     settings and ``"${CLAUDE_PLUGIN_ROOT}/hooks/x.py"`` in the plugin.
+  - MIGRATION-AWARE: when the plugin owns ``escapement_session_context.py``, the
+    obsolete exact ``bd prime`` lifecycle command is removed as its predecessor.
   - SCOPED to the ``hooks`` block: every other settings key is preserved.
   - IDEMPOTENT, non-mutating, BACKED UP before writing.
 
@@ -28,6 +30,9 @@ import re
 import sys
 
 _SCRIPT_RE = re.compile(r"([\w.-]+\.(?:py|sh))")
+_SESSION_CONTEXT_SCRIPT = "escapement_session_context.py"
+_LEGACY_PRIME_COMMAND = "bd prime"
+_SESSION_CONTEXT_EVENTS = {"SessionStart", "PreCompact"}
 
 
 def _script_of(command: str) -> str | None:
@@ -58,15 +63,23 @@ def prune_hooks(settings: dict, owned: set[str]) -> dict:
     if not isinstance(hooks, dict):
         return out
 
+    remove_legacy_prime = _SESSION_CONTEXT_SCRIPT in owned
     surviving_events: dict[str, list] = {}
     for event, groups in hooks.items():
         surviving_groups = []
         for group in groups:
-            kept = [
-                hook
-                for hook in group.get("hooks", [])
-                if _script_of(hook.get("command", "")) not in owned
-            ]
+            kept = []
+            for hook in group.get("hooks", []):
+                command = hook.get("command", "")
+                plugin_owned = _script_of(command) in owned
+                legacy_prime = (
+                    remove_legacy_prime
+                    and event in _SESSION_CONTEXT_EVENTS
+                    and isinstance(command, str)
+                    and command.strip() == _LEGACY_PRIME_COMMAND
+                )
+                if not plugin_owned and not legacy_prime:
+                    kept.append(hook)
             if kept:
                 new_group = {k: v for k, v in group.items() if k != "hooks"}
                 new_group["hooks"] = kept

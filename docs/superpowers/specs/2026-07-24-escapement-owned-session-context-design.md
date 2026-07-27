@@ -74,3 +74,33 @@ tracker is repaired.
    configured repo policies while hostile Beads configuration is present, and
    inspect the emitted context.
 
+## Deployment Extension: Legacy Settings Migration
+
+The first live deployment exposed a second path by which the removed command
+could remain active: a direct registration in `~/.claude/settings.json`.
+`INSTALL.sh --update` must find the actually installed Escapement plugin and
+use its hook inventory to remove both duplicate script registrations and the
+legacy command replaced by `escapement_session_context.py`.
+
+1. **Business invariant:** After updating an installed Escapement plugin, the
+   effective user settings contain no automatic Beads policy injection.
+2. **Independent source of truth:** The real Claude plugin-cache layout, the
+   installed plugin's `hooks/hooks.json`, and the resulting user
+   `settings.json`.
+3. **Solution constraints:** Migration must be idempotent, preserve unrelated
+   user hooks and all non-hook settings, and remain non-destructive when the
+   plugin is genuinely absent.
+4. **Invalid solution classes:** Hardcoding one version directory; deleting
+   every lifecycle hook; editing only the current user's settings; finding the
+   plugin but failing to recognize the obsolete non-script command.
+5. **Fragile implementation to reject:** Increase the plugin-cache search depth
+   while leaving the legacy command untouched because it has no script basename.
+6. **Negative control:** A settings fixture containing the obsolete command must
+   lose it after installation.
+7. **Positive control:** A personal `PreCompact` hook in the same fixture must
+   survive byte-for-byte.
+8. **Missing/unresolved handling:** If no installed plugin hook inventory is
+   found, make no settings change and report that pruning was skipped.
+9. **Final outcome verification:** Run the installer against an isolated home
+   with the real nested cache shape, then update the live plugin and confirm the
+   effective settings and installed hook output.
