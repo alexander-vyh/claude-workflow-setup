@@ -17,19 +17,16 @@ CODEX_WRAPPER = ROOT / "plugins" / "escapement"
 EXPECTED_CODEX_GATE = {
     "event": "PreToolUse",
     "matcher": "Bash",
-    "command": "python3 -B claude/hooks/test_oracle_brief_gate.py",
+    "command": 'python3 -B "${PLUGIN_ROOT}/claude/hooks/test_oracle_brief_gate.py"',
     "timeout": 5,
 }
-CODEX_FINAL_RESPONSE_GAP_COMMAND = "python3 -B claude/hooks/codex_final_response_gap.py"
 CODEX_PLUGIN_FINAL_RESPONSE_GAP_FRAGMENT = 'python3 -B "${PLUGIN_ROOT}/claude/hooks/codex_final_response_gap.py"'
-ESCAPEMENT_CONTEXT_COMMAND = "python3 -B claude/hooks/escapement_session_context.py"
 CODEX_PLUGIN_CONTEXT_FRAGMENT = (
     'python3 -B "${PLUGIN_ROOT}/claude/hooks/escapement_session_context.py"'
 )
 CLAUDE_PLUGIN_CONTEXT_COMMAND = (
     'python3 -B "${CLAUDE_PLUGIN_ROOT}/hooks/escapement_session_context.py"'
 )
-ROOT_CHECKOUT_GUARD_COMMAND = "python3 -B claude/hooks/root_checkout_guard.py"
 CLAUDE_PLUGIN_ROOT_CHECKOUT_GUARD_COMMAND = (
     'python3 -B "${CLAUDE_PLUGIN_ROOT}/hooks/root_checkout_guard.py"'
 )
@@ -246,6 +243,142 @@ def test_codex_plugin_wrapper_contains_current_codex_skills():
     assert "openspec-apply-change" in wrapper_skills
 
 
+def _canonical_hook_registrations(hooks):
+    registrations = []
+    for event, groups in hooks.items():
+        for group in groups:
+            matcher = group.get("matcher", "")
+            for hook in group.get("hooks", []):
+                command = hook.get("command", "")
+                script_match = re.search(r"([\w.-]+\.(?:py|sh))", command)
+                identity = script_match.group(1) if script_match else command.strip()
+                registrations.append((event, matcher, identity))
+    return registrations
+
+
+def _manifest_codex_registrations():
+    manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    registrations = []
+    for hook in manifest["hooks"]:
+        codex = hook["hosts"]["codex"]
+        if codex["status"] != "ready":
+            continue
+        for event in codex["events"]:
+            command = event["command"]
+            if command.startswith("python3 -B claude/hooks/"):
+                command = command.replace(
+                    "python3 -B ",
+                    'python3 -B "${PLUGIN_ROOT}/',
+                    1,
+                ) + '"'
+            registrations.append(
+                (
+                    event["event"],
+                    event.get("matcher", ""),
+                    command,
+                    event.get("timeout_seconds"),
+                )
+            )
+    return registrations
+
+
+def test_codex_plugin_is_the_sole_hook_owner():
+    """A repo plus the installed plugin must not execute every Codex hook twice."""
+    repo_hooks = json.loads((ROOT / ".codex" / "hooks.json").read_text())["hooks"]
+    plugin_hooks = json.loads(
+        (CODEX_WRAPPER / "hooks" / "hooks.json").read_text()
+    )["hooks"]
+
+    assert repo_hooks == {}, (
+        "repo-local Codex hooks duplicate the installed plugin; keep .codex/hooks.json "
+        "as an empty generated compatibility surface"
+    )
+
+    registrations = _canonical_hook_registrations(plugin_hooks)
+    assert registrations, "plugin hook inventory must remain non-empty"
+    assert len(registrations) == len(set(registrations)), (
+        "plugin contains duplicate effective event/matcher/script registrations"
+    )
+    assert ("SessionStart", "", "escapement_session_context.py") in registrations
+    assert ("PreCompact", "", "escapement_session_context.py") in registrations
+    assert ("PreToolUse", "Bash", "test_oracle_brief_gate.py") in registrations
+
+    actual_inventory = [
+        (
+            event,
+            group.get("matcher", ""),
+            hook["command"],
+            hook.get("timeout"),
+        )
+        for event, groups in plugin_hooks.items()
+        for group in groups
+        for hook in group.get("hooks", [])
+    ]
+    assert sorted(actual_inventory) == sorted(_manifest_codex_registrations()), (
+        "plugin hook inventory must exactly match the manifest; aliases, wrappers, "
+        "and extra commands would reintroduce duplicate effective execution"
+    )
+
+
+def test_codex_beads_execution_skill_requires_explicit_execution_intent():
+    skill_path = ROOT / ".agents" / "skills" / "beads-execution" / "SKILL.md"
+    assert skill_path.is_file(), "Codex needs an Escapement-owned Beads execution skill"
+    text = skill_path.read_text(encoding="utf-8")
+    frontmatter = text.split("---", 2)[1]
+    description = next(
+        line.partition(":")[2].strip()
+        for line in frontmatter.splitlines()
+        if line.startswith("description:")
+    ).lower()
+
+    for broad_trigger in (
+        "mentions beads",
+        "mentions bead",
+        "mentions bd",
+        "asks about beads",
+        "all beads",
+        "beads-related",
+        "except",
+    ):
+        assert broad_trigger not in description
+
+    assert "explicitly asks" in description
+    assert "execute" in description
+    assert "task id" in description
+
+    normalized = " ".join(text.lower().split())
+    for negative_example in (
+        "did beads add back pr guidance?",
+        "what changed in beads?",
+        "explain bead esc-123, but do not execute it.",
+    ):
+        assert negative_example in normalized
+    for positive_example in (
+        "execute bead esc-123",
+        "work on task esc-123",
+    ):
+        assert positive_example in normalized
+
+    for claude_only in ("TeamCreate", "AskUserQuestion", "Agent("):
+        assert claude_only not in text
+
+
+def test_codex_guidance_routes_informational_beads_questions_directly():
+    paths = (
+        ROOT / "agent-surfaces" / "onboarding" / "hosts" / "codex.md",
+        ROOT / "AGENTS.md",
+    )
+    required = (
+        "Informational or diagnostic questions about Beads are bounded read-only work.",
+        "Do not invoke `beads-execution`",
+        "explicitly asks to execute, work on, run, or start a tracked task",
+    )
+    for path in paths:
+        text = " ".join(path.read_text(encoding="utf-8").split())
+        for phrase in required:
+            assert phrase in text, path
+
+
 def test_codex_plugin_wrapper_hooks_are_self_contained_and_codex_shaped():
     hooks_path = CODEX_WRAPPER / "hooks" / "hooks.json"
     assert hooks_path.exists(), "Codex wrapper must package hooks/hooks.json for plugin discovery"
@@ -287,17 +420,9 @@ def test_codex_plugin_wrapper_hooks_are_self_contained_and_codex_shaped():
     assert ready_hook_sources <= packaged_hook_sources
 
 
-def test_codex_hooks_include_escapement_session_context_and_behavioral_gate():
+def test_codex_repo_hook_surface_stays_empty():
     hooks = json.loads((ROOT / ".codex" / "hooks.json").read_text())["hooks"]
-    commands = [
-        hook["command"]
-        for event_items in hooks.values()
-        for item in event_items
-        for hook in item["hooks"]
-    ]
-    assert "bd prime" not in commands
-    assert ESCAPEMENT_CONTEXT_COMMAND in commands
-    assert EXPECTED_CODEX_GATE["command"] in commands
+    assert hooks == {}
 
 
 def test_generated_hooks_never_delegate_workflow_policy_to_bd_prime():
@@ -319,7 +444,7 @@ def test_generated_hooks_never_delegate_workflow_policy_to_bd_prime():
         assert all("bd prime" not in command for command in commands), hook_path
 
 
-def test_escapement_context_is_reinjected_for_both_hosts_and_lifecycle_events():
+def test_codex_escapement_session_context_is_reinjected_for_both_hosts_and_lifecycle_events():
     repo_hooks = json.loads((ROOT / ".codex" / "hooks.json").read_text())["hooks"]
     codex_plugin_hooks = json.loads(
         (CODEX_WRAPPER / "hooks" / "hooks.json").read_text()
@@ -329,11 +454,6 @@ def test_escapement_context_is_reinjected_for_both_hosts_and_lifecycle_events():
     )["hooks"]
 
     for event in ("SessionStart", "PreCompact"):
-        repo_commands = [
-            hook["command"]
-            for item in repo_hooks.get(event, [])
-            for hook in item["hooks"]
-        ]
         codex_plugin_commands = [
             hook["command"]
             for item in codex_plugin_hooks.get(event, [])
@@ -345,10 +465,10 @@ def test_escapement_context_is_reinjected_for_both_hosts_and_lifecycle_events():
             for hook in item["hooks"]
         ]
 
-        assert ESCAPEMENT_CONTEXT_COMMAND in repo_commands
         assert CODEX_PLUGIN_CONTEXT_FRAGMENT in codex_plugin_commands
         assert CLAUDE_PLUGIN_CONTEXT_COMMAND in claude_plugin_commands
 
+    assert repo_hooks == {}
     assert (
         CODEX_WRAPPER / "claude" / "hooks" / "escapement_session_context.py"
     ).is_file()
@@ -417,20 +537,8 @@ def test_vendored_escapement_context_executes_with_packaged_resolver(
     assert "pull request" in context
 
 
-def test_codex_repo_relative_python_hooks_disable_bytecode():
-    """Codex hooks run inside the repo; Python hooks must not leave __pycache__ residue."""
-    hooks = json.loads((ROOT / ".codex" / "hooks.json").read_text())["hooks"]
-    commands = [
-        hook["command"]
-        for event_items in hooks.values()
-        for item in event_items
-        for hook in item["hooks"]
-    ]
-
-    offenders = [command for command in commands if command.startswith("python3 claude/hooks/")]
-    assert offenders == []
-    assert any(command.startswith("python3 -B claude/hooks/") for command in commands)
-
+def test_codex_plugin_python_hooks_disable_bytecode():
+    """The sole Codex hook owner must not leave bytecode in its install cache."""
     plugin_hooks = json.loads((CODEX_WRAPPER / "hooks" / "hooks.json").read_text())["hooks"]
     plugin_commands = [
         hook["command"]
@@ -444,6 +552,10 @@ def test_codex_repo_relative_python_hooks_disable_bytecode():
         if command.startswith('python3 "${PLUGIN_ROOT}/claude/hooks/')
     ]
     assert plugin_offenders == []
+    assert any(
+        command.startswith('python3 -B "${PLUGIN_ROOT}/claude/hooks/')
+        for command in plugin_commands
+    ), "no bytecode-disabled Python hook found in the Codex plugin"
 
 
 def test_claude_python_hooks_disable_bytecode():
@@ -485,29 +597,10 @@ def test_claude_python_hooks_disable_bytecode():
     ), "no bytecode-disabled python hook found in the plugin — the -B check is vacuous"
 
 
-def test_codex_hooks_include_final_response_gap_warning():
-    """No Stop GATE is ported to Codex yet; the gap must be explicit at startup.
-
-    Codex 0.144.1 DOES support a `stop` hook event (verified: codex@openai-codex
-    registers one and a real `codex exec` printed `hook: Stop`). But escapement's
-    continuation-harness Stop gate (harness/bin/stop_hook.py, ~1144 lines) assumes
-    Claude Stop payloads, Claude transcript layout, ScheduleWakeup, and ~/.claude
-    state — porting it is its own effort, tracked separately. Until that lands,
-    escapement ships NO Codex Stop hook, and the SessionStart advisory names the
-    gap. This guard prevents a half-baked Stop hook shipping before the real port.
-    """
+def test_codex_repo_hook_surface_does_not_fake_a_stop_hook():
+    """The empty compatibility surface must not reintroduce unsupported Stop work."""
     hooks = json.loads((ROOT / ".codex" / "hooks.json").read_text())["hooks"]
-
-    assert "Stop" not in hooks, (
-        "escapement has not ported its Stop gate to Codex yet — do not ship a Codex "
-        "Stop hook until the continuation-harness port lands (see the Stop-gate bead)"
-    )
-    session_start_commands = [
-        hook["command"]
-        for item in hooks.get("SessionStart", [])
-        for hook in item.get("hooks", [])
-    ]
-    assert CODEX_FINAL_RESPONSE_GAP_COMMAND in session_start_commands
+    assert hooks == {}
 
 
 def test_codex_plugin_hooks_include_final_response_gap_warning():
@@ -532,7 +625,7 @@ def test_codex_plugin_hooks_include_final_response_gap_warning():
 
 
 def test_codex_behavioral_gate_has_exact_event_shape():
-    hooks = json.loads((ROOT / ".codex" / "hooks.json").read_text())["hooks"]
+    hooks = json.loads((CODEX_WRAPPER / "hooks" / "hooks.json").read_text())["hooks"]
     entries = hooks.get(EXPECTED_CODEX_GATE["event"], [])
     matches = [
         item
@@ -555,12 +648,14 @@ def test_root_checkout_guard_is_manifested_and_rendered_for_claude_and_codex():
     assert entry["hosts"]["codex"]["status"] == "ready"
     assert entry["hosts"]["claude"]["status"] == "ready"
 
-    codex_hooks = json.loads((ROOT / ".codex" / "hooks.json").read_text())["hooks"]
+    codex_hooks = json.loads((CODEX_WRAPPER / "hooks" / "hooks.json").read_text())[
+        "hooks"
+    ]
     codex_matchers = {
         item.get("matcher", "")
         for item in codex_hooks.get("PreToolUse", [])
         for hook in item.get("hooks", [])
-        if hook.get("command") == ROOT_CHECKOUT_GUARD_COMMAND
+        if hook.get("command") == CODEX_PLUGIN_ROOT_CHECKOUT_GUARD_FRAGMENT
     }
     assert {"Bash", "Write", "Edit", "NotebookEdit"} <= codex_matchers
 
@@ -695,7 +790,7 @@ def test_codex_ready_hook_with_other_hook_codex_fixture_fails(tmp_path):
     assert "Codex hook fixture must match hook source" in result.stderr
 
 
-def test_codex_behavioral_gate_wrong_event_fails_drift_check(tmp_path):
+def test_codex_behavioral_gate_wrong_event_fails_plugin_drift_check(tmp_path):
     temp_root = copy_repo(tmp_path)
     manifest_path = temp_root / "agent-surfaces" / "manifest.json"
     manifest = json.loads(manifest_path.read_text())
@@ -708,7 +803,7 @@ def test_codex_behavioral_gate_wrong_event_fails_drift_check(tmp_path):
     result = run_renderer("--check", root=temp_root)
 
     assert result.returncode != 0
-    assert "generated target drift: .codex/hooks.json" in result.stderr
+    assert "generated target drift: plugins/escapement/hooks/hooks.json" in result.stderr
 
 
 @pytest.mark.parametrize("target", ["AGENTS.md", "CLAUDE.md", ".codex/hooks.json"])

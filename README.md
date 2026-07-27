@@ -77,11 +77,17 @@ Escapement is **host-neutral at the core** — beads, OpenSpec, test-oracle disc
 | Surface | Claude Code | Codex |
 |---------|-------------|-------|
 | Instructions | `CLAUDE.md` | `AGENTS.md` *(generated)* |
-| Project hooks | `claude/settings.template.json` → `~/.claude/` | `.codex/hooks.json` *(generated)* |
+| Project hooks | Escapement Claude plugin | Escapement Codex plugin |
 | Skills | `claude/skills/` | `.agents/skills/` |
 | Plugin packaging | `.claude-plugin/plugin.json` | `plugins/escapement/.codex-plugin/` *(generated)* |
 
-The portable core runs on both: Escapement-owned task-state and landing-policy context and the verified test-oracle and outcome gates (Test Oracle Brief, discovery, spec-ID, implementation-echo, oracle-downgrade, outcome-assertion) are wired into `.codex/hooks.json` and **fixture-tested against Codex's payload shape**. The write/edit TDD gate remains Claude Code-specific because its Serena tool matching is not portable to Codex.
+The portable core runs on both: Escapement-owned task-state and landing-policy
+context and the verified test-oracle and outcome gates are packaged in each
+host's plugin and fixture-tested against that host's payload shape. For Codex,
+the plugin is the sole hook owner; the generated repo `.codex/hooks.json` is
+intentionally empty so the same hook cannot fire once from the checkout and
+again from the installed plugin. The write/edit TDD gate remains Claude
+Code-specific because its Serena tool matching is not portable to Codex.
 
 The adapters expose different native capabilities. Per the `agent-surface-parity` spec, Claude Code-specific features — multi-agent `TeamCreate` teams and `ScheduleWakeup` continuation — are *excluded* from Codex surfaces rather than faked: a Codex hook is marked blocking only when a fixture proves it works against the current Codex payload. New shared behavior is added to the manifest first, then rendered to whichever host surface can actually enforce it.
 
@@ -98,7 +104,31 @@ The adapters expose different native capabilities. Per the `agent-surface-parity
 | `jq` | `brew install jq` | `jq --version` |
 | `git`, `bash` | usually present | — |
 
-Install either supported host: Claude Code or Codex. The `Install` steps below configure Claude Code machine-wide; Codex reads the repo-relative surfaces committed in the project (`AGENTS.md`, `.codex/hooks.json`, `.agents/skills`), so it needs no symlink install. [Serena MCP](https://github.com/oraios/serena) is optional but the navigation hooks are silent unless `.serena/memories` exists in a project.
+Install either supported host: Claude Code or Codex. The Claude steps below
+configure Claude Code machine-wide. Codex uses the Escapement plugin for hooks
+and packaged skills while still reading a checkout's generated `AGENTS.md`.
+[Serena MCP](https://github.com/oraios/serena) is optional but the navigation
+hooks are silent unless `.serena/memories` exists in a project.
+
+## Install the Codex adapter
+
+```bash
+codex plugin marketplace add https://github.com/alexander-vyh/escapement
+codex plugin add escapement@escapement
+```
+
+For later upgrades, update the checkout and run the authoritative updater:
+
+```bash
+git pull --ff-only
+./scripts/codex-plugin-update.sh
+```
+
+The updater refreshes the plugin, then backs up and replaces only exact known
+Escapement legacy versions of
+`~/.agents/skills/beads-execution/SKILL.md`. It refuses to overwrite an
+unrecognized or customized user-authored skill, and verifies the effective
+installed source before reporting success.
 
 ---
 
