@@ -8,26 +8,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
-
+from legacy_codex_skill_fixture import historical_legacy_skill_bytes
 
 ROOT = Path(__file__).resolve().parents[1]
 MIGRATOR = ROOT / "scripts" / "migrate_codex_beads_skill.py"
-
-
-def _installed_legacy_candidate() -> Path | None:
-    skill_dir = Path.home() / ".agents" / "skills" / "beads-execution"
-    for candidate in sorted(skill_dir.glob("SKILL.md*")):
-        try:
-            content = candidate.read_bytes()
-        except OSError:
-            continue
-        if b"description: Use when the user mentions beads, bead, bd" in content:
-            return candidate
-    return None
-
-
-INSTALLED_LEGACY = _installed_legacy_candidate()
 
 
 def _run(source: Path, target: Path, *extra: str) -> subprocess.CompletedProcess[str]:
@@ -57,39 +41,40 @@ def test_recognized_legacy_skill_is_replaced_and_backed_up(tmp_path: Path) -> No
     assert "replaced recognized legacy skill" in result.stdout
 
 
-@pytest.mark.skipif(
-    INSTALLED_LEGACY is None,
-    reason="the historical user-global skill is not installed on this machine",
-)
-def test_actual_historical_legacy_skill_is_recognized_without_hash_override(
+def test_historical_crlf_and_lf_skills_are_recognized_without_hash_override(
     tmp_path: Path,
 ) -> None:
     source = tmp_path / "safe.md"
-    target = tmp_path / "SKILL.md"
     source.write_text("safe explicit-execution skill\n", encoding="utf-8")
-    assert INSTALLED_LEGACY is not None
-    legacy = INSTALLED_LEGACY.read_bytes()
-    target.write_bytes(legacy)
+    historical_crlf = historical_legacy_skill_bytes()
+    assert b"\r\n" in historical_crlf, "fixture must retain the deployed CRLF artifact"
 
-    result = _run(source, target)
+    for label, legacy in (
+        ("crlf", historical_crlf),
+        ("lf", historical_crlf.replace(b"\r\n", b"\n")),
+    ):
+        case_dir = tmp_path / label
+        case_dir.mkdir()
+        target = case_dir / "SKILL.md"
+        target.write_bytes(legacy)
 
-    assert result.returncode == 0, result.stderr
-    assert target.read_bytes() == source.read_bytes()
-    backups = list(tmp_path.glob("SKILL.md.backup-*"))
-    assert len(backups) == 1
-    assert backups[0].read_bytes() == legacy
+        result = _run(source, target)
+
+        assert result.returncode == 0, result.stderr
+        assert target.read_bytes() == source.read_bytes()
+        backups = list(case_dir.glob("SKILL.md.backup-*"))
+        assert len(backups) == 1
+        assert backups[0].read_bytes() == legacy
 
 
-@pytest.mark.skipif(
-    INSTALLED_LEGACY is None,
-    reason="the historical user-global skill is not installed on this machine",
-)
 def test_customized_historical_skill_is_refused(tmp_path: Path) -> None:
     source = tmp_path / "safe.md"
     target = tmp_path / "SKILL.md"
     source.write_text("safe explicit-execution skill\n", encoding="utf-8")
-    assert INSTALLED_LEGACY is not None
-    customized = INSTALLED_LEGACY.read_bytes() + b"\nUser directive: preserve this policy.\n"
+    customized = (
+        historical_legacy_skill_bytes()
+        + b"\r\nUser directive: preserve this policy.\r\n"
+    )
     target.write_bytes(customized)
 
     result = _run(source, target)
