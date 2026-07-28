@@ -160,7 +160,7 @@
     },
     {
       "id": "beads_worktree_guard",
-      "description": "Redirect `git worktree add` to `bd worktree create` so linked worktrees share the beads database.",
+      "description": "Route ordinary literal Git and Beads worktree creation through each repository's declared managed entrypoint.",
       "source": "claude/hooks/beads_worktree_guard.py",
       "hosts": {
         "codex": {
@@ -183,12 +183,7 @@
           "events": [
             {
               "event": "PreToolUse",
-              "matcher": "Bash(git worktree add:*)",
-              "command": "python3 -B ~/.claude/hooks/beads_worktree_guard.py"
-            },
-            {
-              "event": "PreToolUse",
-              "matcher": "Bash(git:*)",
+              "matcher": "Bash",
               "command": "python3 -B ~/.claude/hooks/beads_worktree_guard.py"
             }
           ],
