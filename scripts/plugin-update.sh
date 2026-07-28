@@ -71,7 +71,7 @@ for entry in entries:
 PY
 }
 
-validate_plugin_root() {
+validate_plugin_root_for_update() {
   local plugin_root="$1"
   local required
   for required in \
@@ -82,7 +82,20 @@ validate_plugin_root() {
     commands \
     rules \
     hooks \
-    hooks/hooks.json \
+    hooks/hooks.json
+  do
+    if [[ ! -e "$plugin_root/$required" ]]; then
+      echo "FATAL: installed plugin is incomplete: $plugin_root/$required" >&2
+      return 1
+    fi
+  done
+}
+
+validate_plugin_root() {
+  local plugin_root="$1"
+  local required
+  validate_plugin_root_for_update "$plugin_root" || return 1
+  for required in \
     hooks/magic_number_echo.py \
     hooks/oracle_reason_validation.py
   do
@@ -129,7 +142,7 @@ if [[ -z "$current_path" ]]; then
   echo "FATAL: no valid user-scope $PLUGIN_ID installPath in $INSTALLED" >&2
   exit 1
 fi
-validate_plugin_root "$current_path"
+validate_plugin_root_for_update "$current_path"
 validate_wrapper_slot "$CLAUDE_DIR/harness/bin" bin
 validate_wrapper_slot "$CLAUDE_DIR/harness/schemas" schemas
 
