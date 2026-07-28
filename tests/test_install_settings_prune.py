@@ -26,6 +26,15 @@ def _commands(settings: dict) -> list[str]:
     ]
 
 
+def _stub_claude_cli(home: Path) -> Path:
+    stub_bin = home / "stub-bin"
+    stub_bin.mkdir(parents=True)
+    claude = stub_bin / "claude"
+    claude.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    claude.chmod(0o755)
+    return stub_bin
+
+
 def _complete_plugin_fixture(
     home: Path,
     version: str,
@@ -40,12 +49,7 @@ def _complete_plugin_fixture(
         / version
     )
     shutil.copytree(PLUGIN_SOURCE, plugin_root)
-    stub_bin = home / "stub-bin"
-    stub_bin.mkdir(parents=True)
-    claude = stub_bin / "claude"
-    claude.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
-    claude.chmod(0o755)
-    return plugin_root, stub_bin
+    return plugin_root, _stub_claude_cli(home)
 
 
 @pytest.mark.parametrize("version_seed", ("first-layout", "second-layout"))
@@ -188,8 +192,10 @@ def test_installer_without_plugin_inventory_preserves_settings(
     original_bytes = json.dumps(original, separators=(",", ":")).encode()
     settings_path.write_bytes(original_bytes)
 
+    stub_bin = _stub_claude_cli(home)
     env = os.environ.copy()
     env["HOME"] = str(home)
+    env["PATH"] = f"{stub_bin}:{env['PATH']}"
     result = subprocess.run(
         ["bash", str(INSTALLER), "--dev"],
         cwd=ROOT,
@@ -243,8 +249,10 @@ def test_registry_without_user_plugin_preserves_settings(
         encoding="utf-8",
     )
 
+    stub_bin = _stub_claude_cli(home)
     env = os.environ.copy()
     env["HOME"] = str(home)
+    env["PATH"] = f"{stub_bin}:{env['PATH']}"
     result = subprocess.run(
         ["bash", str(INSTALLER), "--dev"],
         cwd=ROOT,
@@ -309,8 +317,10 @@ def test_invalid_registered_plugin_fails_without_touching_settings(
             encoding="utf-8",
         )
 
+    stub_bin = _stub_claude_cli(home)
     env = os.environ.copy()
     env["HOME"] = str(home)
+    env["PATH"] = f"{stub_bin}:{env['PATH']}"
     result = subprocess.run(
         ["bash", str(INSTALLER), "--dev"],
         cwd=ROOT,
