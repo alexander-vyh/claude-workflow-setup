@@ -6,9 +6,9 @@ surgical: the user's *own* hooks (never shipped by escapement) survive untouched
 
 Oracle notes
 ------------
-* Matching is by **script basename**, because the same script is registered under
-  different path styles: ``python3 -B ~/.claude/hooks/x.py`` (settings) vs
-  ``python3 -B "${CLAUDE_PLUGIN_ROOT}/hooks/x.py"`` (plugin).
+* Matching is **legacy-path aware**: the same script is registered under
+  ``~/.claude/hooks/x.py`` in settings and the plugin root in the manifest, but
+  an unrelated ``/custom/x.py`` with the same basename is user-owned.
 * ``test_preserves_user_owned_hooks`` is the negative control: a pruner that
   removed everything under ``hooks`` would pass a naive "no duplicates" check
   while destroying the user's config.
@@ -165,6 +165,48 @@ def test_preserves_user_owned_hooks():
     pruned = prune_hooks(settings, plugin_owned_scripts(PLUGIN))
     remaining = [h["command"] for g in pruned["hooks"]["Stop"] for h in g["hooks"]]
     assert remaining == ["python3 -B ~/.claude/hooks/jixia_send_bounce.py"]
+
+
+def test_preserves_same_basename_outside_legacy_global_path():
+    settings = {
+        "hooks": {
+            "Stop": [
+                {
+                    "hooks": [
+                        {
+                            "command": (
+                                "python3 -B /opt/personal/hooks/"
+                                "validate_no_shirking.py"
+                            )
+                        }
+                    ]
+                }
+            ]
+        }
+    }
+    assert prune_hooks(settings, plugin_owned_scripts(PLUGIN)) == settings
+
+
+def test_preserves_same_basename_under_another_home_claude_directory():
+    settings = {
+        "hooks": {
+            "Stop": [
+                {
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": (
+                                "python3 -B /opt/personal/.claude/hooks/"
+                                "validate_no_shirking.py"
+                            ),
+                            "timeout": 23,
+                        }
+                    ]
+                }
+            ]
+        }
+    }
+    assert prune_hooks(settings, plugin_owned_scripts(PLUGIN)) == settings
 
 
 def test_preserves_non_hook_settings_keys_verbatim():

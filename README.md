@@ -134,33 +134,57 @@ installed source before reporting success.
 
 ## Install the Claude Code adapter
 
+First install the native plugin from inside Claude Code:
+
+```text
+/plugin marketplace add alexander-vyh/escapement
+/plugin install escapement@escapement
+```
+
+Then clone the repository and run the authoritative updater:
+
 ```bash
 mkdir -p "$HOME/src"
 git clone https://github.com/alexander-vyh/escapement "$HOME/src/escapement"
 cd "$HOME/src/escapement"
+./scripts/plugin-update.sh
+```
+
+The plugin is the sole owner of Claude workflow surfaces: hooks, skills,
+agents, commands, rules, bootstrap, and harness code. The updater refreshes the
+versioned plugin cache, preserves the configured model and enabled state,
+removes recognized legacy Escapement symlinks, prunes duplicate settings hooks,
+and maintains the stable `~/.claude/harness/{bin,schemas}` wrappers. It refuses
+to replace unknown user-owned files or unrelated symlinks.
+
+For later upgrades, land or pull the desired revision and rerun:
+
+```bash
+git pull --ff-only
+./scripts/plugin-update.sh
+```
+
+Restart Claude Code after an upgrade. Already-running processes may retain the
+old versioned plugin root.
+
+### Optional compatibility auxiliaries
+
+```bash
 ./INSTALL.sh
 ```
 
-`INSTALL.sh` creates **symlinks** from `~/.claude/` and `~/.beads/` into a **pinned checkout** of this repo (`~/.claude/.escapement-pinned`, tracking `main`) — *not* your live working tree. This is deliberate: `~/.claude` is machine-wide, so if it symlinked your working tree, a branch switch or mid-edit here could break hooks in **every** repo at once. With the pinned checkout, your day-to-day git work in this repo never disturbs your live config. Existing files are moved to `<file>.backup-<timestamp>` before being replaced — nothing is silently overwritten.
-
-Because the deploy is pinned, edits go live in two steps: land them on `main`, then run `./INSTALL.sh --update` (fast-forwards the pinned checkout). Prefer instant edits-from-working-tree (accepting the branch-fragility)? Install with `./INSTALL.sh --dev`.
-
-### Settings merge (you do this by hand)
-
-Your `~/.claude/settings.json` likely exists and contains your personal permissions and auth config. The installer does NOT overwrite it.
-
-Open `claude/settings.template.json` and merge the `hooks` block into your existing `~/.claude/settings.json`. Or if you have no existing settings, copy the template as a starting point:
-
-```bash
-cp claude/settings.template.json ~/.claude/settings.json
-# then add your permissions.allow list, apiKeyHelper, etc.
-```
+`INSTALL.sh` remains only for assets the native plugin cannot install:
+`~/.claude/bin`, Beads formulas, and `~/.beads/mol-status.sh`. Those auxiliaries
+point into a branch-safe pinned checkout by default. The script delegates
+workflow convergence to `scripts/plugin-update.sh` first, so a later
+`INSTALL.sh --update` cannot restore legacy pin-owned hooks, skills, commands,
+agents, bootstrap, or harness code. `--dev` changes only the auxiliary links.
 
 ---
 
 ## First run with Claude Code
 
-After installing and merging settings:
+After installing:
 
 1. Open Claude Code in a fresh git repo anywhere on disk.
 2. On SessionStart, the bootstrap script runs (idempotent, fail-open):

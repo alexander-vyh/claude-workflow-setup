@@ -1,19 +1,17 @@
 #!/bin/bash
-# INSTALL.sh — Symlinks Escapement into ~/.claude/ and ~/.beads/
+# INSTALL.sh — Compatibility installer for non-plugin Escapement auxiliaries.
 #
 # Usage:
-#   ./INSTALL.sh              # install: symlink ~/.claude into a PINNED checkout (default)
-#   ./INSTALL.sh --dev        # install: symlink into THIS live working tree (instant edits)
-#   ./INSTALL.sh --update     # refresh the pinned checkout to latest (deploy new main)
-#   ./INSTALL.sh --uninstall  # remove symlinks (backups are left alone)
+#   ./INSTALL.sh              # refresh Claude plugin + install pinned auxiliaries
+#   ./INSTALL.sh --dev        # refresh plugin + link auxiliaries to this checkout
+#   ./INSTALL.sh --update     # refresh plugin + pinned auxiliary checkout
+#   ./INSTALL.sh --uninstall  # remove auxiliary symlinks (plugin is untouched)
 #   ./INSTALL.sh --dry-run    # show what would happen, change nothing
 #
-# Default deploy model (bead ft1): ~/.claude symlinks resolve into a pinned clone
-# (ESCAPEMENT_PIN_DIR, default ~/.claude/.escapement-pinned) of this repo at
-# ESCAPEMENT_PIN_REF (default main) — NOT the live working tree. This way a branch switch or mid-edit in this
-# repo can't break hooks machine-wide across all your repos. The price: edits go
-# live only after they reach main AND you run `./INSTALL.sh --update`. Use --dev to
-# opt back into instant-edit-from-working-tree (the old, fragile-but-convenient model).
+# The native Claude plugin is the sole owner of hooks, skills, agents, commands,
+# rules, bootstrap, and harness code. This script retains only assets no plugin
+# can install: ~/.claude/bin plus Beads formulas/status. Those auxiliaries use a
+# branch-safe pinned checkout by default.
 #
 # Fail-fast. Backup-then-symlink — nothing is silently clobbered.
 
@@ -84,84 +82,59 @@ for tool in openspec bd direnv python3 jq git bash; do
   fi
 done
 
-run mkdir -p "$CLAUDE_DIR"/{skills,rules,commands,hooks,harness,agents} "$CLAUDE_DIR"/harness/threads "$BEADS_DIR"/formulas
-
-# --- Symlink plan: (source_relative_to_repo, dest_absolute) ---
-# Preserves directory structure. For skill directories, symlink the whole dir.
+# --- Auxiliary symlink plan: (source_relative_to_repo, dest_absolute) ---
 declare -a PLAN=(
-  # Skills (whole directories)
-  "claude/skills/discovery|$CLAUDE_DIR/skills/discovery"
-  "claude/skills/work-breakdown|$CLAUDE_DIR/skills/work-breakdown"
-  "claude/skills/brainstorming|$CLAUDE_DIR/skills/brainstorming"
-  "claude/skills/build|$CLAUDE_DIR/skills/build"
-  "claude/skills/beads-execution|$CLAUDE_DIR/skills/beads-execution"
-  "claude/skills/behavioral-test-oracle-review|$CLAUDE_DIR/skills/behavioral-test-oracle-review"
-  "claude/skills/dispatching-parallel-agents|$CLAUDE_DIR/skills/dispatching-parallel-agents"
-  "claude/skills/subagent-driven-development|$CLAUDE_DIR/skills/subagent-driven-development"
-  "claude/skills/beads-worktree|$CLAUDE_DIR/skills/beads-worktree"
-  "claude/skills/gate-design|$CLAUDE_DIR/skills/gate-design"
-  "claude/skills/vocab|$CLAUDE_DIR/skills/vocab"
-
-  # Rules are NOT symlinked here (bead escapement-w4sn). The plugin's SessionStart
-  # hook (plugins/escapement-claude/hooks/inject-rules.sh) is the SOLE injection
-  # channel for the always-on rules. Symlinking claude/rules/*.md into
-  # ~/.claude/rules/ ALSO loaded them as the native claudeMd block, so every
-  # session carried all rule bodies TWICE (~20K tokens of pure duplicate on turn 0).
-  # inject-rules.sh self-resolves ${CLAUDE_PLUGIN_ROOT} and is portable to
-  # plugin-only installs, so it is the channel we keep. Do not re-add the
-  # claude/rules/*.md -> $CLAUDE_DIR/rules/*.md entries; test_agent_surfaces.py
-  # asserts they stay gone and that inject-rules.sh still delivers every rule.
-
-  # Agents (workflow-integral only — personal advisor agents live in the user's
-  # own config, not in this framework. adversarial-reviewer is dispatched by
-  # subagent-driven-development; test-quality-reviewer is the operational
-  # counterpart to tdd-enforcement + behavioral-test-oracle-review.)
-  "claude/agents/adversarial-reviewer.md|$CLAUDE_DIR/agents/adversarial-reviewer.md"
-  "claude/agents/test-quality-reviewer.md|$CLAUDE_DIR/agents/test-quality-reviewer.md"
-
-  # Commands
-  "claude/commands/discovery.md|$CLAUDE_DIR/commands/discovery.md"
-  "claude/commands/work-breakdown.md|$CLAUDE_DIR/commands/work-breakdown.md"
-  "claude/commands/brainstorm.md|$CLAUDE_DIR/commands/brainstorm.md"
-  "claude/commands/review.md|$CLAUDE_DIR/commands/review.md"
-
-  # Hooks: every claude/hooks/*.py and *.sh is symlinked by the glob below the
-  # array (e9v.8) so new hooks/modules can't drift out of the deploy. The tests
-  # dir is the one explicit entry.
-  "claude/hooks/tests|$CLAUDE_DIR/hooks/tests"
-
-  # Bin scripts (invokable from any repo cwd; resolve their own project root)
+  # Invokable auxiliary scripts. The plugin does not package this directory.
   "claude/bin|$CLAUDE_DIR/bin"
 
-  # Continuation harness — code symlinked into ~/.claude/harness; runtime state
-  # (threads/, incidents.jsonl) lives in ~/.claude/harness too (NOT the repo) and
-  # is created by the mkdir below, so concurrent agents in any repo never write
-  # into a project working tree.
-  "harness/bin|$CLAUDE_DIR/harness/bin"
-  "harness/schemas|$CLAUDE_DIR/harness/schemas"
-
-  # Bootstrap
-  "scripts/project-bootstrap.sh|$CLAUDE_DIR/project-bootstrap.sh"
-
-  # Beads formulas
+  # Beads is a third tool outside both host plugin systems.
   "beads/formulas/mol-feature.formula.json|$BEADS_DIR/formulas/mol-feature.formula.json"
   "beads/formulas/mol-rapid.formula.json|$BEADS_DIR/formulas/mol-rapid.formula.json"
   "beads/mol-status.sh|$BEADS_DIR/mol-status.sh"
 )
 
-# Hooks (e9v.8): glob every hook + support module so new files auto-deploy and
-# the install list can't drift. Per-file (not whole-dir) so a user's own hooks in
-# ~/.claude/hooks/ coexist; the tests dir is added explicitly in PLAN above.
-for _hook in "$REPO_DIR"/claude/hooks/*.py "$REPO_DIR"/claude/hooks/*.sh; do
-  [[ -e "$_hook" ]] || continue
-  _base="$(basename "$_hook")"
-  PLAN+=("claude/hooks/$_base|$CLAUDE_DIR/hooks/$_base")
-done
+is_managed_aux_target() {
+  local target="$1"
+  local src_rel="$2"
+  case "$target" in
+    "$REPO_DIR/$src_rel" | \
+    "$CLAUDE_DIR"/.escapement-pinned*/"$src_rel" | \
+    "$CLAUDE_DIR"/.cws-pinned*/"$src_rel")
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+validate_plan_slots() {
+  local entry src_rel dest target
+  for entry in "${PLAN[@]}"; do
+    src_rel="${entry%|*}"
+    dest="${entry#*|}"
+    if [[ -L "$dest" ]]; then
+      target="$(readlink "$dest")"
+      if ! is_managed_aux_target "$target" "$src_rel"; then
+        echo "FATAL: refusing to replace unrelated auxiliary link: $dest -> $target" >&2
+        return 1
+      fi
+    fi
+  done
+}
+
+prepare_auxiliary_dirs() {
+  run mkdir -p "$CLAUDE_DIR" "$CLAUDE_DIR/harness/threads" "$BEADS_DIR/formulas"
+}
 
 backup_if_exists() {
   local dest="$1"
+  local src_rel="$2"
   if [[ -L "$dest" ]]; then
-    # Already a symlink — remove it (no backup needed, nothing real there)
+    local target
+    target="$(readlink "$dest")"
+    if ! is_managed_aux_target "$target" "$src_rel"; then
+      echo "FATAL: refusing to replace unrelated auxiliary link: $dest -> $target" >&2
+      return 1
+    fi
     run rm "$dest"
   elif [[ -e "$dest" ]]; then
     local backup="${dest}.backup-${TIMESTAMP}"
@@ -185,7 +158,7 @@ install_plan() {
       continue
     fi
 
-    backup_if_exists "$dest"
+    backup_if_exists "$dest" "$src_rel"
     run ln -s "$src_abs" "$dest"
     installed=$((installed + 1))
     echo "    link:   $dest -> $src_rel"
@@ -196,9 +169,12 @@ install_plan() {
 
 uninstall_plan() {
   local removed=0
+  validate_plan_slots
   for entry in "${PLAN[@]}"; do
+    local src_rel="${entry%|*}"
     local dest="${entry#*|}"
     if [[ -L "$dest" ]]; then
+      is_managed_aux_target "$(readlink "$dest")" "$src_rel" || continue
       run rm "$dest"
       removed=$((removed + 1))
       echo "    unlink: $dest"
@@ -207,43 +183,6 @@ uninstall_plan() {
   echo
   echo "==> removed $removed symlinks"
   echo "    (any .backup-* files are left alone — rename manually to restore)"
-}
-
-# Verify the continuation-harness Stop gate is actually WIRED in the deployed
-# settings — not merely present on disk. The harness code is symlinked above, but
-# it does nothing unless ~/.claude/settings.json invokes stop_hook.py under Stop.
-# This catches the distribution-drift bug where a user symlinks the harness but
-# forgets to merge the Stop block (bead escapement-fxh.1).
-verify_stop_gate_wired() {
-  local settings="$CLAUDE_DIR/settings.json"
-  if [[ ! -f "$settings" ]]; then
-    echo "    ⚠  $settings not found — merge the template's Stop block (see step 1),"
-    echo "       or the continuation-harness Stop gate will be inert."
-    return 0
-  fi
-  if python3 - "$settings" <<'PY'
-import json, sys
-try:
-    data = json.load(open(sys.argv[1]))
-except Exception as e:
-    print(f"    ⚠  could not parse settings.json ({e}) — verify the Stop block manually.")
-    sys.exit(0)
-cmds = [
-    h.get("command", "")
-    for grp in data.get("hooks", {}).get("Stop", [])
-    for h in grp.get("hooks", [])
-]
-sys.exit(0 if any("stop_hook.py" in c for c in cmds) else 1)
-PY
-  then
-    echo "    ✓  continuation-harness Stop gate is wired (stop_hook.py present under Stop)."
-  else
-    echo "    ⚠  continuation-harness Stop gate is NOT wired in $settings."
-    echo "       The harness code is installed but DEAD until you add this under hooks.Stop:"
-    echo '         { "hooks": [ { "type": "command",'
-    echo '             "command": "python3 ~/.claude/harness/bin/stop_hook.py" } ] }'
-    echo "       (additive — keep the existing validate_no_shirking.py entry too)."
-  fi
 }
 
 # Create or refresh the pinned checkout that ~/.claude symlinks resolve into.
@@ -295,20 +234,12 @@ resolve_effective_pin_dir() {
     echo "$ESCAPEMENT_PIN_DIR"
     return
   fi
-  # Try to resolve from a deployed sentinel hook symlink.
-  local sentinel="$CLAUDE_DIR/hooks/spec_id_enforcement.py"
+  # claude/bin is retained as the pinned auxiliary sentinel after plugin cutover.
+  local sentinel="$CLAUDE_DIR/bin"
   if [[ -L "$sentinel" ]]; then
     local target
     target="$(readlink "$sentinel")"
-    # The target is something like <checkout>/<relative-path>. Strip the
-    # relative suffix to get the checkout root. We look for the first component
-    # that is a git checkout (contains /.git/).
-    # Strategy: split on '/.git/' — everything before it is the checkout root.
     local checkout_root
-    # Remove the path component from the sentinel's relative path inside the checkout.
-    # The sentinel symlink points to: <pin_dir>/claude/hooks/spec_id_enforcement.py
-    # We need to strip "/claude/hooks/spec_id_enforcement.py" to get <pin_dir>.
-    # Use parameter substitution: strip from '/claude/' onward.
     checkout_root="${target%%/claude/*}"
     if [[ -n "$checkout_root" && -d "$checkout_root/.git" ]]; then
       echo "$checkout_root"
@@ -319,112 +250,45 @@ resolve_effective_pin_dir() {
   echo "$ESCAPEMENT_PIN_DIR"
 }
 
-# The Claude PLUGIN is the sole owner of hook registration (escapement-ptzz).
-#
-# Previously this MERGED claude/settings.template.json's hooks into the live
-# settings.json — while the plugin registered the same scripts via its own
-# hooks.json. Claude Code does not dedupe, so 38 gates fired TWICE per matching
-# tool call. The template now registers nothing; this converges the live settings
-# by REMOVING the duplicates instead of adding them.
-#
-# Safe by construction: it prunes against the hooks the INSTALLED plugin actually
-# registers, so it can never remove a gate the live plugin does not supply. The
-# user's own hooks (not shipped by escapement) are preserved verbatim.
-merge_settings() {
-  local live="$CLAUDE_DIR/settings.json"
-  local plugin_hooks=""
-  local plugin_registry="$CLAUDE_DIR/plugins/installed_plugins.json"
-  local plugin_install=""
-  local plugin_entry=""
-
-  # Use Claude's installed-plugin registry rather than scanning cache siblings.
-  # Multiple historical cache versions may coexist; only installPath identifies
-  # the plugin version Claude actually loads.
-  if [[ -f "$plugin_registry" ]]; then
-    if ! plugin_entry=$(jq -c '
-      (.plugins // .) as $plugins
-      | if ($plugins | type) != "object" then
-          error("plugin registry must contain an object")
-        else
-          ($plugins["escapement@escapement"] // null)
-          | if . == null then
-              null
-            elif type != "array" then
-              error("escapement plugin registry entry must be an array")
-            else
-              ([.[] | select(type == "object" and .scope == "user")] | first // null)
-            end
-        end
-    ' "$plugin_registry" 2>&1); then
-      echo "ERROR: cannot migrate settings hooks: invalid plugin registry: $plugin_entry" >&2
-      return 1
-    fi
-    if [[ "$plugin_entry" != "null" ]]; then
-      if ! plugin_install=$(jq -er '
-        .installPath | select(type == "string" and length > 0)
-      ' <<<"$plugin_entry" 2>/dev/null); then
-        echo "ERROR: cannot migrate settings hooks: user plugin entry has no valid installPath." >&2
-        return 1
-      fi
-      plugin_hooks="$plugin_install/hooks/hooks.json"
-      if [[ ! -f "$plugin_hooks" ]]; then
-        echo "ERROR: cannot migrate settings hooks: registered plugin hooks not found: $plugin_hooks" >&2
-        return 1
-      fi
-    fi
-  fi
-
-  if [[ -z "$plugin_hooks" ]]; then
-    echo "    ⚠  escapement plugin not installed — cannot prune settings hooks."
-    echo "       Install it first:  /plugin marketplace add alexander-vyh/escapement"
-    echo "                          /plugin install escapement@escapement"
-    return 0
-  fi
+converge_plugin() {
+  echo "==> refreshing native Claude plugin before auxiliary deployment"
   if [[ "$DRY_RUN" == true ]]; then
-    python3 "$REPO_DIR/scripts/prune_settings_hooks.py" "$plugin_hooks" "$live" --dry-run 2>&1 \
-      | sed 's/^/    /'
-    return 0
+    bash "$REPO_DIR/scripts/plugin-update.sh" --dry-run
+  else
+    bash "$REPO_DIR/scripts/plugin-update.sh"
   fi
-  python3 "$REPO_DIR/scripts/prune_settings_hooks.py" "$plugin_hooks" "$live" 2>&1 \
-    | sed 's/^/    /' || echo "    ⚠  settings prune failed — remove duplicate hooks manually."
+  echo
 }
 
 # --- Execute ---
 if [[ "$MODE" == "update" ]]; then
-  # Refresh the pinned checkout only; existing symlinks already point into it.
-  # B egk fix: update the dir the deployed symlinks ACTUALLY point into, not the
-  # default dir (which may differ on CWS-era machines whose symlinks point into
-  # .cws-pinned rather than .escapement-pinned).
+  # Plugin authority is validated and converged before the auxiliary checkout is
+  # touched, so an unresolved install cannot partially deploy.
+  validate_plan_slots
+  converge_plugin
   _effective_pin_dir="$(resolve_effective_pin_dir)"
   ensure_pinned_checkout "$_effective_pin_dir"
-  # e9v.8: re-run the symlink plan + settings merge so NEW hooks in the refreshed
-  # pin actually deploy (previously --update moved the pin but left new hooks
-  # un-symlinked and unregistered).
   DEPLOY_SRC="$_effective_pin_dir"
+  prepare_auxiliary_dirs
   install_plan
-  merge_settings
   echo
-  echo "==> pinned checkout now at $ESCAPEMENT_PIN_REF; ~/.claude reflects the update."
+  echo "==> native plugin and pinned auxiliary checkout are current."
 elif [[ "$MODE" == "install" ]]; then
+  validate_plan_slots
+  converge_plugin
   if [[ "$DEV_MODE" == true ]]; then
-    echo "==> --dev: symlinking the LIVE working tree (instant edits; not branch-safe)"
+    echo "==> --dev: auxiliary links use the LIVE working tree"
   else
     ensure_pinned_checkout
   fi
+  prepare_auxiliary_dirs
   install_plan
-  merge_settings
   echo
   echo "==> next steps"
-  echo "    1. The escapement PLUGIN owns hook registration; duplicate entries were"
-  echo "       pruned from ~/.claude/settings.json (backup written). Your own hooks"
-  echo "       are untouched. Review env blocks manually."
-  echo "    2. Read claude/rules/*.md and edit to match your philosophy."
-  echo "    3. Open Claude Code in any git repo to trigger bootstrap."
-  echo "       Optional: set ESCAPEMENT_BOOTSTRAP_ROOTS=/path/a:/path/b to limit it."
-  [[ "$DEV_MODE" == true ]] || echo "    NOTE: harness/hook edits go live after they reach main + './INSTALL.sh --update'."
-  echo
-  echo "==> verifying continuation-harness Stop gate wiring"
-  verify_stop_gate_wired
+  echo "    1. Restart Claude Code so it loads the refreshed versioned plugin root."
+  echo "    2. Open Claude Code in a git repo and verify SessionStart behavior."
+  echo "    The native plugin owns workflow surfaces; this installer owns only"
+  echo "    ~/.claude/bin and Beads auxiliary assets."
   echo
   echo "    See README.md for full details."
 else

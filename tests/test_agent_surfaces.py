@@ -56,6 +56,20 @@ def test_generated_surfaces_are_current():
     assert result.returncode == 0, result.stderr
 
 
+def test_ci_runs_claude_install_cutover_regressions():
+    workflow = (ROOT / ".github" / "workflows" / "tests.yml").read_text()
+    required = (
+        "bash tests/test_plugin_update.sh",
+        "bash tests/test_install_pinned.sh",
+        "bash tests/test_install_pinned_drift.sh",
+    )
+    missing = [command for command in required if command not in workflow]
+    assert not missing, (
+        "Claude cutover regressions are manual-only and can return on a green PR; "
+        f"missing CI commands: {missing}"
+    )
+
+
 def test_generated_docs_include_minimum_verified_delivery_guidance():
     assert_minimum_verified_delivery_guidance(ROOT)
 
@@ -189,6 +203,85 @@ def test_claude_plugin_manifest_has_no_version_so_auto_update_works():
     assert "version" not in entry, (
         "marketplace entry pins a `version`, overriding the unversioned plugin.json "
         "and re-disabling auto-update (escapement-9mki)"
+    )
+
+
+def test_claude_plugin_implementation_echo_gate_is_behaviorally_complete(tmp_path):
+    """The packaged gate must load its real analyzers, not permissive fallbacks."""
+    plugin_hooks = ROOT / "plugins" / "escapement-claude" / "hooks"
+    for dependency in ("magic_number_echo.py", "oracle_reason_validation.py"):
+        assert (plugin_hooks / dependency).is_file(), (
+            "Claude plugin omits an implementation-echo dependency and silently "
+            f"disables part of the gate: {dependency}"
+        )
+
+    source = tmp_path / "metric_descriptions.py"
+    test = tmp_path / "test_metrics.py"
+    source.write_text(
+        'PCT_AUTOMATED = "all-history snapshot reads ~91% because it carries older grants"\n'
+    )
+    test.write_text(
+        'def test_pct():\n    assert "91%" in describe("dw_x", "pct_automated")\n'
+    )
+    probe = (
+        "import importlib.util,json,sys;"
+        "root,source,test=sys.argv[1:];"
+        "sys.path.insert(0,root);"
+        "spec=importlib.util.spec_from_file_location("
+        "'packaged_gate',root+'/implementation_echo_test_gate.py');"
+        "gate=importlib.util.module_from_spec(spec);"
+        "sys.modules['packaged_gate']=gate;"
+        "spec.loader.exec_module(gate);"
+        "findings=gate.find_magic_number_echoes("
+        "{source:open(source).read()},{test:open(test).read()});"
+        "print(json.dumps([[finding.filepath,finding.token,finding.sources] "
+        "for finding in findings]))"
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            probe,
+            str(plugin_hooks),
+            str(source),
+            str(test),
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    findings = json.loads(result.stdout)
+    assert findings and "91%" in str(findings), (
+        "packaged implementation-echo gate accepted the planted 91% echo; "
+        "its analyzer imports are probably falling back to no-op functions"
+    )
+
+    oracle_probe = (
+        "import importlib.util,json,sys;"
+        "root=sys.argv[1];"
+        "sys.path.insert(0,root);"
+        "spec=importlib.util.spec_from_file_location("
+        "'packaged_oracle',root+'/oracle_reason_validation.py');"
+        "module=importlib.util.module_from_spec(spec);"
+        "spec.loader.exec_module(module);"
+        "asserted=module.asserted_tokens({'pct_automated'});"
+        "print(json.dumps(["
+        "module.validate_oracle_reason("
+        "'the pct_automated literal is the asserted oracle',asserted),"
+        "module.validate_oracle_reason("
+        "'cross-checked against the upstream Salesforce report export totals',asserted)"
+        "]))"
+    )
+    oracle_result = subprocess.run(
+        [sys.executable, "-c", oracle_probe, str(plugin_hooks)],
+        capture_output=True,
+        text=True,
+    )
+    assert oracle_result.returncode == 0, oracle_result.stderr
+    assert json.loads(oracle_result.stdout) == ["circular", None], (
+        "packaged oracle-reason validator must reject a circular override while "
+        "preserving the independent-source escape path"
     )
 
 
@@ -977,10 +1070,49 @@ def _install_dry_run_plan(tmp_home):
     prints the planned symlinks (`    link:   <dest> -> <src_rel>`) without touching
     the filesystem. This exercises INSTALL.sh's real PLAN, not a regex on its source.
     """
+    plugin_root = (
+        tmp_home
+        / ".claude"
+        / "plugins"
+        / "cache"
+        / "escapement"
+        / "escapement"
+        / "dry-run-fixture"
+    )
+    shutil.copytree(CLAUDE_PLUGIN, plugin_root)
+    registry = plugin_root.parents[3] / "installed_plugins.json"
+    registry.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "plugins": {
+                    "escapement@escapement": [
+                        {
+                            "scope": "user",
+                            "installPath": str(plugin_root),
+                            "version": "dry-run-fixture",
+                        }
+                    ]
+                },
+            }
+        )
+    )
+    settings = tmp_home / ".claude" / "settings.json"
+    settings.write_text('{"enabledPlugins":{"escapement@escapement":true}}')
+    stub_bin = tmp_home / "stub-bin"
+    stub_bin.mkdir()
+    claude = stub_bin / "claude"
+    claude.write_text("#!/usr/bin/env bash\nexit 0\n")
+    claude.chmod(0o755)
+
     result = subprocess.run(
         ["bash", str(ROOT / "INSTALL.sh"), "--dev", "--dry-run"],
         cwd=ROOT,
-        env={**os.environ, "HOME": str(tmp_home)},
+        env={
+            **os.environ,
+            "HOME": str(tmp_home),
+            "PATH": f"{stub_bin}:{os.environ['PATH']}",
+        },
         capture_output=True,
         text=True,
     )

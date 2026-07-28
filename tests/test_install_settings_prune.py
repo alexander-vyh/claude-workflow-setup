@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -13,7 +14,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "INSTALL.sh"
-PLUGIN_HOOKS = ROOT / "plugins" / "escapement-claude" / "hooks" / "hooks.json"
+PLUGIN_SOURCE = ROOT / "plugins" / "escapement-claude"
 
 
 def _commands(settings: dict) -> list[str]:
@@ -23,6 +24,28 @@ def _commands(settings: dict) -> list[str]:
         for group in groups
         for hook in group.get("hooks", [])
     ]
+
+
+def _complete_plugin_fixture(
+    home: Path,
+    version: str,
+) -> tuple[Path, Path]:
+    plugin_root = (
+        home
+        / ".claude"
+        / "plugins"
+        / "cache"
+        / "escapement"
+        / "escapement"
+        / version
+    )
+    shutil.copytree(PLUGIN_SOURCE, plugin_root)
+    stub_bin = home / "stub-bin"
+    stub_bin.mkdir(parents=True)
+    claude = stub_bin / "claude"
+    claude.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    claude.chmod(0o755)
+    return plugin_root, stub_bin
 
 
 @pytest.mark.parametrize("version_seed", ("first-layout", "second-layout"))
@@ -35,20 +58,8 @@ def test_installer_finds_real_plugin_cache_shape_and_removes_legacy_prime(
     version_dir = hashlib.sha256(
         f"{version_seed}:{tmp_path}".encode()
     ).hexdigest()[:12]
-    cached_hooks = (
-        claude_dir
-        / "plugins"
-        / "cache"
-        / "escapement"
-        / "escapement"
-        / version_dir
-        / "hooks"
-    )
-    cached_hooks.mkdir(parents=True)
-    (cached_hooks / "hooks.json").write_text(
-        PLUGIN_HOOKS.read_text(encoding="utf-8"),
-        encoding="utf-8",
-    )
+    plugin_root, stub_bin = _complete_plugin_fixture(home, version_dir)
+    cached_hooks = plugin_root / "hooks"
     stale_hooks = (
         claude_dir
         / "plugins"
@@ -140,6 +151,7 @@ def test_installer_finds_real_plugin_cache_shape_and_removes_legacy_prime(
 
     env = os.environ.copy()
     env["HOME"] = str(home)
+    env["PATH"] = f"{stub_bin}:{env['PATH']}"
     result = subprocess.run(
         ["bash", str(INSTALLER), "--dev"],
         cwd=ROOT,
@@ -187,10 +199,11 @@ def test_installer_without_plugin_inventory_preserves_settings(
         check=False,
     )
 
-    assert result.returncode == 0, result.stderr
-    assert "plugin not installed" in result.stdout
+    assert result.returncode != 0
+    assert "no valid user-scope" in result.stderr
     assert settings_path.read_bytes() == original_bytes
     assert list(claude_dir.glob("settings.json.backup-*")) == []
+    assert list(claude_dir.glob(".cutover-backup-*")) == []
 
 
 @pytest.mark.parametrize("registry_case", ("unrelated-only", "project-only"))
@@ -241,10 +254,11 @@ def test_registry_without_user_plugin_preserves_settings(
         check=False,
     )
 
-    assert result.returncode == 0, result.stderr
-    assert "plugin not installed" in result.stdout
+    assert result.returncode != 0
+    assert "no valid user-scope" in result.stderr
     assert settings_path.read_bytes() == original_bytes
     assert list(claude_dir.glob("settings.json.backup-*")) == []
+    assert list(claude_dir.glob(".cutover-backup-*")) == []
 
 
 @pytest.mark.parametrize(
@@ -307,6 +321,7 @@ def test_invalid_registered_plugin_fails_without_touching_settings(
     )
 
     assert result.returncode != 0
-    assert "cannot migrate settings hooks" in result.stderr
+    assert "FATAL:" in result.stderr
     assert settings_path.read_bytes() == original_bytes
     assert list(claude_dir.glob("settings.json.backup-*")) == []
+    assert list(claude_dir.glob(".cutover-backup-*")) == []
