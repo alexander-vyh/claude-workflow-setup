@@ -88,6 +88,11 @@ printf '%s\n' \
   '{"hooks":{"Stop":[{"hooks":[{"command":"python3 -B ${CLAUDE_PLUGIN_ROOT}/hooks/validate_no_shirking.py"}]}]}}' \
   > "$CACHE/hooks/hooks.json"
 cp -R "$CACHE" "$CACHE_OLD"
+# The pre-update package can legitimately predate newly required support files.
+# It must remain eligible for refresh; the post-update package must be complete.
+rm -f \
+  "$CACHE_OLD/hooks/magic_number_echo.py" \
+  "$CACHE_OLD/hooks/oracle_reason_validation.py"
 
 # Fully regressed post-cutover state: workflow surfaces point into the pin.
 ln -s "$PIN/harness/bin" "$CLAUDE_DIR/harness/bin"
@@ -289,6 +294,50 @@ HOME="$HOME_DIR" PATH="$BIN:$PATH" bash "$REPO/scripts/plugin-update.sh" >"$TD/o
   || { cat "$TD/out2.log"; bad "second plugin update exited non-zero"; }
 [ "$(readlink "$CLAUDE_DIR/harness/bin" 2>/dev/null)" = "$CACHE/harness/bin" ] \
   && ok "second update remains converged" || bad "second update changed harness target"
+
+# Phase-split negative control: a legacy package may refresh without the new
+# dependencies, but the refreshed package must satisfy the full current
+# contract before any filesystem migration begins.
+cp "$CACHE/hooks/magic_number_echo.py" "$TD/magic_number_echo.py"
+rm -f "$CACHE/hooks/magic_number_echo.py"
+rm -f "$CLAUDE_DIR/harness/bin"
+ln -s "$PIN/harness/bin" "$CLAUDE_DIR/harness/bin"
+ln -s "$PIN/claude/skills/discovery" "$CLAUDE_DIR/skills/discovery"
+chmod 644 "$CACHE/harness/bin/verify"
+python3 - "$CLAUDE_DIR/plugins/installed_plugins.json" "$CACHE_OLD" <<'PY'
+import json, sys
+p, old = sys.argv[1:]
+d = json.load(open(p))
+d["plugins"]["escapement@escapement"] = [
+    {"scope": "user", "installPath": old, "version": "sha-old"}
+]
+json.dump(d, open(p, "w"), indent=2)
+PY
+cp "$CLAUDE_DIR/settings.json" "$TD/incomplete-settings.before"
+cp "$CLAUDE_DIR/plugins/installed_plugins.json" "$TD/incomplete-registry.before"
+incomplete_wrapper_before="$(readlink "$CLAUDE_DIR/harness/bin")"
+incomplete_skill_before="$(readlink "$CLAUDE_DIR/skills/discovery")"
+if HOME="$HOME_DIR" PATH="$BIN:$PATH" bash "$REPO/scripts/plugin-update.sh" \
+  >"$TD/incomplete.log" 2>&1
+then
+  cat "$TD/incomplete.log"
+  bad "incomplete refreshed package should fail closed"
+else
+  ok "incomplete refreshed package fails closed"
+fi
+cmp -s "$CLAUDE_DIR/settings.json" "$TD/incomplete-settings.before" \
+  && cmp -s "$CLAUDE_DIR/plugins/installed_plugins.json" "$TD/incomplete-registry.before" \
+  && ok "incomplete refresh restores settings and registry byte-for-byte" \
+  || bad "incomplete refresh left authority state mutated"
+[ "$(readlink "$CLAUDE_DIR/harness/bin")" = "$incomplete_wrapper_before" ] \
+  && [ "$(readlink "$CLAUDE_DIR/skills/discovery")" = "$incomplete_skill_before" ] \
+  && [ ! -x "$CACHE/harness/bin/verify" ] \
+  && ok "incomplete refresh preserves wrappers, links, and modes" \
+  || bad "incomplete refresh partially migrated filesystem state"
+cp "$TD/magic_number_echo.py" "$CACHE/hooks/magic_number_echo.py"
+HOME="$HOME_DIR" PATH="$BIN:$PATH" bash "$REPO/scripts/plugin-update.sh" \
+  >"$TD/post-incomplete-recover.log" 2>&1 \
+  || bad "could not recover after incomplete-package control"
 
 # Failure controls: restoration or pruning failures must roll settings back,
 # return non-zero, and never print the success terminator.
