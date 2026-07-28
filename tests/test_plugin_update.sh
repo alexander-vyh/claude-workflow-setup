@@ -25,6 +25,14 @@ ok()  { printf '  ok: %s\n' "$*"; }
 bad() { printf '  FAIL: %s\n' "$*"; fail=1; }
 
 TD="$(mktemp -d)"; trap 'rm -rf "$TD"' EXIT
+UPDATER_REPO="$TD/updater-repo"
+REPO_ONLY_NAME="repo-owned-$RANDOM.py"
+REPO_DIRECT_NAME="repo-direct-$RANDOM.py"
+PIN_ONLY_NAME="pin-only-$RANDOM.py"
+REPO_PERSONAL_NAME="repo-name-personal-$RANDOM.py"
+REPO_ONLY_DIR="repo-owned-dir-$RANDOM"
+PIN_ONLY_DIR="pin-only-dir-$RANDOM"
+REPO_PERSONAL_DIR="repo-name-personal-dir-$RANDOM"
 HOME_DIR="$TD/home"
 BIN="$TD/bin"
 CLAUDE_DIR="$HOME_DIR/.claude"
@@ -34,6 +42,9 @@ PIN="$CLAUDE_DIR/.escapement-pinned-legacy"
 PERSONAL="$TD/personal"
 
 mkdir -p \
+  "$UPDATER_REPO/scripts" \
+  "$UPDATER_REPO/claude/hooks/tests" \
+  "$UPDATER_REPO/plugins/escapement-claude/harness/bin" \
   "$BIN" \
   "$CACHE/harness/bin" \
   "$CACHE/harness/schemas" \
@@ -59,6 +70,21 @@ mkdir -p \
   "$CLAUDE_DIR/hooks" \
   "$PERSONAL"
 
+# Execute a copied updater from a miniature repository so a random, repo-owned
+# source can prove cleanup is inventory-driven rather than name-specific.
+cp "$REPO/scripts/plugin-update.sh" "$UPDATER_REPO/scripts/plugin-update.sh"
+cp "$REPO/scripts/prune_settings_hooks.py" "$UPDATER_REPO/scripts/prune_settings_hooks.py"
+cp "$REPO/plugins/escapement-claude/harness/bin/stop_hook.py" \
+  "$UPDATER_REPO/plugins/escapement-claude/harness/bin/stop_hook.py"
+cp "$REPO/claude/hooks/codex_final_response_gap.py" \
+  "$UPDATER_REPO/claude/hooks/codex_final_response_gap.py"
+printf '#!/usr/bin/env python3\n' > "$UPDATER_REPO/claude/hooks/$REPO_ONLY_NAME"
+printf '#!/usr/bin/env python3\n' > "$UPDATER_REPO/claude/hooks/$REPO_DIRECT_NAME"
+printf '#!/usr/bin/env python3\n' > "$UPDATER_REPO/claude/hooks/$REPO_PERSONAL_NAME"
+mkdir -p \
+  "$UPDATER_REPO/claude/hooks/$REPO_ONLY_DIR" \
+  "$UPDATER_REPO/claude/hooks/$REPO_PERSONAL_DIR"
+
 # Representative plugin payload.
 cp "$REPO/plugins/escapement-claude/harness/bin/stop_hook.py" "$CACHE/harness/bin/stop_hook.py"
 printf '#!/bin/bash\nexit 0\n' > "$CACHE/harness/bin/verify"
@@ -74,6 +100,13 @@ printf 'plugin rule\n' > "$CACHE/rules/continuation-harness.md"
 printf '#!/usr/bin/env python3\n' > "$CACHE/hooks/spec_id_enforcement.py"
 printf '#!/usr/bin/env python3\n' > "$CACHE/hooks/validate_no_shirking.py"
 printf '#!/usr/bin/env bash\n' > "$CACHE/hooks/project-bootstrap.sh"
+printf '#!/usr/bin/env python3\n' > "$PIN/claude/hooks/codex_final_response_gap.py"
+printf '#!/usr/bin/env python3\n' > "$PIN/claude/hooks/$REPO_ONLY_NAME"
+printf '#!/usr/bin/env python3\n' > "$PIN/claude/hooks/$PIN_ONLY_NAME"
+mkdir -p \
+  "$PIN/claude/hooks/tests" \
+  "$PIN/claude/hooks/$REPO_ONLY_DIR" \
+  "$PIN/claude/hooks/$PIN_ONLY_DIR"
 cp "$REPO/claude/hooks/magic_number_echo.py" "$CACHE/hooks/magic_number_echo.py"
 cp "$REPO/claude/hooks/oracle_reason_validation.py" "$CACHE/hooks/oracle_reason_validation.py"
 DYNAMIC_NAME="cutover-owned-$RANDOM"
@@ -102,6 +135,13 @@ ln -s "$PIN/claude/agents/adversarial-reviewer.md" "$CLAUDE_DIR/agents/adversari
 ln -s "$PIN/claude/commands/discovery.md" "$CLAUDE_DIR/commands/discovery.md"
 ln -s "$PIN/claude/rules/continuation-harness.md" "$CLAUDE_DIR/rules/continuation-harness.md"
 ln -s "$PIN/claude/hooks/spec_id_enforcement.py" "$CLAUDE_DIR/hooks/spec_id_enforcement.py"
+ln -s "$PIN/claude/hooks/codex_final_response_gap.py" "$CLAUDE_DIR/hooks/codex_final_response_gap.py"
+ln -s "$PIN/claude/hooks/tests" "$CLAUDE_DIR/hooks/tests"
+ln -s "$PIN/claude/hooks/$REPO_ONLY_NAME" "$CLAUDE_DIR/hooks/$REPO_ONLY_NAME"
+ln -s "$UPDATER_REPO/claude/hooks/$REPO_DIRECT_NAME" "$CLAUDE_DIR/hooks/$REPO_DIRECT_NAME"
+ln -s "$PIN/claude/hooks/$PIN_ONLY_NAME" "$CLAUDE_DIR/hooks/$PIN_ONLY_NAME"
+ln -s "$PIN/claude/hooks/$REPO_ONLY_DIR" "$CLAUDE_DIR/hooks/$REPO_ONLY_DIR"
+ln -s "$PIN/claude/hooks/$PIN_ONLY_DIR" "$CLAUDE_DIR/hooks/$PIN_ONLY_DIR"
 ln -s "$PIN/claude/hooks/obsolete_escapement_hook.py" "$CLAUDE_DIR/hooks/obsolete_escapement_hook.py"
 ln -s "$PIN/scripts/project-bootstrap.sh" "$CLAUDE_DIR/project-bootstrap.sh"
 ln -s "$PIN/claude/skills/$DYNAMIC_NAME" "$CLAUDE_DIR/skills/$DYNAMIC_NAME"
@@ -111,10 +151,14 @@ done
 
 # Positive controls: personal hook/link, custom real file, and runtime state.
 printf '#!/usr/bin/env python3\n' > "$PERSONAL/jixia_send_bounce.py"
+printf '#!/usr/bin/env python3\n' > "$PERSONAL/$REPO_PERSONAL_NAME"
+mkdir -p "$PERSONAL/$REPO_PERSONAL_DIR"
 mkdir -p "$PERSONAL/build"
 printf 'personal build skill\n' > "$PERSONAL/build/SKILL.md"
 printf 'personal review command\n' > "$PERSONAL/review.md"
 ln -s "$PERSONAL/jixia_send_bounce.py" "$CLAUDE_DIR/hooks/jixia_send_bounce.py"
+ln -s "$PERSONAL/$REPO_PERSONAL_NAME" "$CLAUDE_DIR/hooks/$REPO_PERSONAL_NAME"
+ln -s "$PERSONAL/$REPO_PERSONAL_DIR" "$CLAUDE_DIR/hooks/$REPO_PERSONAL_DIR"
 ln -s "$REPO/README.md" "$CLAUDE_DIR/hooks/validate_no_shirking.py"
 ln -s "$PERSONAL/build" "$CLAUDE_DIR/skills/build"
 printf 'personal real agent\n' > "$CLAUDE_DIR/agents/test-quality-reviewer.md"
@@ -193,7 +237,7 @@ exit 0
 STUB
 chmod +x "$BIN/claude"
 
-HOME="$HOME_DIR" PATH="$BIN:$PATH" bash "$REPO/scripts/plugin-update.sh" >"$TD/out.log" 2>&1 \
+HOME="$HOME_DIR" PATH="$BIN:$PATH" bash "$UPDATER_REPO/scripts/plugin-update.sh" >"$TD/out.log" 2>&1 \
   || { cat "$TD/out.log"; bad "plugin-update.sh exited non-zero"; }
 
 enabled="$(python3 -c "import json;print(json.load(open('$CLAUDE_DIR/settings.json')).get('enabledPlugins',{}).get('escapement@escapement'))")"
@@ -216,17 +260,25 @@ for stale in \
   "$CLAUDE_DIR/commands/discovery.md" \
   "$CLAUDE_DIR/rules/continuation-harness.md" \
   "$CLAUDE_DIR/hooks/spec_id_enforcement.py" \
+  "$CLAUDE_DIR/hooks/codex_final_response_gap.py" \
+  "$CLAUDE_DIR/hooks/tests" \
+  "$CLAUDE_DIR/hooks/$REPO_ONLY_NAME" \
+  "$CLAUDE_DIR/hooks/$REPO_DIRECT_NAME" \
+  "$CLAUDE_DIR/hooks/$REPO_ONLY_DIR" \
   "$CLAUDE_DIR/project-bootstrap.sh"
 do
-  [ ! -L "$stale" ] && ok "removed recognized legacy link: ${stale#"$CLAUDE_DIR/"}" \
+  [ ! -e "$stale" ] && [ ! -L "$stale" ] \
+    && ok "removed recognized legacy link: ${stale#"$CLAUDE_DIR/"}" \
     || bad "legacy workflow link remains: $stale -> $(readlink "$stale")"
 done
 
-[ ! -L "$CLAUDE_DIR/skills/$DYNAMIC_NAME" ] \
+[ ! -e "$CLAUDE_DIR/skills/$DYNAMIC_NAME" ] \
+  && [ ! -L "$CLAUDE_DIR/skills/$DYNAMIC_NAME" ] \
   && ok "removed runtime-generated plugin-owned skill" \
   || bad "runtime-generated plugin-owned skill remains"
 for surface in agents commands rules hooks; do
-  [ ! -L "$CLAUDE_DIR/$surface/$DYNAMIC_NAME" ] \
+  [ ! -e "$CLAUDE_DIR/$surface/$DYNAMIC_NAME" ] \
+    && [ ! -L "$CLAUDE_DIR/$surface/$DYNAMIC_NAME" ] \
     && ok "removed runtime-generated plugin-owned $surface entry" \
     || bad "runtime-generated plugin-owned $surface entry remains"
 done
@@ -235,9 +287,25 @@ done
   "$PIN/claude/hooks/obsolete_escapement_hook.py" ] \
   && ok "unrecognized legacy hook preserved for explicit disposition" \
   || bad "unrecognized legacy hook was removed"
+[ "$(readlink "$CLAUDE_DIR/hooks/$PIN_ONLY_NAME" 2>/dev/null)" = \
+  "$PIN/claude/hooks/$PIN_ONLY_NAME" ] \
+  && ok "random pin-only hook preserved for explicit disposition" \
+  || bad "random pin-only hook was removed"
+[ "$(readlink "$CLAUDE_DIR/hooks/$PIN_ONLY_DIR" 2>/dev/null)" = \
+  "$PIN/claude/hooks/$PIN_ONLY_DIR" ] \
+  && ok "random pin-only directory preserved for explicit disposition" \
+  || bad "random pin-only directory was removed"
 
 [ "$(readlink "$CLAUDE_DIR/hooks/jixia_send_bounce.py" 2>/dev/null)" = "$PERSONAL/jixia_send_bounce.py" ] \
   && ok "personal hook symlink preserved" || bad "personal hook symlink changed"
+[ "$(readlink "$CLAUDE_DIR/hooks/$REPO_PERSONAL_NAME" 2>/dev/null)" = \
+  "$PERSONAL/$REPO_PERSONAL_NAME" ] \
+  && ok "repo-known name with personal provenance preserved" \
+  || bad "repo-known name with personal provenance changed"
+[ "$(readlink "$CLAUDE_DIR/hooks/$REPO_PERSONAL_DIR" 2>/dev/null)" = \
+  "$PERSONAL/$REPO_PERSONAL_DIR" ] \
+  && ok "repo-known directory with personal provenance preserved" \
+  || bad "repo-known directory with personal provenance changed"
 [ "$(readlink "$CLAUDE_DIR/hooks/validate_no_shirking.py" 2>/dev/null)" = "$REPO/README.md" ] \
   && ok "unrelated same-name hook symlink preserved" \
   || bad "unrelated same-name hook symlink changed"
@@ -290,7 +358,7 @@ PY
   || bad "same-basename personal hook metadata changed"
 
 # Idempotence: a second update keeps the same ownership and state.
-HOME="$HOME_DIR" PATH="$BIN:$PATH" bash "$REPO/scripts/plugin-update.sh" >"$TD/out2.log" 2>&1 \
+HOME="$HOME_DIR" PATH="$BIN:$PATH" bash "$UPDATER_REPO/scripts/plugin-update.sh" >"$TD/out2.log" 2>&1 \
   || { cat "$TD/out2.log"; bad "second plugin update exited non-zero"; }
 [ "$(readlink "$CLAUDE_DIR/harness/bin" 2>/dev/null)" = "$CACHE/harness/bin" ] \
   && ok "second update remains converged" || bad "second update changed harness target"
@@ -317,7 +385,7 @@ cp "$CLAUDE_DIR/settings.json" "$TD/incomplete-settings.before"
 cp "$CLAUDE_DIR/plugins/installed_plugins.json" "$TD/incomplete-registry.before"
 incomplete_wrapper_before="$(readlink "$CLAUDE_DIR/harness/bin")"
 incomplete_skill_before="$(readlink "$CLAUDE_DIR/skills/discovery")"
-if HOME="$HOME_DIR" PATH="$BIN:$PATH" bash "$REPO/scripts/plugin-update.sh" \
+if HOME="$HOME_DIR" PATH="$BIN:$PATH" bash "$UPDATER_REPO/scripts/plugin-update.sh" \
   >"$TD/incomplete.log" 2>&1
 then
   cat "$TD/incomplete.log"
@@ -335,7 +403,7 @@ cmp -s "$CLAUDE_DIR/settings.json" "$TD/incomplete-settings.before" \
   && ok "incomplete refresh preserves wrappers, links, and modes" \
   || bad "incomplete refresh partially migrated filesystem state"
 cp "$TD/magic_number_echo.py" "$CACHE/hooks/magic_number_echo.py"
-HOME="$HOME_DIR" PATH="$BIN:$PATH" bash "$REPO/scripts/plugin-update.sh" \
+HOME="$HOME_DIR" PATH="$BIN:$PATH" bash "$UPDATER_REPO/scripts/plugin-update.sh" \
   >"$TD/post-incomplete-recover.log" 2>&1 \
   || bad "could not recover after incomplete-package control"
 
@@ -358,7 +426,7 @@ cp "$CLAUDE_DIR/plugins/installed_plugins.json" "$TD/disable-registry.before"
 disable_wrapper_before="$(readlink "$CLAUDE_DIR/harness/bin")"
 disable_skill_before="$(readlink "$CLAUDE_DIR/skills/discovery")"
 if HOME="$HOME_DIR" PATH="$BIN:$PATH" FAIL_DISABLE=1 \
-  bash "$REPO/scripts/plugin-update.sh" >"$TD/disable-fail.log" 2>&1
+  bash "$UPDATER_REPO/scripts/plugin-update.sh" >"$TD/disable-fail.log" 2>&1
 then
   cat "$TD/disable-fail.log"
   bad "disabled-state restoration failure was swallowed"
@@ -380,7 +448,7 @@ grep -q "==> done" "$TD/disable-fail.log" \
   || ok "disabled-state failure does not report completion"
 
 # Re-converge before constructing the later pruner failure.
-HOME="$HOME_DIR" PATH="$BIN:$PATH" bash "$REPO/scripts/plugin-update.sh" \
+HOME="$HOME_DIR" PATH="$BIN:$PATH" bash "$UPDATER_REPO/scripts/plugin-update.sh" \
   >"$TD/recover.log" 2>&1 || bad "could not recover after disable failure control"
 rm -f "$CLAUDE_DIR/harness/bin"
 ln -s "$PIN/harness/bin" "$CLAUDE_DIR/harness/bin"
@@ -402,7 +470,7 @@ prune_wrapper_before="$(readlink "$CLAUDE_DIR/harness/bin")"
 prune_skill_before="$(readlink "$CLAUDE_DIR/skills/discovery")"
 printf '{"hooks":{}}\n' > "$CACHE/hooks/hooks.json"
 if HOME="$HOME_DIR" PATH="$BIN:$PATH" \
-  bash "$REPO/scripts/plugin-update.sh" >"$TD/prune-fail.log" 2>&1
+  bash "$UPDATER_REPO/scripts/plugin-update.sh" >"$TD/prune-fail.log" 2>&1
 then
   cat "$TD/prune-fail.log"
   bad "settings-pruner failure was swallowed"
@@ -469,7 +537,7 @@ cat > "$BAD_CLAUDE/plugins/installed_plugins.json" <<JSON
   { "scope": "project", "installPath": "$BAD_CLAUDE/plugins/cache/escapement/escapement/arbitrary-cache" }
 ] } }
 JSON
-if HOME="$BAD_HOME" PATH="$BIN:$PATH" bash "$REPO/scripts/plugin-update.sh" >"$TD/bad.log" 2>&1; then
+if HOME="$BAD_HOME" PATH="$BIN:$PATH" bash "$UPDATER_REPO/scripts/plugin-update.sh" >"$TD/bad.log" 2>&1; then
   cat "$TD/bad.log"
   bad "missing user-scope plugin should fail closed"
 else
@@ -541,7 +609,7 @@ cat > "$REAL_CLAUDE/plugins/installed_plugins.json" <<JSON
   { "scope": "user", "installPath": "$CACHE", "version": "sha-current" }
 ] } }
 JSON
-if HOME="$REAL_HOME" PATH="$BIN:$PATH" bash "$REPO/scripts/plugin-update.sh" >"$TD/real.log" 2>&1; then
+if HOME="$REAL_HOME" PATH="$BIN:$PATH" bash "$UPDATER_REPO/scripts/plugin-update.sh" >"$TD/real.log" 2>&1; then
   cat "$TD/real.log"
   bad "unknown real harness/bin should fail closed"
 else
@@ -589,7 +657,7 @@ cat > "$LINK_CLAUDE/plugins/installed_plugins.json" <<JSON
 JSON
 cp "$LINK_CLAUDE/settings.json" "$TD/link-settings.before"
 cp "$LINK_CLAUDE/plugins/installed_plugins.json" "$TD/link-registry.before"
-if HOME="$LINK_HOME" PATH="$BIN:$PATH" bash "$REPO/scripts/plugin-update.sh" \
+if HOME="$LINK_HOME" PATH="$BIN:$PATH" bash "$UPDATER_REPO/scripts/plugin-update.sh" \
   >"$TD/link.log" 2>&1
 then
   cat "$TD/link.log"
