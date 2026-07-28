@@ -1,10 +1,20 @@
 """Behavioral tests for claude/hooks/beads_worktree_guard.py.
 
-This hook protects one business outcome: new worktrees in a beads-managed
-project use the repository-managed ``bd worktree create`` entrypoint instead
-of bare ``git worktree add``. Existing linked worktrees use Beads 1.0.5's Git
-common-directory tracker discovery and must be allowed to finish their normal
-Git workflow without a legacy ``.beads/redirect`` marker.
+This hook protects two related business outcomes:
+
+* ordinary literal ``git worktree add`` commands in a beads-managed project
+  use the repository-managed creation path; and
+* a repository can narrow that creation path further with
+  ``.agents/worktree-entrypoint``. CAKE uses this marker to require
+  ``cake-worktree`` for ordinary literal ``git worktree add`` and
+  ``bd worktree create`` commands.
+
+The canonical creator owns the freshness invariant. This hook is an accidental
+bypass guardrail, not a shell security boundary; dynamic shell construction,
+aliases, and adversarial obfuscation are intentionally outside its contract.
+Existing linked worktrees use Beads 1.0.5's Git common-directory tracker
+discovery and must be allowed to finish their normal Git workflow without a
+legacy ``.beads/redirect`` marker.
 
 Unlike no_direct_send_guard (which ALWAYS denies, because its tools are
 inherently blocked), this guard is CONDITIONAL: it must deny ``git worktree
@@ -29,10 +39,10 @@ hides, so the controls are built around it:
   from the repo root; an exact-cwd-only beads check would pass the simple
   negative control yet silently fail real usage.
 
-  Plugin registration — the guard is wired in the plugin's hooks.json on the
-  ``Bash(git worktree add:*)`` matcher (scoped so it fires only on that command
-  prefix — zero overhead on every other Bash call). Asserted against the real
-  template, not the hook's internals, so a de-registration regression bites.
+  Plugin registration — the guard is wired exactly once on the broad ``Bash``
+  matcher, because both ``git`` and ``bd`` direct commands must reach it.
+  Asserted against the real generated plugin surface, not the hook's internals,
+  so de-registration and duplicate execution regressions bite.
 
 Assertions target externally-observable behavior (exit code, the JSON decision
 the runtime acts on, the settings registration) — not private helpers — so
@@ -47,6 +57,9 @@ from __future__ import annotations
 import io
 import importlib.util
 import json
+import os
+import shlex
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -76,7 +89,7 @@ if not _SETTINGS_TEMPLATE.is_file():
             _SETTINGS_TEMPLATE = candidate
             break
 
-_EXPECTED_MATCHER = "Bash(git worktree add:*)"
+_EXPECTED_MATCHER = "Bash"
 
 
 def _run(command: str, cwd: Path) -> tuple[int, dict, str]:
@@ -111,7 +124,7 @@ def _run(command: str, cwd: Path) -> tuple[int, dict, str]:
 
 
 def _make_beads_project(tmp_path: Path) -> Path:
-    (tmp_path / ".beads").mkdir()
+    (tmp_path / ".beads").mkdir(parents=True)
     return tmp_path
 
 
@@ -124,6 +137,551 @@ def _make_git_beads_project(tmp_path: Path) -> Path:
     subprocess.run(["git", "add", ".gitignore"], cwd=repo, check=True)
     subprocess.run(["git", "commit", "-qm", "init"], cwd=repo, check=True)
     return repo
+
+
+def _make_managed_beads_project(tmp_path: Path, entrypoint: str = "cake-worktree") -> Path:
+    repo = _make_beads_project(tmp_path)
+    (repo / ".agents").mkdir()
+    (repo / ".agents" / "worktree-entrypoint").write_text(
+        f"{entrypoint}\n",
+        encoding="utf-8",
+    )
+    return repo
+
+
+def _make_git_managed_project(tmp_path: Path) -> Path:
+    repo = _make_git_beads_project(tmp_path)
+    (repo / ".agents").mkdir()
+    (repo / ".agents" / "worktree-entrypoint").write_text(
+        "cake-worktree\n",
+        encoding="utf-8",
+    )
+    return repo
+
+
+def _make_plain_git_project(tmp_path: Path) -> Path:
+    tmp_path.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    return tmp_path
+
+
+# ---------------------------------------------------------------------------
+# Repository-specific entrypoint contract.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git worktree add ../my-wt -b feature/x",
+        "git worktree add -b feature/x ../my-wt",
+    ],
+)
+def test_managed_repo_redirects_direct_git_to_declared_entrypoint(command, tmp_path):
+    repo = _make_managed_beads_project(tmp_path)
+
+    exit_code, parsed, raw = _run(command, repo)
+
+    assert exit_code == 0
+    out = parsed["hookSpecificOutput"]
+    assert out["permissionDecision"] == "deny", raw
+    assert "cake-worktree create my-wt --branch feature/x" in out[
+        "permissionDecisionReason"
+    ]
+    assert "bd worktree create" not in out["permissionDecisionReason"]
+
+
+def test_managed_repo_redirects_direct_bd_to_declared_entrypoint(tmp_path):
+    repo = _make_managed_beads_project(tmp_path)
+
+    exit_code, parsed, raw = _run(
+        "bd worktree create .worktrees/my-wt --branch feature/x",
+        repo,
+    )
+
+    assert exit_code == 0
+    out = parsed["hookSpecificOutput"]
+    assert out["permissionDecision"] == "deny", raw
+    assert "cake-worktree create my-wt --branch feature/x" in out[
+        "permissionDecisionReason"
+    ]
+
+
+def test_declared_entrypoint_invocation_is_allowed(tmp_path):
+    repo = _make_managed_beads_project(tmp_path)
+
+    exit_code, parsed, raw = _run(
+        "cake-worktree create my-wt --branch feature/x",
+        repo,
+    )
+
+    assert exit_code == 0
+    assert parsed == {}, raw
+
+
+def test_git_dash_c_uses_effective_managed_repo_from_outside(tmp_path):
+    repo = _make_managed_beads_project(tmp_path / "managed")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+
+    _, parsed, raw = _run(
+        f"git -C {repo} worktree add ../my-wt -b feature/x",
+        outside,
+    )
+
+    out = parsed["hookSpecificOutput"]
+    assert out["permissionDecision"] == "deny", raw
+    assert "cake-worktree create my-wt --branch feature/x" in out[
+        "permissionDecisionReason"
+    ]
+
+
+def test_git_dash_c_plain_repo_is_allowed_from_managed_cwd(tmp_path):
+    managed = _make_managed_beads_project(tmp_path / "managed")
+    plain = tmp_path / "plain"
+    plain.mkdir()
+
+    exit_code, parsed, raw = _run(
+        f"git -C {plain} worktree add ../my-wt -b feature/x",
+        managed,
+    )
+
+    assert exit_code == 0
+    assert parsed == {}, raw
+
+
+def test_bd_dash_c_uses_effective_managed_repo_from_outside(tmp_path):
+    repo = _make_managed_beads_project(tmp_path / "managed")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+
+    _, parsed, raw = _run(
+        f"bd -C {repo} worktree create .worktrees/my-wt -b feature/x",
+        outside,
+    )
+
+    out = parsed["hookSpecificOutput"]
+    assert out["permissionDecision"] == "deny", raw
+    assert "cake-worktree create my-wt --branch feature/x" in out[
+        "permissionDecisionReason"
+    ]
+
+
+def test_bd_dash_c_plain_repo_is_allowed_from_managed_cwd(tmp_path):
+    managed = _make_managed_beads_project(tmp_path / "managed")
+    plain = tmp_path / "plain"
+    plain.mkdir()
+
+    exit_code, parsed, raw = _run(
+        f"bd -C {plain} worktree create .worktrees/my-wt -b feature/x",
+        managed,
+    )
+
+    assert exit_code == 0
+    assert parsed == {}, raw
+
+
+def test_git_work_tree_does_not_override_managed_repository_identity(tmp_path):
+    managed = _make_git_managed_project(tmp_path / "managed")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    expected_common_dir = managed / ".git"
+
+    resolved = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(managed),
+            f"--work-tree={outside}",
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-common-dir",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert Path(resolved) == expected_common_dir
+
+    _, parsed, raw = _run(
+        f"git -C {managed} --work-tree={outside} "
+        "worktree add ../my-wt -b feature/x",
+        outside,
+    )
+
+    assert parsed["hookSpecificOutput"]["permissionDecision"] == "deny", raw
+    assert "cake-worktree create my-wt --branch feature/x" in raw
+
+
+def test_git_dir_environment_overrides_plain_dash_c_target(tmp_path):
+    managed = _make_git_managed_project(tmp_path / "managed")
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    git_dir = managed / ".git"
+    env = os.environ.copy()
+    env["GIT_DIR"] = str(git_dir)
+
+    resolved = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(plain),
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-common-dir",
+        ],
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert Path(resolved) == git_dir
+
+    _, parsed, raw = _run(
+        f"GIT_DIR={git_dir} git -C {plain} "
+        "worktree add ../my-wt -b feature/x",
+        plain,
+    )
+
+    assert parsed["hookSpecificOutput"]["permissionDecision"] == "deny", raw
+    assert "cake-worktree create my-wt --branch feature/x" in raw
+
+
+def test_plain_git_dir_environment_overrides_managed_dash_c_target(tmp_path):
+    managed = _make_git_managed_project(tmp_path / "managed")
+    plain = _make_plain_git_project(tmp_path / "plain")
+    git_dir = plain / ".git"
+    env = os.environ.copy()
+    env["GIT_DIR"] = str(git_dir)
+
+    resolved = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(managed),
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-common-dir",
+        ],
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert Path(resolved) == git_dir
+
+    exit_code, parsed, raw = _run(
+        f"GIT_DIR={git_dir} git -C {managed} "
+        "worktree add ../my-wt -b feature/x",
+        managed,
+    )
+
+    assert exit_code == 0
+    assert parsed == {}, raw
+
+
+@pytest.mark.parametrize(
+    ("git_dir_owner", "dash_c_owner", "should_deny"),
+    [
+        ("managed", "plain", True),
+        ("plain", "managed", False),
+    ],
+)
+def test_git_dir_option_selects_policy_repo_over_dash_c(
+    git_dir_owner,
+    dash_c_owner,
+    should_deny,
+    tmp_path,
+):
+    managed = _make_git_managed_project(tmp_path / "managed")
+    plain = _make_plain_git_project(tmp_path / "plain")
+    repos = {"managed": managed, "plain": plain}
+    git_dir = repos[git_dir_owner] / ".git"
+    dash_c = repos[dash_c_owner]
+
+    resolved = subprocess.run(
+        [
+            "git",
+            f"--git-dir={git_dir}",
+            "-C",
+            str(dash_c),
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-common-dir",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert Path(resolved) == git_dir
+
+    exit_code, parsed, raw = _run(
+        f"git --git-dir={git_dir} -C {dash_c} "
+        "worktree add ../my-wt -b feature/x",
+        dash_c,
+    )
+
+    assert exit_code == 0
+    if should_deny:
+        assert parsed["hookSpecificOutput"]["permissionDecision"] == "deny", raw
+        assert "cake-worktree create my-wt --branch feature/x" in raw
+    else:
+        assert parsed == {}, raw
+
+
+@pytest.mark.parametrize(
+    "global_args",
+    [
+        ("--no-replace-objects",),
+        ("--no-advice",),
+        ("--config-env=core.autocrlf=X",),
+        ("--config-env", "core.autocrlf=X"),
+    ],
+)
+def test_documented_git_global_options_before_dash_c_are_denied(
+    global_args,
+    tmp_path,
+):
+    managed = _make_git_managed_project(tmp_path)
+    env = os.environ.copy()
+    env["X"] = "false"
+    resolved = subprocess.run(
+        [
+            "git",
+            *global_args,
+            "-C",
+            str(managed),
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-common-dir",
+        ],
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert Path(resolved) == managed / ".git"
+
+    _, parsed, raw = _run(
+        f"X=false git {shlex.join(global_args)} -C {managed} "
+        "worktree add ../my-wt -b feature/x",
+        tmp_path.parent,
+    )
+
+    assert parsed["hookSpecificOutput"]["permissionDecision"] == "deny", raw
+
+
+@pytest.mark.parametrize(
+    "global_args_template",
+    [
+        ("-C{repo}",),
+        ("--dolt-auto-commit", "on", "-C", "{repo}"),
+        ("-q", "-C", "{repo}"),
+        ("-v", "-C", "{repo}"),
+    ],
+)
+def test_documented_bd_global_option_forms_are_denied(
+    global_args_template,
+    tmp_path,
+):
+    managed = _make_managed_beads_project(tmp_path / "managed")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    global_args = tuple(
+        token.format(repo=managed)
+        for token in global_args_template
+    )
+    bd_executable = shutil.which("bd")
+    if bd_executable is not None:
+        probe = subprocess.run(
+            [bd_executable, *global_args, "--help"],
+            cwd=outside,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert probe.returncode == 0, probe.stderr
+
+    _, parsed, raw = _run(
+        shlex.join(
+            [
+                "bd",
+                *global_args,
+                "worktree",
+                "create",
+                ".worktrees/my-wt",
+                "-b",
+                "feature/x",
+            ],
+        ),
+        outside,
+    )
+
+    assert parsed["hookSpecificOutput"]["permissionDecision"] == "deny", raw
+    assert "cake-worktree create my-wt --branch feature/x" in raw
+
+
+def test_git_exec_path_value_form_remains_nonterminal_and_is_denied(tmp_path):
+    managed = _make_git_managed_project(tmp_path)
+    exec_path = subprocess.run(
+        ["git", "--exec-path"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    resolved = subprocess.run(
+        [
+            "git",
+            f"--exec-path={exec_path}",
+            "-C",
+            str(managed),
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-common-dir",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert Path(resolved) == managed / ".git"
+
+    _, parsed, raw = _run(
+        f"git --exec-path={shlex.quote(exec_path)} -C {managed} "
+        "worktree add ../my-wt -b feature/x",
+        tmp_path.parent,
+    )
+
+    assert parsed["hookSpecificOutput"]["permissionDecision"] == "deny", raw
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git --version worktree add",
+        "git -v worktree add",
+        "git --help worktree add",
+        "git --html-path worktree add",
+        "git --man-path worktree add",
+        "git --info-path worktree add",
+        "git --exec-path worktree add",
+        "bd --help worktree create",
+        "bd -h worktree create",
+        "bd --version worktree create",
+        "bd -V worktree create",
+    ],
+)
+def test_terminal_or_invalid_global_options_do_not_gate_inert_suffix(
+    command,
+    tmp_path,
+):
+    managed = _make_git_managed_project(tmp_path)
+    before = subprocess.run(
+        ["git", "-C", str(managed), "worktree", "list", "--porcelain"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+
+    exit_code, parsed, raw = _run(command, managed)
+
+    assert exit_code == 0
+    assert parsed == {}, raw
+    command_tokens = shlex.split(command)
+    executable = shutil.which(command_tokens[0])
+    if executable is not None:
+        executed = subprocess.run(
+            [executable, *command_tokens[1:]],
+            cwd=managed,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if command.startswith("git "):
+            assert executed.returncode == 0, executed.stderr
+    after = subprocess.run(
+        ["git", "-C", str(managed), "worktree", "list", "--porcelain"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    assert after == before
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git worktree add ../my-wt -b feature/x",
+        "bd worktree create .worktrees/my-wt -b feature/x",
+    ],
+)
+@pytest.mark.parametrize("marker_kind", ["dangling", "symlink", "directory"])
+def test_symlinked_entrypoint_marker_fails_closed(
+    command,
+    marker_kind,
+    tmp_path,
+):
+    repo = _make_beads_project(tmp_path)
+    agents_dir = repo / ".agents"
+    agents_dir.mkdir()
+    marker = agents_dir / "worktree-entrypoint"
+    if marker_kind == "directory":
+        marker.mkdir()
+    else:
+        marker_target = repo / (
+            "missing-entrypoint" if marker_kind == "dangling" else "entrypoint-target"
+        )
+        if marker_kind == "symlink":
+            marker_target.write_text("cake-worktree\n", encoding="utf-8")
+        marker.symlink_to(marker_target)
+
+    _, parsed, raw = _run(command, repo)
+
+    out = parsed["hookSpecificOutput"]
+    assert out["permissionDecision"] == "deny", raw
+    assert ".agents/worktree-entrypoint" in out["permissionDecisionReason"]
+    assert "invalid" in out["permissionDecisionReason"].lower()
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git worktree add ../my-wt -b feature/x",
+        "bd worktree create .worktrees/my-wt -b feature/x",
+    ],
+)
+@pytest.mark.parametrize(
+    "entrypoint",
+    [
+        "",
+        "   ",
+        "../unsafe",
+        "cake-worktree --extra",
+    ],
+)
+def test_invalid_entrypoint_marker_fails_closed_for_direct_creation(
+    command,
+    entrypoint,
+    tmp_path,
+):
+    repo = _make_managed_beads_project(tmp_path, entrypoint=entrypoint)
+
+    _, parsed, raw = _run(command, repo)
+
+    out = parsed["hookSpecificOutput"]
+    assert out["permissionDecision"] == "deny", raw
+    assert ".agents/worktree-entrypoint" in out["permissionDecisionReason"]
+    assert "invalid" in out["permissionDecisionReason"].lower()
+
+
+def test_generic_beads_repo_still_allows_safe_bd_creation(tmp_path):
+    repo = _make_git_beads_project(tmp_path)
+
+    exit_code, parsed, raw = _run(
+        "bd worktree create .worktrees/my-wt -b feature/x",
+        repo,
+    )
+
+    assert exit_code == 0
+    assert parsed == {}, raw
 
 
 # ---------------------------------------------------------------------------
@@ -195,22 +753,22 @@ def test_beads_detected_from_subdirectory(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Settings registration: the guard is wired on the scoped matcher.
+# Settings registration: one broad matcher reaches both git and bd commands.
 # ---------------------------------------------------------------------------
 
-def test_guard_is_registered_on_scoped_worktree_matcher():
+def test_guard_is_registered_exactly_once_on_bash_matcher():
     assert _SETTINGS_TEMPLATE.is_file(), (
         f"settings template not found at {_SETTINGS_TEMPLATE}"
     )
     settings = json.loads(_SETTINGS_TEMPLATE.read_text(encoding="utf-8"))
-    matchers = set()
+    matchers = []
     for entry in settings.get("hooks", {}).get("PreToolUse", []):
         commands = [h.get("command", "") for h in entry.get("hooks", [])]
         if any("beads_worktree_guard.py" in c for c in commands):
-            matchers.add(entry.get("matcher", ""))
-    assert _EXPECTED_MATCHER in matchers, (
-        f"beads_worktree_guard.py must be registered on matcher "
-        f"{_EXPECTED_MATCHER!r}; found registrations on: {matchers}"
+            matchers.append(entry.get("matcher", ""))
+    assert matchers == [_EXPECTED_MATCHER], (
+        "beads_worktree_guard.py must be registered exactly once on the broad "
+        f"{_EXPECTED_MATCHER!r} matcher; found registrations on: {matchers}"
     )
 
 
@@ -247,9 +805,7 @@ def test_malformed_stdin_fails_open():
 # Forms that must be DENIED inside a beads project. Each escapes the current
 # `^git worktree add` anchor.
 A1_ESCAPING_CREATE_FORMS = [
-    "git -C /tmp/main worktree add ../wt -b foo",
-    "git --git-dir=/tmp/main/.git worktree add ../wt -b foo",
-    "cd /tmp/main && git worktree add ../wt -b foo",
+    "cd . && git worktree add ../wt -b foo",
     "env GIT_PAGER=cat git worktree add ../wt -b foo",
     "  git    worktree   add   ../wt -b foo",  # extra whitespace, still first git
 ]
@@ -350,8 +906,6 @@ def test_echo_worktree_add_is_not_git_allowed(tmp_path):
 # git subcommand. Each MUST stay denied (the guard's whole reason to exist).
 B1_REAL_CREATE_FORMS = [
     "git worktree add ../x",
-    "git -C /repo worktree add ../x",
-    "git --git-dir=/repo/.git worktree add ../x",
     "cd /repo && git worktree add ../x",
 ]
 
@@ -389,28 +943,6 @@ def test_unparseable_command_line_does_not_deny(tmp_path):
     assert parsed == {}, (
         f"B1: an unparseable git command line must fail open (allow), not deny; "
         f"got {raw!r}"
-    )
-
-
-def test_guard_registered_on_wide_git_matcher():
-    """A1 STRUCTURAL FIX: the prefix matcher `Bash(git worktree add:*)` means the
-    runtime never even invokes the hook for `git -C x worktree add`. Closing A1
-    requires a SECOND matcher `Bash(git:*)` so those forms reach the hook. This
-    pins that registration; without it, no in-hook regex can catch `git -C`.
-
-    The existing narrow matcher must ALSO remain (test_guard_is_registered_on_
-    scoped_worktree_matcher still asserts it) — this is additive."""
-    assert _SETTINGS_TEMPLATE.is_file()
-    settings = json.loads(_SETTINGS_TEMPLATE.read_text(encoding="utf-8"))
-    matchers = set()
-    for entry in settings.get("hooks", {}).get("PreToolUse", []):
-        commands = [h.get("command", "") for h in entry.get("hooks", [])]
-        if any("beads_worktree_guard.py" in c for c in commands):
-            matchers.add(entry.get("matcher", ""))
-    assert "Bash(git:*)" in matchers, (
-        "A1: beads_worktree_guard.py must ALSO be registered on the wide "
-        "`Bash(git:*)` matcher so `git -C x worktree add` reaches the hook; "
-        f"found registrations on: {matchers}"
     )
 
 

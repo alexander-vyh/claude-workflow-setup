@@ -84,16 +84,7 @@
             "type": "command"
           }
         ],
-        "matcher": "Bash(git worktree add:*)"
-      },
-      {
-        "hooks": [
-          {
-            "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/hooks/beads_worktree_guard.py\"",
-            "type": "command"
-          }
-        ],
-        "matcher": "Bash(git:*)"
+        "matcher": "Bash"
       },
       {
         "hooks": [

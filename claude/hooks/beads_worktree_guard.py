@@ -1,26 +1,21 @@
 #!/usr/bin/env python3
-"""Claude Code hook: redirect ``git worktree add`` to ``bd worktree create``
-inside beads projects.
+"""Guard repository-managed worktree creation paths.
 
-Registered as a PreToolUse matcher scoped to ``Bash(git worktree add:*)`` in
-settings.template.json — so it fires ONLY on that command prefix and adds zero
-overhead to every other Bash call.
+For ordinary literal shell commands, this PreToolUse hook:
 
-Why this exists (see the ``beads-worktree`` skill for the full rationale and
-recovery steps): in a project with a ``.beads/`` directory, new worktrees are
-routed through ``bd worktree create`` so Beads owns their creation and the
-repository's location policy is applied. Beads 1.0.5 resolves tracker state in
-linked worktrees through Git's common directory; a legacy ``.beads/redirect``
-is not required for an existing worktree to finish its Git workflow.
+* redirects ``git worktree add`` to ``bd worktree create`` in Beads projects;
+* honors ``.agents/worktree-entrypoint`` when a repository declares a more
+  specific creator; and
+* applies the existing location policy to otherwise-valid
+  ``bd worktree create`` commands.
 
-This guard is CONDITIONAL, unlike no_direct_send_guard:
-  - In a beads project (``.beads/`` found at cwd or any ancestor, or BEADS_DIR
-    set) → DENY and redirect to the concrete ``bd worktree create`` command.
-  - Anywhere else → ALLOW (exit 0, no output): plain git repos must be able to
-    create worktrees normally.
+The declared entrypoint owns repository-specific invariants such as refreshing
+and verifying ``origin/main``. This hook is an accidental-bypass guardrail, not
+a shell security boundary. Dynamic expansion, aliases, nested interpreters,
+and adversarial shell obfuscation are intentionally outside its contract.
 
-Deny mechanism (canonical single-mechanism contract): a permissionDecision=
-"deny" JSON document on stdout, exit 0. NOT exit 2.
+A denial is a ``permissionDecision="deny"`` JSON document on stdout with exit
+code 0. Malformed hook payloads and unparseable shell text fail open.
 """
 
 from __future__ import annotations
@@ -29,9 +24,10 @@ import json
 import os
 import re
 import shlex
+import subprocess
 import sys
 from pathlib import Path
-from typing import List, NoReturn, Optional
+from typing import Iterator, List, NamedTuple, NoReturn, Optional
 
 # Shared signal capture per claude/rules/gate-design.md Rule 2.
 sys.path.insert(0, str(Path(__file__).parent))
@@ -44,202 +40,385 @@ except ImportError:  # pragma: no cover
 from beads_worktree_location_guard import evaluate_bd_worktree_location
 
 
-# B1 FIX: shlex tokenization replaces the substring regex detection for
-# `git worktree add`. The regex `\bgit\b[^\n|;&]*?\bworktree\s+add\b` matched
-# the phrase anywhere after `git`, including inside quoted arguments such as
-# `git log --grep="worktree add"` or `git commit -m "docs: worktree add guide"`.
-#
-# The tokenizer approach:
-#   1. Split the command string on shell separators (&&, ||, ;, |, newlines)
-#      using a simple regex. Each segment is a candidate command.
-#   2. For each segment, attempt shlex.split to tokenize it.
-#      - shlex error (unbalanced quote) → fail-open: allow (never deny on
-#        a command the hook can't parse; pinned by test_unparseable_command_line).
-#   3. Skip leading env-var assignments (TOKEN=value) and detect when the
-#      first non-assignment, non-env-cmd token is `git` (or an env/command
-#      prefix whose effective command is `git`).
-#   4. After `git`, skip global flags: bare flags (-x, --flag), value flags
-#      (-C <path>, --git-dir=<path>, --work-tree=<path>, -c key=val, etc.).
-#   5. Detect when the first two positional subcommand tokens are `worktree`
-#      then `add`. Quoted phrases and flag values are single tokens in the
-#      shlex output and will never match as subcommand tokens unless they
-#      literally are `worktree` or `add` (which only a real invocation is).
-
-# Shell separator pattern: splits on &&, ||, ;, |, newlines.
 _SHELL_SEP_RE = re.compile(r"&&|\|\||[;|\n]")
+_ENVVAR_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+_ENTRYPOINT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+_MARKER_RELATIVE_PATH = Path(".agents/worktree-entrypoint")
 
-# Git global flags that consume one additional token (space-separated value).
 _GIT_VALUE_FLAGS = frozenset({
-    "-C", "--work-tree", "--git-dir", "--git-common-dir",
-    "--namespace", "--super-prefix", "-c",
+    "-C",
+    "--work-tree",
+    "--git-dir",
+    "--git-common-dir",
+    "--namespace",
+    "--super-prefix",
+    "--config-env",
+    "-c",
 })
-
-# Git global flags that stand alone (no following token consumed).
+_GIT_TERMINAL_FLAGS = frozenset({
+    "-v",
+    "--version",
+    "-h",
+    "--help",
+    "--exec-path",
+    "--html-path",
+    "--man-path",
+    "--info-path",
+})
 _GIT_BARE_FLAG_RE = re.compile(
-    r"^(?:--version|--help|--html-path|--man-path|--info-path|"
-    r"-p|--paginate|--no-pager|--no-optional-locks|"
+    r"^(?:-p|--paginate|-P|--no-pager|--no-optional-locks|--no-replace-objects|"
+    r"--no-lazy-fetch|--no-advice|--bare|--exec-path=\S+|"
     r"--list-cmds=\S+|--literal-pathspecs|--no-literal-pathspecs|"
     r"--glob-pathspecs|--noglob-pathspecs|--icase-pathspecs|"
-    r"-(?:v+|q+))$"
+    r"-(?:q+))$"
 )
+_BD_VALUE_FLAGS = frozenset({
+    "-C",
+    "--directory",
+    "--db",
+    "--actor",
+    "--dolt-auto-commit",
+})
+_BD_TERMINAL_FLAGS = frozenset({
+    "-h",
+    "--help",
+    "-V",
+    "--version",
+})
+_BD_BARE_FLAGS = frozenset({
+    "--global",
+    "--ignore-schema-skew",
+    "--json",
+    "--profile",
+    "-q",
+    "--quiet",
+    "--readonly",
+    "--sandbox",
+    "-v",
+    "--verbose",
+})
 
-# A token is a shell env-var assignment if it matches NAME=VALUE.
-_ENVVAR_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+
+class LiteralCreate(NamedTuple):
+    kind: str
+    tokens: List[str]
+    args_index: int
+    effective_cwd: Path
 
 
-def _is_worktree_add_subcommand(tokens: List[str]) -> bool:
-    """Return True iff the token list represents a `git worktree add` invocation.
-
-    `worktree` and `add` must appear as POSITIONAL git subcommand tokens, NOT
-    inside a flag value or quoted argument. Supports global git flags (-C <path>,
-    --git-dir=..., -c key=val), env-var assignment prefixes, and `env` / `command`
-    prefixes before git.
-
-    Returns False (not a match) rather than raising on any unexpected input.
-    """
+def _command_index(tokens: List[str]) -> Optional[int]:
+    """Return the executable index for a simple literal command segment."""
     i = 0
     n = len(tokens)
-
-    # Skip leading env-var assignments (PAGER=cat GIT_DIR=x git ...).
     while i < n and _ENVVAR_RE.match(tokens[i]):
         i += 1
-    if i >= n:
-        return False
 
-    # Handle `env [NAME=VAL ...] git` prefix: `env` strips env and executes the
-    # next non-assignment token as the command. Also handle `command git`.
-    # We allow multiple levels of these wrappers (e.g. `command env git`).
     while i < n and tokens[i] in ("env", "command"):
         i += 1
-        # Skip any assignments or flags after `env` / `command`.
-        while i < n and (_ENVVAR_RE.match(tokens[i]) or tokens[i].startswith("-")):
-            # `env -i`, `env -u NAME`, `command -p`, etc.
-            if tokens[i] in ("-u", "-S") and i + 1 < n:
-                i += 2  # consume flag + its argument
-            else:
+        while i < n:
+            token = tokens[i]
+            if _ENVVAR_RE.match(token):
                 i += 1
-        if i >= n:
-            return False
+                continue
+            if token in ("-u", "-S") and i + 1 < n:
+                i += 2
+                continue
+            if token.startswith("-"):
+                i += 1
+                continue
+            break
 
-    # The effective command must be `git` (bare or path-qualified like /usr/bin/git).
-    if tokens[i].split("/")[-1] not in ("git",):
-        return False
-    i += 1  # consumed `git`
+    return i if i < n else None
 
-    # Skip git global flags.
+
+def _path_from(value: str, cwd: Path) -> Path:
+    path = Path(value)
+    if not path.is_absolute():
+        path = cwd / path
+    try:
+        return path.resolve()
+    except OSError:
+        return path
+
+
+def _git_dir_worktree(value: str, cwd: Path) -> Path:
+    git_dir = _path_from(value, cwd)
+    return git_dir.parent if git_dir.name == ".git" else cwd
+
+
+def _literal_environment(tokens: List[str], command_index: int) -> dict[str, str]:
+    environment = os.environ.copy()
+    for token in tokens[:command_index]:
+        if _ENVVAR_RE.match(token):
+            name, _, value = token.partition("=")
+            environment[name] = value
+    return environment
+
+
+def _git_policy_cwd(
+    tokens: List[str],
+    cwd: Path,
+    command_index: int,
+    subcommand_index: int,
+    fallback: Path,
+) -> Path:
+    """Ask Git which common directory owns this literal invocation."""
+    command = [
+        tokens[command_index],
+        *tokens[command_index + 1 : subcommand_index],
+        "rev-parse",
+        "--path-format=absolute",
+        "--git-common-dir",
+    ]
+    try:
+        resolved = subprocess.run(
+            command,
+            cwd=cwd,
+            env=_literal_environment(tokens, command_index),
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return fallback
+    if resolved.returncode != 0 or not resolved.stdout.strip():
+        return fallback
+    common_dir = Path(resolved.stdout.strip())
+    try:
+        common_dir = common_dir.resolve()
+    except OSError:
+        return fallback
+    return common_dir.parent if common_dir.name == ".git" else fallback
+
+
+def _git_worktree_add(
+    tokens: List[str],
+    cwd: Path,
+) -> Optional[LiteralCreate]:
+    command_index = _command_index(tokens)
+    if command_index is None or tokens[command_index].split("/")[-1] != "git":
+        return None
+
+    effective_cwd = cwd
+    explicit_git_dir: Optional[str] = None
+    for token in tokens[:command_index]:
+        if token.startswith("GIT_DIR="):
+            explicit_git_dir = token.partition("=")[2]
+
+    i = command_index + 1
+    n = len(tokens)
     while i < n:
-        tok = tokens[i]
-        if tok in _GIT_VALUE_FLAGS:
-            i += 2  # flag + its value
+        token = tokens[i]
+        if token in _GIT_TERMINAL_FLAGS:
+            return None
+        if token == "-C" and i + 1 < n:
+            effective_cwd = _path_from(tokens[i + 1], effective_cwd)
+            i += 2
             continue
-        # --git-dir=<path>, --work-tree=<path>, -C<path> (attached form), -c key=val
-        if (tok.startswith("--git-dir=") or tok.startswith("--work-tree=")
-                or tok.startswith("--git-common-dir=") or tok.startswith("--namespace=")
-                or tok.startswith("--super-prefix=") or tok.startswith("-c")
-                and len(tok) > 2 and tok[2:3] != " "):
+        if token.startswith("-C") and len(token) > 2:
+            effective_cwd = _path_from(token[2:], effective_cwd)
             i += 1
             continue
-        if _GIT_BARE_FLAG_RE.match(tok):
+        if token in ("--work-tree", "--git-dir") and i + 1 < n:
+            value = tokens[i + 1]
+            if token == "--git-dir":
+                explicit_git_dir = value
+            i += 2
+            continue
+        if token.startswith("--work-tree="):
             i += 1
             continue
-        break  # first non-flag token is the subcommand
+        if token.startswith("--git-dir="):
+            explicit_git_dir = token.partition("=")[2]
+            i += 1
+            continue
+        if token in _GIT_VALUE_FLAGS:
+            i += 2
+            continue
+        if (
+            token.startswith("--git-common-dir=")
+            or token.startswith("--namespace=")
+            or token.startswith("--super-prefix=")
+            or token.startswith("--config-env=")
+            or token.startswith("-c") and len(token) > 2
+        ):
+            i += 1
+            continue
+        if _GIT_BARE_FLAG_RE.match(token):
+            i += 1
+            continue
+        break
 
-    # The next two positional tokens must be `worktree` then `add`.
     if i + 1 < n and tokens[i] == "worktree" and tokens[i + 1] == "add":
-        return True
-    return False
+        fallback = (
+            _git_dir_worktree(explicit_git_dir, effective_cwd)
+            if explicit_git_dir is not None
+            else effective_cwd
+        )
+        policy_cwd = _git_policy_cwd(
+            tokens,
+            cwd,
+            command_index,
+            i,
+            fallback,
+        )
+        return LiteralCreate("git", tokens, i + 2, policy_cwd)
+    return None
+
+
+def _bd_worktree_create(
+    tokens: List[str],
+    cwd: Path,
+) -> Optional[LiteralCreate]:
+    command_index = _command_index(tokens)
+    if command_index is None or tokens[command_index].split("/")[-1] != "bd":
+        return None
+
+    effective_cwd = cwd
+    i = command_index + 1
+    n = len(tokens)
+    while i < n:
+        token = tokens[i]
+        if token in _BD_TERMINAL_FLAGS:
+            return None
+        if token in ("-C", "--directory") and i + 1 < n:
+            effective_cwd = _path_from(tokens[i + 1], effective_cwd)
+            i += 2
+            continue
+        if token.startswith("-C") and len(token) > 2:
+            effective_cwd = _path_from(token[2:], effective_cwd)
+            i += 1
+            continue
+        if token.startswith("--directory="):
+            effective_cwd = _path_from(
+                token.partition("=")[2],
+                effective_cwd,
+            )
+            i += 1
+            continue
+        if token in _BD_VALUE_FLAGS:
+            i += 2
+            continue
+        if token in _BD_BARE_FLAGS:
+            i += 1
+            continue
+        if token.startswith("--"):
+            i += 1
+            continue
+        break
+
+    if i + 1 < n and tokens[i] == "worktree" and tokens[i + 1] == "create":
+        return LiteralCreate("bd", tokens, i + 2, effective_cwd)
+    return None
+
+
+def _literal_creates(command: str, cwd: Path) -> Iterator[LiteralCreate]:
+    """Yield ordinary literal Git or Beads worktree-create invocations."""
+    for segment in _SHELL_SEP_RE.split(command):
+        segment = segment.strip()
+        if not segment:
+            continue
+        try:
+            tokens = shlex.split(segment)
+        except ValueError:
+            continue
+        create = _git_worktree_add(tokens, cwd)
+        if create is None:
+            create = _bd_worktree_create(tokens, cwd)
+        if create is not None:
+            yield create
 
 
 def _command_has_worktree_add(command: str) -> bool:
-    """Return True iff `command` contains a real `git worktree add` subcommand.
-
-    Uses shlex tokenization per segment so quoted argument values never match.
-    Fails OPEN (returns False) on any tokenization error.
-    """
-    # Split on shell separators; each segment is a candidate command.
-    segments = _SHELL_SEP_RE.split(command)
-    for seg in segments:
-        seg = seg.strip()
-        if not seg:
-            continue
-        try:
-            tokens = shlex.split(seg)
-        except ValueError:
-            # Unbalanced quote or other shlex error — fail open.
-            return False
-        if _is_worktree_add_subcommand(tokens):
-            return True
-    return False
+    """Compatibility helper retained for existing host-specific fixtures."""
+    return any(
+        create.kind == "git"
+        for create in _literal_creates(command, Path.cwd())
+    )
 
 
-def _in_beads_project(cwd: Path) -> bool:
-    """A beads context: BEADS_DIR exported, or a ``.beads/`` dir at cwd or any
-    ancestor (worktree commands aren't always run from the repo root)."""
-    if os.environ.get("BEADS_DIR"):
-        return True
+def _beads_project_root(cwd: Path) -> Optional[Path]:
     try:
         start = cwd.resolve()
     except OSError:
         start = cwd
-    for d in (start, *start.parents):
-        if (d / ".beads").is_dir():
-            return True
-    return False
+    for directory in (start, *start.parents):
+        if (directory / ".beads").is_dir():
+            return directory
+    return None
 
 
-def _parse_path_and_branch(command: str) -> tuple[Optional[str], Optional[str]]:
-    """Extract the worktree path and branch from a ``git worktree add`` command
-    so the redirect can echo them. Best-effort: returns (path, branch), either
-    of which may be None if unparseable."""
+def _in_beads_project(cwd: Path) -> bool:
+    """Return whether cwd belongs to a Beads project.
+
+    ``BEADS_DIR`` is retained for backward compatibility with direct commands.
+    Effective ``-C`` repository routing is decided before this function is
+    called, so target-repository tests remain independent of payload cwd.
+    """
+    return bool(os.environ.get("BEADS_DIR")) or _beads_project_root(cwd) is not None
+
+
+def _repository_entrypoint(cwd: Path) -> tuple[str, Optional[str]]:
+    """Return (missing|valid|invalid, entrypoint) for the effective Beads repo."""
+    root = _beads_project_root(cwd)
+    if root is None:
+        return "missing", None
+    marker = root / _MARKER_RELATIVE_PATH
+    if not os.path.lexists(marker):
+        return "missing", None
+    if marker.is_symlink() or not marker.is_file():
+        return "invalid", None
     try:
-        tokens = shlex.split(command)
-    except ValueError:
-        return None, None
-    # Drop leading "git worktree add".
-    try:
-        add_idx = tokens.index("add")
-    except ValueError:
-        return None, None
-    rest = tokens[add_idx + 1 :]
+        entrypoint = marker.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeError):
+        return "invalid", None
+    if not _ENTRYPOINT_RE.fullmatch(entrypoint):
+        return "invalid", None
+    return "valid", entrypoint
 
-    branch: Optional[str] = None
+
+def _path_and_branch(create: LiteralCreate) -> tuple[Optional[str], Optional[str]]:
     path: Optional[str] = None
-    i = 0
-    while i < len(rest):
-        tok = rest[i]
-        if tok in ("-b", "-B"):
-            if i + 1 < len(rest):
-                branch = rest[i + 1]
+    branch: Optional[str] = None
+    i = create.args_index
+    while i < len(create.tokens):
+        token = create.tokens[i]
+        if token in ("-b", "-B", "--branch") and i + 1 < len(create.tokens):
+            branch = create.tokens[i + 1]
             i += 2
             continue
-        if tok.startswith("-"):
+        if token in ("--reason",) and i + 1 < len(create.tokens):
+            i += 2
+            continue
+        if token.startswith("-"):
             i += 1
             continue
         if path is None:
-            path = tok
+            path = token
         i += 1
     return path, branch
 
 
-def _suggestion(path: Optional[str], branch: Optional[str]) -> str:
-    cmd = "bd worktree create"
-    cmd += f" {path}" if path else " <path>"
-    if branch:
-        cmd += f" -b {branch}"
-    else:
-        cmd += " -b <branch>"
-    return cmd
+def _managed_suggestion(
+    entrypoint: str,
+    create: LiteralCreate,
+) -> str:
+    path, branch = _path_and_branch(create)
+    name = Path(path).name if path else "<name>"
+    if not _ENTRYPOINT_RE.fullmatch(name):
+        name = "<name>"
+    command = [entrypoint, "create", name, "--branch", branch or "<branch>"]
+    return shlex.join(command)
 
 
-def deny(command: str, cwd: Path) -> NoReturn:
-    path, branch = _parse_path_and_branch(command)
-    suggestion = _suggestion(path, branch)
-    reason = (
-        "`git worktree add` is blocked in beads projects so new worktrees use "
-        f"the Beads-managed creation path: `{suggestion}`. Existing linked "
-        "worktrees share tracker state through Git's common directory in Beads "
-        "1.0.5, but new worktrees must use the repository's managed entrypoint."
-    )
+def _generic_suggestion(create: LiteralCreate) -> str:
+    path, branch = _path_and_branch(create)
+    command = ["bd", "worktree", "create", path or "<path>", "-b", branch or "<branch>"]
+    return shlex.join(command)
+
+
+def _emit_deny(reason: str) -> NoReturn:
     print(json.dumps({
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
@@ -250,11 +429,38 @@ def deny(command: str, cwd: Path) -> NoReturn:
     sys.exit(0)
 
 
+def _deny_invalid_marker() -> NoReturn:
+    _emit_deny(
+        "The repository's `.agents/worktree-entrypoint` marker is invalid. "
+        "It must contain exactly one executable name using letters, numbers, "
+        "dots, underscores, or hyphens. Repair the marker before creating a "
+        "worktree."
+    )
+
+
+def _deny_managed(entrypoint: str, create: LiteralCreate) -> NoReturn:
+    suggestion = _managed_suggestion(entrypoint, create)
+    _emit_deny(
+        f"Direct `{create.kind}` worktree creation is blocked in this repository. "
+        f"Use its declared worktree entrypoint instead: `{suggestion}`."
+    )
+
+
+def deny(create: LiteralCreate) -> NoReturn:
+    suggestion = _generic_suggestion(create)
+    _emit_deny(
+        "`git worktree add` is blocked in beads projects so new worktrees use "
+        f"the Beads-managed creation path: `{suggestion}`. Existing linked "
+        "worktrees share tracker state through Git's common directory, but new "
+        "worktrees must use the repository's managed entrypoint."
+    )
+
+
 def main() -> int:
     try:
         data = json.load(sys.stdin)
     except (json.JSONDecodeError, ValueError):
-        return 0  # fail-open: a parse bug must not wedge the tool pipeline
+        return 0
 
     if data.get("tool_name", "") != "Bash":
         return 0
@@ -268,24 +474,35 @@ def main() -> int:
     cwd_raw = data.get("cwd") or data.get("workingDirectory") or os.getcwd()
     cwd = Path(cwd_raw)
 
-    # B1: use shlex tokenization to detect `git worktree add` as a POSITIONAL
-    # subcommand (not inside a quoted argument). Fails open on parse errors.
-    if _command_has_worktree_add(command):
-        if not _in_beads_project(cwd):
-            return 0  # plain git repo — worktree add is fine
-        _record_signal(
-            gate_name="beads_worktree_guard",
-            decision="deny",
-            reason="git worktree add redirected to bd worktree create",
-            tool="Bash",
-        )
-        deny(command, cwd)
-        return 0  # unreachable (deny exits)
+    for create in _literal_creates(command, cwd):
+        marker_state, entrypoint = _repository_entrypoint(create.effective_cwd)
+        if marker_state == "invalid":
+            _record_signal(
+                gate_name="beads_worktree_guard",
+                decision="deny",
+                reason="invalid repository worktree entrypoint marker",
+                tool="Bash",
+            )
+            _deny_invalid_marker()
+        if marker_state == "valid" and entrypoint is not None:
+            _record_signal(
+                gate_name="beads_worktree_guard",
+                decision="deny",
+                reason=f"{create.kind} redirected to repository worktree entrypoint",
+                tool="Bash",
+            )
+            _deny_managed(entrypoint, create)
+        if create.kind == "git" and _in_beads_project(create.effective_cwd):
+            _record_signal(
+                gate_name="beads_worktree_guard",
+                decision="deny",
+                reason="git worktree add redirected to bd worktree create",
+                tool="Bash",
+            )
+            deny(create)
 
-    # Location guard: a bd-created worktree is beads-correct, but still unsafe
-    # if it lives inside the repo at a path git/indexers will scan.
-    evaluate_bd_worktree_location(command, cwd, _record_signal)  # exits if denying
-
+    # A marker-less Beads repo retains the existing location policy.
+    evaluate_bd_worktree_location(command, cwd, _record_signal)
     return 0
 
 
