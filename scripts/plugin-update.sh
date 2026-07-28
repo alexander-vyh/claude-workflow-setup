@@ -304,7 +304,7 @@ remove_plugin_owned_legacy_link() {
   local surface="$2"
   local relative="${dest#"$CLAUDE_DIR/$surface/"}"
   [[ "$relative" != "$dest" ]] || return 0
-  [[ -e "$new_path/$surface/$relative" ]] || return 0
+  [[ -e "$new_path/$surface/$relative" || -e "$REPO_DIR/claude/$surface/$relative" ]] || return 0
   [[ -L "$dest" ]] || return 0
   local target
   target="$(readlink "$dest")"
