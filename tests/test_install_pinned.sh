@@ -1,162 +1,426 @@
 #!/usr/bin/env bash
-# Test: INSTALL.sh deploys ~/.claude symlinks from a PINNED checkout, not the live
-# working tree (bead escapement-ft1).
+# Test: INSTALL.sh retains a pinned deployment only for auxiliary assets that
+# native plugins cannot ship, and cannot roll Claude workflow surfaces back to
+# the legacy pin.
 #
-# Business invariant: after `INSTALL.sh`, a deployed symlink (e.g. a hook) must
-# resolve into a pinned checkout that is INDEPENDENT of the dev working tree's
-# branch — so a branch switch in the source repo can never break machine-wide
-# hooks. The fragile implementation this rejects is the prior behavior: symlinking
-# straight into the source working tree ($REPO_DIR).
+# Business invariant: after either install or update, claude/bin and Beads
+# assets may resolve into the branch-safe pinned checkout, while workflow
+# surfaces remain plugin-owned. Running INSTALL.sh --update after plugin-update
+# must not recreate pin-owned hooks, skills, commands, agents, bootstrap, or
+# harness code.
 #
-# Offline + isolated: runs the installer against a throwaway HOME, pinning from the
-# LOCAL repo as the remote (ESCAPEMENT_PIN_REMOTE) so no network and no touch to real ~/.claude.
-#
+# Offline + isolated: runs against throwaway homes, a stub Claude CLI, and local
+# Git remotes. It never touches the real ~/.claude or network.
 # Run: bash tests/test_install_pinned.sh
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BASE_REF="$(git -C "$REPO" rev-parse HEAD)"
 fail=0
-note() { printf '  %s\n' "$*"; }
-ok()   { printf '  ok: %s\n' "$*"; }
-bad()  { printf '  FAIL: %s\n' "$*"; fail=1; }
+ok()  { printf '  ok: %s\n' "$*"; }
+bad() { printf '  FAIL: %s\n' "$*"; fail=1; }
 
-# --- default install: symlinks must point into the pinned checkout --------------
-T1="$(mktemp -d)"; trap 'rm -rf "$T1" "${T2:-}"' EXIT
-HOME="$T1" ESCAPEMENT_PIN_REMOTE="$REPO" ESCAPEMENT_PIN_REF="main" \
-  bash "$REPO/INSTALL.sh" >"$T1/out.log" 2>&1 || { cat "$T1/out.log"; bad "installer exited non-zero"; }
+ROOT="$(mktemp -d)"; trap 'rm -rf "$ROOT"' EXIT
+BIN="$ROOT/bin"
+mkdir -p "$BIN"
+
+cat > "$BIN/claude" <<'STUB'
+#!/usr/bin/env bash
+S="$HOME/.claude/settings.json"
+set_json() { python3 - "$S" "$@" <<'PY'
+import json,sys
+p=sys.argv[1]; op=sys.argv[2]; d=json.load(open(p))
+if op=="enable":
+    d.setdefault("enabledPlugins",{})["escapement@escapement"]=True
+    d.pop("model",None)
+elif op=="disable":
+    d.setdefault("enabledPlugins",{})["escapement@escapement"]=False
+json.dump(d,open(p,"w"),indent=2)
+PY
+}
+case "$1 $2" in
+  "plugin update")    set_json enable ;;
+  "plugin install")   set_json enable ;;
+  "plugin uninstall") : ;;
+  "plugin disable")   set_json disable ;;
+esac
+exit 0
+STUB
+chmod +x "$BIN/claude"
+
+setup_claude_home() {
+  local home_dir="$1"
+  local cache="$home_dir/.claude/plugins/cache/escapement/escapement/sha-current"
+  local personal="$home_dir/personal"
+  mkdir -p "$cache" "$home_dir/.claude/plugins" "$home_dir/.claude/hooks" "$personal"
+  cp -R "$REPO/plugins/escapement-claude/." "$cache/"
+  printf '#!/usr/bin/env python3\n' > "$personal/personal_hook.py"
+  ln -s "$personal/personal_hook.py" "$home_dir/.claude/hooks/personal_hook.py"
+  cat > "$home_dir/.claude/settings.json" <<JSON
+{
+  "model": "opus[1m]",
+  "enabledPlugins": { "escapement@escapement": true },
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "python3 $personal/personal_hook.py" }
+        ]
+      }
+    ]
+  }
+}
+JSON
+  cat > "$home_dir/.claude/plugins/installed_plugins.json" <<JSON
+{ "version": 2, "plugins": { "escapement@escapement": [
+  { "scope": "user", "installPath": "$cache", "version": "sha-current" }
+] } }
+JSON
+}
+
+assert_plugin_owned() {
+  local home_dir="$1"
+  local label="$2"
+  local cache="$home_dir/.claude/plugins/cache/escapement/escapement/sha-current"
+  local claude_dir="$home_dir/.claude"
+
+  [ "$(readlink "$claude_dir/harness/bin" 2>/dev/null)" = "$cache/harness/bin" ] \
+    && ok "$label: harness/bin targets installed plugin" \
+    || bad "$label: harness/bin is not plugin-owned ($(readlink "$claude_dir/harness/bin" 2>/dev/null))"
+  [ "$(readlink "$claude_dir/harness/schemas" 2>/dev/null)" = "$cache/harness/schemas" ] \
+    && ok "$label: harness/schemas targets installed plugin" \
+    || bad "$label: harness/schemas is not plugin-owned ($(readlink "$claude_dir/harness/schemas" 2>/dev/null))"
+
+  for stale in \
+    "$claude_dir/skills/discovery" \
+    "$claude_dir/agents/adversarial-reviewer.md" \
+    "$claude_dir/commands/discovery.md" \
+    "$claude_dir/hooks/spec_id_enforcement.py" \
+    "$claude_dir/project-bootstrap.sh"
+  do
+    [ ! -L "$stale" ] || bad "$label: legacy workflow link exists: $stale -> $(readlink "$stale")"
+  done
+
+  while IFS= read -r deployed_link; do
+    deployed_target="$(readlink "$deployed_link")"
+    case "$deployed_target" in
+      *"/.escapement-pinned"*/*|*"/.cws-pinned/"*|"$REPO"/*)
+        bad "$label: plugin-owned directory contains legacy/repo link: $deployed_link -> $deployed_target"
+        ;;
+    esac
+  done < <(
+    find \
+      "$claude_dir/skills" \
+      "$claude_dir/agents" \
+      "$claude_dir/commands" \
+      "$claude_dir/rules" \
+      "$claude_dir/hooks" \
+      -type l -print 2>/dev/null
+  )
+
+  [ "$(readlink "$claude_dir/hooks/personal_hook.py" 2>/dev/null)" = "$home_dir/personal/personal_hook.py" ] \
+    && ok "$label: personal hook preserved" || bad "$label: personal hook changed"
+}
+
+assert_auxiliary_owned() {
+  local home_dir="$1"
+  local pin_dir="$2"
+  local label="$3"
+  local formula="$home_dir/.beads/formulas/mol-feature.formula.json"
+  local status="$home_dir/.beads/mol-status.sh"
+
+  [ "$(readlink "$formula" 2>/dev/null)" = "$pin_dir/beads/formulas/mol-feature.formula.json" ] \
+    && ok "$label: Beads formula remains auxiliary-pin owned" \
+    || bad "$label: Beads formula target is wrong"
+  cmp -s "$formula" "$pin_dir/beads/formulas/mol-feature.formula.json" \
+    && ok "$label: Beads formula content preserved" \
+    || bad "$label: Beads formula content differs"
+  [ "$(readlink "$status" 2>/dev/null)" = "$pin_dir/beads/mol-status.sh" ] \
+    && ok "$label: mol-status remains auxiliary-pin owned" \
+    || bad "$label: mol-status target is wrong"
+  [ -x "$status" ] && ok "$label: mol-status remains executable" \
+    || bad "$label: mol-status is not executable"
+}
+
+# Default install: auxiliary assets use the pin; workflow uses the plugin.
+T1="$ROOT/default"
+setup_claude_home "$T1"
+HOME="$T1" PATH="$BIN:$PATH" ESCAPEMENT_PIN_REMOTE="$REPO" ESCAPEMENT_PIN_REF="$BASE_REF" \
+  bash "$REPO/INSTALL.sh" >"$T1/out.log" 2>&1 \
+  || { cat "$T1/out.log"; bad "default installer exited non-zero"; }
 
 PIN="$T1/.claude/.escapement-pinned"
-LINK="$T1/.claude/hooks/spec_id_enforcement.py"
-
-[ -d "$PIN/.git" ] && ok "pinned checkout created at ~/.claude/.escapement-pinned" \
-                   || bad "no pinned checkout created (expected $PIN/.git)"
-
-if [ -L "$LINK" ]; then
-  tgt="$(readlink "$LINK")"
-  case "$tgt" in
-    *"/.escapement-pinned/"*) ok "deployed hook points into the pinned checkout" ;;
-    *)                 bad "deployed hook points outside pinned checkout: $tgt" ;;
+AUX="$T1/.claude/bin"
+[ -d "$PIN/.git" ] && ok "pinned checkout created for auxiliary assets" \
+  || bad "no pinned checkout created"
+if [ -L "$AUX" ]; then
+  atgt="$(readlink "$AUX")"
+  case "$atgt" in
+    *"/.escapement-pinned/"*) ok "claude/bin points into pinned checkout" ;;
+    *) bad "claude/bin points outside pinned checkout: $atgt" ;;
   esac
-  # Negative control: must NOT point into the live source working tree.
-  case "$tgt" in
-    "$REPO"/*) bad "deployed hook points into the live working tree ($REPO) — fragile model" ;;
-    *)         ok "deployed hook does NOT point into the live working tree" ;;
-  esac
-  [ -e "$LINK" ] && ok "deployed hook resolves to a real file" || bad "deployed hook is broken (target missing)"
-else
-  bad "no hook symlink deployed at $LINK"
-fi
-
-# --- --dev escape hatch: symlinks SHOULD point into the live working tree -------
-T2="$(mktemp -d)"
-HOME="$T2" bash "$REPO/INSTALL.sh" --dev >"$T2/out.log" 2>&1 || { cat "$T2/out.log"; bad "--dev install exited non-zero"; }
-DLINK="$T2/.claude/hooks/spec_id_enforcement.py"
-if [ -L "$DLINK" ]; then
-  dtgt="$(readlink "$DLINK")"
-  case "$dtgt" in
-    "$REPO"/*) ok "--dev mode points into the live working tree (instant-edit opt-in)" ;;
-    *)         bad "--dev mode did not point into the working tree: $dtgt" ;;
+  case "$atgt" in
+    "$REPO"/*) bad "default claude/bin points into live working tree" ;;
+    *) ok "default claude/bin is branch-safe" ;;
   esac
 else
-  bad "--dev install produced no hook symlink"
+  bad "default install produced no claude/bin auxiliary link"
 fi
+assert_plugin_owned "$T1" "default install"
+assert_auxiliary_owned "$T1" "$PIN" "default install"
 
-# ===========================================================================
-# B — --update pin-dir drift (bead escapement-egk)
-#
-# A CWS-era machine has ~/.claude/* symlinks resolving into ~/.claude/.cws-pinned.
-# A bare `./INSTALL.sh --update` (no env override) currently refreshes
-# ~/.claude/.escapement-pinned (a checkout NOTHING links to) while .cws-pinned
-# stays stale. THE FIX: --update resolves the EFFECTIVE pin dir from where a
-# deployed sentinel symlink actually points, and updates THAT.
-#
-# Hermetic: a throwaway HOME; a local clone acting as the "remote" so we can
-# advance it and observe whether the LIVE pinned dir fast-forwards.
-# ===========================================================================
+# Sequential regression: a later legacy update may refresh the auxiliary pin,
+# but it must leave plugin ownership intact.
+HOME="$T1" PATH="$BIN:$PATH" ESCAPEMENT_PIN_REMOTE="$REPO" ESCAPEMENT_PIN_REF="$BASE_REF" \
+  bash "$REPO/scripts/plugin-update.sh" >"$T1/plugin-update.log" 2>&1 \
+  || { cat "$T1/plugin-update.log"; bad "direct plugin update exited non-zero"; }
+HOME="$T1" PATH="$BIN:$PATH" ESCAPEMENT_PIN_REMOTE="$REPO" ESCAPEMENT_PIN_REF="$BASE_REF" \
+  bash "$REPO/INSTALL.sh" --update >"$T1/update.log" 2>&1 \
+  || { cat "$T1/update.log"; bad "INSTALL.sh --update exited non-zero"; }
+assert_plugin_owned "$T1" "plugin update then legacy update"
+assert_auxiliary_owned "$T1" "$PIN" "plugin update then legacy update"
 
-# Build a local bare-ish remote we control (clone of REPO at main) so we can add
-# a commit and see whether --update pulls it into the LIVE pin dir.
-T3="$(mktemp -d)"; trap 'rm -rf "$T1" "${T2:-}" "${T3:-}"' EXIT
-REMOTE="$T3/remote"
+# --dev affects only auxiliary assets; plugin workflow ownership is unchanged.
+T2="$ROOT/dev"
+setup_claude_home "$T2"
+HOME="$T2" PATH="$BIN:$PATH" bash "$REPO/INSTALL.sh" --dev >"$T2/out.log" 2>&1 \
+  || { cat "$T2/out.log"; bad "--dev install exited non-zero"; }
+[ "$(readlink "$T2/.claude/bin" 2>/dev/null)" = "$REPO/claude/bin" ] \
+  && ok "--dev points auxiliary claude/bin into working tree" \
+  || bad "--dev claude/bin target is wrong"
+assert_plugin_owned "$T2" "--dev install"
+
+# CWS-era pin resolution now uses the retained claude/bin auxiliary sentinel.
+T3="$ROOT/cws"
+setup_claude_home "$T3"
+REMOTE="$ROOT/remote"
 git clone --quiet "$REPO" "$REMOTE" >/dev/null 2>&1 || bad "could not clone local remote"
 git -C "$REMOTE" checkout --quiet main 2>/dev/null || git -C "$REMOTE" checkout --quiet -b main
 
-# --- B-setup: simulate a CWS-era install whose symlinks point into .cws-pinned -
-# Install with CWS_PIN_DIR set so the pinned checkout lands at .cws-pinned and the
-# symlinks resolve there (the legacy layout the drift bug lives in).
-HOME="$T3" CWS_PIN_DIR="$T3/.claude/.cws-pinned" \
+HOME="$T3" PATH="$BIN:$PATH" CWS_PIN_DIR="$T3/.claude/.cws-pinned" \
   ESCAPEMENT_PIN_REMOTE="$REMOTE" ESCAPEMENT_PIN_REF="main" \
-  bash "$REPO/INSTALL.sh" >"$T3/install.log" 2>&1 || { cat "$T3/install.log"; bad "CWS-era install exited non-zero"; }
+  bash "$REPO/INSTALL.sh" >"$T3/install.log" 2>&1 \
+  || { cat "$T3/install.log"; bad "CWS-era install exited non-zero"; }
 
 CWS_PIN="$T3/.claude/.cws-pinned"
 ESC_PIN="$T3/.claude/.escapement-pinned"
-SENTINEL="$T3/.claude/hooks/spec_id_enforcement.py"
+SENTINEL="$T3/.claude/bin"
+case "$(readlink "$SENTINEL" 2>/dev/null)" in
+  *"/.cws-pinned/"*) ok "CWS-era auxiliary sentinel resolves into .cws-pinned" ;;
+  *) bad "CWS-era auxiliary sentinel target is wrong" ;;
+esac
 
-if [ -L "$SENTINEL" ]; then
-  stgt="$(readlink "$SENTINEL")"
-  case "$stgt" in
-    *"/.cws-pinned/"*) ok "B-setup: CWS-era symlinks resolve into .cws-pinned" ;;
-    *) bad "B-setup: expected symlink into .cws-pinned, got $stgt" ;;
-  esac
-else
-  bad "B-setup: no sentinel symlink deployed"
-fi
-
-# Record the live pin dir's commit, then advance the remote by one commit.
 cws_before="$(git -C "$CWS_PIN" rev-parse HEAD 2>/dev/null || echo MISSING)"
-( cd "$REMOTE" && echo "drift-test $(date +%s)" > _drift_marker.txt \
-    && git add _drift_marker.txt && git -c user.email=t@t -c user.name=t commit --quiet -m "drift advance" ) \
-  || bad "could not advance the local remote"
+(
+  cd "$REMOTE" || exit 1
+  printf 'drift-test\n' > _drift_marker.txt
+  git add _drift_marker.txt
+  git -c user.email=t@t -c user.name=t commit --quiet -m "drift advance"
+) || bad "could not advance local remote"
 
-# --- B1 + B4: a BARE --update (no env override) must refresh the LIVE pin dir ---
-HOME="$T3" ESCAPEMENT_PIN_REMOTE="$REMOTE" ESCAPEMENT_PIN_REF="main" \
+HOME="$T3" PATH="$BIN:$PATH" ESCAPEMENT_PIN_REMOTE="$REMOTE" ESCAPEMENT_PIN_REF="main" \
   bash "$REPO/INSTALL.sh" --update >"$T3/update.log" 2>&1
 upd_rc=$?
-
 cws_after="$(git -C "$CWS_PIN" rev-parse HEAD 2>/dev/null || echo MISSING)"
 
-# B1: the dir the symlinks resolve into (.cws-pinned) must have advanced.
 if [ "$cws_after" != "$cws_before" ] && [ "$cws_after" != "MISSING" ]; then
-  ok "B1: bare --update advanced the LIVE pin dir (.cws-pinned) the symlinks point into"
+  ok "bare --update advanced the live CWS auxiliary pin"
 else
-  bad "B1: bare --update did NOT advance .cws-pinned (before=$cws_before after=$cws_after) — drift: it refreshed a dir nothing links to"
+  bad "bare --update did not advance the live CWS auxiliary pin"
 fi
-
-# B4: it must NOT have silently created/advanced a .escapement-pinned that nothing
-# links to while leaving .cws-pinned stale. (If the impl chooses 'fail loudly'
-# instead of redirect, a non-zero rc with .cws-pinned untouched is also acceptable;
-# the forbidden outcome is silent wrong-dir success.)
 if [ "$cws_after" != "$cws_before" ]; then
-  ok "B4: no silent wrong-dir update (live dir advanced)"
+  ok "no silent wrong-directory update"
 elif [ "$upd_rc" -ne 0 ]; then
-  ok "B4: --update failed loudly rather than silently updating the wrong dir"
+  ok "update failed loudly rather than updating wrong directory"
 else
-  bad "B4: --update exited 0 but the live pin dir is stale — the silent drift this gate forbids"
+  bad "update silently left the live auxiliary pin stale"
+fi
+assert_plugin_owned "$T3" "CWS update"
+
+# Explicit override still wins.
+HOME="$T3" PATH="$BIN:$PATH" ESCAPEMENT_PIN_DIR="$ESC_PIN" \
+  ESCAPEMENT_PIN_REMOTE="$REMOTE" ESCAPEMENT_PIN_REF="main" \
+  bash "$REPO/INSTALL.sh" --update >"$T3/update-override.log" 2>&1 \
+  || { cat "$T3/update-override.log"; bad "explicit override update exited non-zero"; }
+[ -d "$ESC_PIN/.git" ] && ok "explicit pin override refreshed named directory" \
+  || bad "explicit pin override did not create named directory"
+assert_plugin_owned "$T3" "explicit override update"
+
+# Fresh --update keeps the default auxiliary pin behavior.
+T4="$ROOT/fresh"
+setup_claude_home "$T4"
+HOME="$T4" PATH="$BIN:$PATH" ESCAPEMENT_PIN_REMOTE="$REMOTE" ESCAPEMENT_PIN_REF="main" \
+  bash "$REPO/INSTALL.sh" --update >"$T4/update.log" 2>&1 \
+  || { cat "$T4/update.log"; bad "fresh --update exited non-zero"; }
+[ -d "$T4/.claude/.escapement-pinned/.git" ] \
+  && ok "fresh --update uses default auxiliary pin" \
+  || bad "fresh --update did not create default auxiliary pin"
+assert_plugin_owned "$T4" "fresh update"
+
+# Fail-closed transaction ordering: without an authoritative user-scope plugin,
+# INSTALL.sh must fail before refreshing even the auxiliary pin or changing any
+# live target/content.
+T5="$ROOT/invalid-plugin"
+BAD_REMOTE="$ROOT/invalid-remote"
+BAD_PIN="$T5/.claude/.escapement-pinned"
+BAD_CACHE="$T5/.claude/plugins/cache/escapement/escapement/arbitrary-cache"
+git clone --quiet "$REPO" "$BAD_REMOTE" >/dev/null 2>&1 || bad "could not clone invalid-plugin remote"
+git -C "$BAD_REMOTE" checkout --quiet main 2>/dev/null || git -C "$BAD_REMOTE" checkout --quiet -b main
+git clone --quiet "$BAD_REMOTE" "$BAD_PIN" >/dev/null 2>&1 || bad "could not create invalid-plugin pin"
+git -C "$BAD_PIN" checkout --quiet main 2>/dev/null || true
+mkdir -p \
+  "$BAD_CACHE" \
+  "$T5/.claude/plugins" \
+  "$T5/.claude/harness" \
+  "$T5/.claude/skills" \
+  "$T5/.claude/rules" \
+  "$T5/.claude/hooks" \
+  "$T5/.beads/formulas"
+cp -R "$REPO/plugins/escapement-claude/." "$BAD_CACHE/"
+ln -s "$BAD_PIN/claude/bin" "$T5/.claude/bin"
+ln -s "$BAD_PIN/harness/bin" "$T5/.claude/harness/bin"
+ln -s "$BAD_PIN/claude/skills/discovery" "$T5/.claude/skills/discovery"
+ln -s "$BAD_PIN/claude/rules/continuation-harness.md" "$T5/.claude/rules/continuation-harness.md"
+printf 'personal invalid control\n' > "$T5/personal.py"
+ln -s "$T5/personal.py" "$T5/.claude/hooks/personal.py"
+ln -s "$BAD_PIN/beads/formulas/mol-feature.formula.json" "$T5/.beads/formulas/mol-feature.formula.json"
+ln -s "$BAD_PIN/beads/mol-status.sh" "$T5/.beads/mol-status.sh"
+cat > "$T5/.claude/settings.json" <<JSON
+{
+  "model": "opus",
+  "enabledPlugins": { "escapement@escapement": false },
+  "hooks": {
+    "Stop": [
+      { "hooks": [ { "type": "command", "command": "python3 $T5/personal.py" } ] }
+    ]
+  }
+}
+JSON
+cat > "$T5/.claude/plugins/installed_plugins.json" <<JSON
+{ "version": 2, "plugins": { "escapement@escapement": [
+  { "scope": "project", "installPath": "$BAD_CACHE", "version": "arbitrary-cache" }
+] } }
+JSON
+
+bad_head_before="$(git -C "$BAD_PIN" rev-parse HEAD)"
+bad_bin_before="$(readlink "$T5/.claude/bin")"
+bad_harness_before="$(readlink "$T5/.claude/harness/bin")"
+bad_skill_before="$(readlink "$T5/.claude/skills/discovery")"
+bad_rule_before="$(readlink "$T5/.claude/rules/continuation-harness.md")"
+bad_formula_before="$(readlink "$T5/.beads/formulas/mol-feature.formula.json")"
+bad_status_before="$(readlink "$T5/.beads/mol-status.sh")"
+cp "$T5/.claude/settings.json" "$ROOT/invalid-settings.before"
+cp "$T5/.beads/formulas/mol-feature.formula.json" "$ROOT/invalid-formula.before"
+
+(
+  cd "$BAD_REMOTE" || exit 1
+  printf 'advance must not deploy\n' > _invalid_advance.txt
+  git add _invalid_advance.txt
+  git -c user.email=t@t -c user.name=t commit --quiet -m "invalid plugin advance"
+) || bad "could not advance invalid-plugin remote"
+
+if HOME="$T5" PATH="$BIN:$PATH" ESCAPEMENT_PIN_DIR="$BAD_PIN" \
+  ESCAPEMENT_PIN_REMOTE="$BAD_REMOTE" ESCAPEMENT_PIN_REF="main" \
+  bash "$REPO/INSTALL.sh" --update >"$T5/update.log" 2>&1
+then
+  cat "$T5/update.log"
+  bad "installer should fail without a user-scope plugin"
+else
+  ok "installer fails without a user-scope plugin"
 fi
 
-# --- B2: an explicit ESCAPEMENT_PIN_DIR override must WIN over symlink resolution -
-# Point the override at .escapement-pinned explicitly; that dir (not .cws-pinned)
-# should be the one created/refreshed.
-HOME="$T3" ESCAPEMENT_PIN_DIR="$ESC_PIN" ESCAPEMENT_PIN_REMOTE="$REMOTE" ESCAPEMENT_PIN_REF="main" \
-  bash "$REPO/INSTALL.sh" --update >"$T3/update_override.log" 2>&1 \
-  || bad "B2: explicit-override --update exited non-zero"
-if [ -d "$ESC_PIN/.git" ]; then
-  ok "B2: explicit ESCAPEMENT_PIN_DIR override refreshed the named dir (.escapement-pinned)"
-else
-  bad "B2: explicit override did not act on the named dir ($ESC_PIN)"
-fi
+[ "$(git -C "$BAD_PIN" rev-parse HEAD)" = "$bad_head_before" ] \
+  && ok "failed installer leaves auxiliary pin HEAD unchanged" \
+  || bad "failed installer refreshed auxiliary pin before aborting"
+[ "$(readlink "$T5/.claude/bin" 2>/dev/null)" = "$bad_bin_before" ] \
+  && ok "failed installer preserves claude/bin target" || bad "failed installer changed claude/bin"
+[ "$(readlink "$T5/.claude/harness/bin" 2>/dev/null)" = "$bad_harness_before" ] \
+  && ok "failed installer preserves harness target" || bad "failed installer changed harness target"
+[ "$(readlink "$T5/.claude/skills/discovery" 2>/dev/null)" = "$bad_skill_before" ] \
+  && ok "failed installer preserves workflow target" || bad "failed installer changed workflow target"
+[ "$(readlink "$T5/.claude/rules/continuation-harness.md" 2>/dev/null)" = "$bad_rule_before" ] \
+  && ok "failed installer preserves legacy rule target" || bad "failed installer changed legacy rule target"
+[ "$(readlink "$T5/.claude/hooks/personal.py" 2>/dev/null)" = "$T5/personal.py" ] \
+  && ok "failed installer preserves personal target" || bad "failed installer changed personal target"
+[ "$(readlink "$T5/.beads/formulas/mol-feature.formula.json" 2>/dev/null)" = "$bad_formula_before" ] \
+  && ok "failed installer preserves formula target" || bad "failed installer changed formula target"
+[ "$(readlink "$T5/.beads/mol-status.sh" 2>/dev/null)" = "$bad_status_before" ] \
+  && ok "failed installer preserves mol-status target" || bad "failed installer changed mol-status target"
+cmp -s "$T5/.beads/formulas/mol-feature.formula.json" "$ROOT/invalid-formula.before" \
+  && ok "failed installer preserves formula content" || bad "failed installer changed formula content"
+cmp -s "$T5/.claude/settings.json" "$ROOT/invalid-settings.before" \
+  && ok "failed installer preserves settings byte-for-byte" \
+  || bad "failed installer changed settings before aborting"
 
-# --- B3: a FRESH install (no deployed symlinks) keeps current default behavior ---
-T4="$(mktemp -d)"; trap 'rm -rf "$T1" "${T2:-}" "${T3:-}" "${T4:-}"' EXIT
-HOME="$T4" ESCAPEMENT_PIN_REMOTE="$REMOTE" ESCAPEMENT_PIN_REF="main" \
-  bash "$REPO/INSTALL.sh" --update >"$T4/update_fresh.log" 2>&1 \
-  || bad "B3: fresh --update exited non-zero"
-if [ -d "$T4/.claude/.escapement-pinned/.git" ]; then
-  ok "B3: fresh --update (no symlinks to resolve) uses the default .escapement-pinned"
+# Unknown auxiliary symlinks are user-owned. A valid plugin does not authorize
+# clobbering them, and the whole plan must validate before the first link moves.
+T6="$ROOT/unknown-bin"
+setup_claude_home "$T6"
+mkdir -p "$T6/personal-bin"
+ln -s "$T6/personal-bin" "$T6/.claude/bin"
+if HOME="$T6" PATH="$BIN:$PATH" bash "$REPO/INSTALL.sh" --dev >"$T6/out.log" 2>&1
+then
+  cat "$T6/out.log"
+  bad "installer should refuse an unrelated claude/bin symlink"
 else
-  bad "B3: fresh --update did not create the default pinned checkout"
+  ok "installer refuses unrelated claude/bin symlink"
 fi
+[ "$(readlink "$T6/.claude/bin" 2>/dev/null)" = "$T6/personal-bin" ] \
+  && ok "unrelated claude/bin symlink preserved" \
+  || bad "unrelated claude/bin symlink was clobbered"
+
+T7="$ROOT/unknown-final-plan-entry"
+setup_claude_home "$T7"
+mkdir -p "$T7/.beads" "$T7/personal"
+printf '#!/bin/sh\n' > "$T7/personal/mol-status.sh"
+ln -s "$T7/personal/mol-status.sh" "$T7/.beads/mol-status.sh"
+if HOME="$T7" PATH="$BIN:$PATH" bash "$REPO/INSTALL.sh" --dev >"$T7/out.log" 2>&1
+then
+  cat "$T7/out.log"
+  bad "installer should refuse unrelated final-plan Beads status symlink"
+else
+  ok "installer refuses unrelated final-plan Beads status symlink"
+fi
+[ "$(readlink "$T7/.beads/mol-status.sh" 2>/dev/null)" = "$T7/personal/mol-status.sh" ] \
+  && ok "unrelated final-plan Beads status symlink preserved" \
+  || bad "unrelated final-plan Beads status symlink was clobbered"
+[ ! -e "$T7/.claude/bin" ] && [ ! -e "$T7/.beads/formulas" ] \
+  && ok "late auxiliary conflict prevents earlier plan mutation" \
+  || bad "installer partially mutated plan before finding final conflict"
+
+# A missing user-scope plugin must fail before compatibility directories are
+# created. Registry/settings are pre-existing authority inputs; everything else
+# below is observable mutation.
+T8="$ROOT/clean-invalid"
+mkdir -p "$T8/.claude/plugins"
+cat > "$T8/.claude/settings.json" <<'JSON'
+{"model":"opus","enabledPlugins":{"escapement@escapement":false}}
+JSON
+cat > "$T8/.claude/plugins/installed_plugins.json" <<JSON
+{"version":2,"plugins":{"escapement@escapement":[
+  {"scope":"project","installPath":"$BAD_CACHE","version":"wrong-scope"}
+]}}
+JSON
+find "$T8" -print | sort > "$ROOT/t8.before"
+if HOME="$T8" PATH="$BIN:$PATH" bash "$REPO/INSTALL.sh" --dev >"$T8/out.log" 2>&1
+then
+  cat "$T8/out.log"
+  bad "clean invalid install should fail without user-scope authority"
+else
+  ok "clean invalid install fails closed"
+fi
+[ ! -e "$T8/.claude/harness" ] && [ ! -e "$T8/.beads" ] && [ ! -e "$T8/.claude/bin" ] \
+  && ok "authority failure creates no compatibility state" \
+  || bad "authority failure created compatibility directories or links"
+find "$T8" ! -name out.log -print | sort > "$ROOT/t8.after"
+cmp -s "$ROOT/t8.after" "$ROOT/t8.before" \
+  && ok "authority failure leaves complete home tree unchanged" \
+  || bad "authority failure added pin, backup, wrapper, or deployment residue"
 
 echo
-if [ "$fail" -eq 0 ]; then echo "PASS — installer deploys from a pinned checkout (and --dev opts back to live tree); --update tracks the live pin dir"; exit 0
-else echo "FAIL — see above"; exit 1; fi
+if [ "$fail" -eq 0 ]; then
+  echo "PASS: legacy installer cannot roll back Claude plugin cutover"
+  exit 0
+fi
+echo "FAIL: see above"
+exit 1

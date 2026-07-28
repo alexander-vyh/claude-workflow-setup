@@ -8,17 +8,40 @@
 # escape path, not silently strand it. The fragile impl this rejects: refreshing the
 # pinned checkout while ignoring its dirty working tree.
 #
-# Offline + isolated: throwaway HOME, local repo as the pin remote. No real ~/.claude.
+# Offline + isolated: throwaway HOME, installed-plugin fixture, stub Claude CLI,
+# and local repo as the pin remote. No real ~/.claude.
 # Run: bash tests/test_install_pinned_drift.sh
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BASE_REF="$(git -C "$REPO" rev-parse HEAD)"
 fail=0
 ok()  { printf '  ok: %s\n' "$*"; }
 bad() { printf '  FAIL: %s\n' "$*"; fail=1; }
 
 T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
-ENV=(HOME="$T" ESCAPEMENT_PIN_REMOTE="$REPO" ESCAPEMENT_PIN_REF="main")
+BIN="$T/stub-bin"
+CACHE="$T/.claude/plugins/cache/escapement/escapement/sha-current"
+mkdir -p "$BIN" "$CACHE" "$T/.claude/plugins"
+cp -R "$REPO/plugins/escapement-claude/." "$CACHE/"
+cat > "$T/.claude/settings.json" <<JSON
+{
+  "model": "opus[1m]",
+  "enabledPlugins": { "escapement@escapement": true },
+  "hooks": {}
+}
+JSON
+cat > "$T/.claude/plugins/installed_plugins.json" <<JSON
+{ "version": 2, "plugins": { "escapement@escapement": [
+  { "scope": "user", "installPath": "$CACHE", "version": "sha-current" }
+] } }
+JSON
+cat > "$BIN/claude" <<'STUB'
+#!/usr/bin/env bash
+exit 0
+STUB
+chmod +x "$BIN/claude"
+ENV=(HOME="$T" PATH="$BIN:$PATH" ESCAPEMENT_PIN_REMOTE="$REPO" ESCAPEMENT_PIN_REF="$BASE_REF")
 
 # Initial install creates the pinned checkout.
 env "${ENV[@]}" bash "$REPO/INSTALL.sh" >"$T/install.log" 2>&1 \

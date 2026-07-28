@@ -30,6 +30,14 @@ jobs:
         # collection gaps by reporting the skip count explicitly. `tests` carries
         # the agent-surfaces parity suite (test_agent_surfaces.py).
         run: python -m pytest claude/hooks/tests harness/tests tests -q -rs
+      - name: Run Claude install and cutover regressions
+        # These exercise real Bash entrypoints against isolated homes. Keeping
+        # them outside pytest makes their CLI output useful while this explicit
+        # step prevents a manual-only oracle from silently going stale.
+        run: |
+          bash tests/test_plugin_update.sh
+          bash tests/test_install_pinned.sh
+          bash tests/test_install_pinned_drift.sh
       - name: Agent-surfaces drift gate
         # Fail closed if the rendered host surfaces (CLAUDE.md / AGENTS.md /
         # .codex/hooks.json / .agents/**) have drifted from agent-surfaces/manifest.json.

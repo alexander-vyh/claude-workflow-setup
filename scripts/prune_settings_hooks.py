@@ -7,10 +7,10 @@ Code does not dedupe them, so 38 gates fired **twice** per matching tool call.
 
 The plugin is now the sole owner. This prunes the settings-side duplicates.
 
-  - SURGICAL: removes only hooks whose script basename the plugin registers.
-    The user's own hooks (never shipped by escapement) are preserved verbatim.
-  - BASENAME-MATCHED: the same script appears as ``~/.claude/hooks/x.py`` in
-    settings and ``"${CLAUDE_PLUGIN_ROOT}/hooks/x.py"`` in the plugin.
+  - SURGICAL: removes only hooks under the legacy global ``~/.claude`` paths
+    whose script basename the plugin registers.
+  - PATH-AWARE: an unrelated ``/opt/personal/hooks/x.py`` survives even when
+    the plugin ships a same-named ``x.py``.
   - MIGRATION-AWARE: when the plugin owns ``escapement_session_context.py``, the
     obsolete exact ``bd prime`` lifecycle command is removed as its predecessor.
   - SCOPED to the ``hooks`` block: every other settings key is preserved.
@@ -27,6 +27,7 @@ import datetime
 import json
 import os
 import re
+import shlex
 import sys
 
 _SCRIPT_RE = re.compile(r"([\w.-]+\.(?:py|sh))")
@@ -38,6 +39,40 @@ _SESSION_CONTEXT_EVENTS = {"SessionStart", "PreCompact"}
 def _script_of(command: str) -> str | None:
     match = _SCRIPT_RE.search(command or "")
     return match.group(1) if match else None
+
+
+def _legacy_script_of(command: str) -> str | None:
+    """Return a script only when its token is in a legacy global Claude path."""
+    try:
+        tokens = shlex.split(command or "")
+    except ValueError:
+        return None
+    prefixes = (
+        "~/.claude/hooks/",
+        "$HOME/.claude/hooks/",
+        "${HOME}/.claude/hooks/",
+    )
+    bootstrap_paths = {
+        "~/.claude/project-bootstrap.sh",
+        "$HOME/.claude/project-bootstrap.sh",
+        "${HOME}/.claude/project-bootstrap.sh",
+    }
+    expanded_hooks = os.path.normpath(os.path.expanduser("~/.claude/hooks"))
+    expanded_bootstrap = os.path.normpath(
+        os.path.expanduser("~/.claude/project-bootstrap.sh")
+    )
+    for token in tokens:
+        if token in bootstrap_paths:
+            return "project-bootstrap.sh"
+        for prefix in prefixes:
+            if token.startswith(prefix) and "/" not in token[len(prefix):]:
+                return _script_of(token)
+        normalized = os.path.normpath(token)
+        if os.path.isabs(normalized) and os.path.dirname(normalized) == expanded_hooks:
+            return _script_of(token)
+        if os.path.isabs(normalized) and normalized == expanded_bootstrap:
+            return "project-bootstrap.sh"
+    return None
 
 
 def plugin_owned_scripts(plugin_hooks: dict) -> set[str]:
@@ -71,7 +106,7 @@ def prune_hooks(settings: dict, owned: set[str]) -> dict:
             kept = []
             for hook in group.get("hooks", []):
                 command = hook.get("command", "")
-                plugin_owned = _script_of(command) in owned
+                plugin_owned = _legacy_script_of(command) in owned
                 legacy_prime = (
                     remove_legacy_prime
                     and event in _SESSION_CONTEXT_EVENTS
