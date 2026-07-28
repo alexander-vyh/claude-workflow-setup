@@ -59,6 +59,7 @@ import importlib.util
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -489,14 +490,16 @@ def test_documented_bd_global_option_forms_are_denied(
         token.format(repo=managed)
         for token in global_args_template
     )
-    probe = subprocess.run(
-        ["bd", *global_args, "--help"],
-        cwd=outside,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    assert probe.returncode == 0, probe.stderr
+    bd_executable = shutil.which("bd")
+    if bd_executable is not None:
+        probe = subprocess.run(
+            [bd_executable, *global_args, "--help"],
+            cwd=outside,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert probe.returncode == 0, probe.stderr
 
     _, parsed, raw = _run(
         shlex.join(
@@ -582,15 +585,18 @@ def test_terminal_or_invalid_global_options_do_not_gate_inert_suffix(
 
     assert exit_code == 0
     assert parsed == {}, raw
-    executed = subprocess.run(
-        shlex.split(command),
-        cwd=managed,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if command.startswith("git "):
-        assert executed.returncode == 0
+    command_tokens = shlex.split(command)
+    executable = shutil.which(command_tokens[0])
+    if executable is not None:
+        executed = subprocess.run(
+            [executable, *command_tokens[1:]],
+            cwd=managed,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if command.startswith("git "):
+            assert executed.returncode == 0, executed.stderr
     after = subprocess.run(
         ["git", "-C", str(managed), "worktree", "list", "--porcelain"],
         check=True,
