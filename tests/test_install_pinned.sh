@@ -20,6 +20,10 @@ fail=0
 ok()  { printf '  ok: %s\n' "$*"; }
 bad() { printf '  FAIL: %s\n' "$*"; fail=1; }
 
+[ -x "$REPO/INSTALL.sh" ] \
+  && ok "documented installer entrypoint is executable" \
+  || bad "INSTALL.sh is not executable despite documented ./INSTALL.sh invocation"
+
 ROOT="$(mktemp -d)"; trap 'rm -rf "$ROOT"' EXIT
 BIN="$ROOT/bin"
 mkdir -p "$BIN"
