@@ -37,6 +37,19 @@ def _success_record(output: str) -> dict[str, str]:
     }
 
 
+def _worktree_stanzas(porcelain: str) -> list[dict[str, str]]:
+    stanzas = []
+    for block in porcelain.strip().split("\n\n"):
+        if not block:
+            continue
+        stanza = {}
+        for line in block.splitlines():
+            key, separator, value = line.partition(" ")
+            stanza[key] = value if separator else ""
+        stanzas.append(stanza)
+    return stanzas
+
+
 def _fake_bd(tmp_path: Path) -> Path:
     fake = tmp_path / "bd-bin"
     fake.mkdir()
@@ -127,6 +140,19 @@ def _beads_env(
     return env
 
 
+def _beads_without_bd_env(tmp_path: Path, scenario) -> dict[str, str]:
+    """Require Beads while exposing Git and Python but no `bd` executable."""
+    (scenario.primary / ".beads").mkdir(exist_ok=True)
+    available = tmp_path / "without-bd"
+    available.mkdir()
+    for executable in ("git", "python3"):
+        resolved = shutil.which(executable)
+        assert resolved, f"test host requires {executable}"
+        (available / executable).symlink_to(resolved)
+    assert shutil.which("bd", path=str(available)) is None
+    return {"PATH": str(available)}
+
+
 def test_success_reports_repo_branch_sha_source_kind_and_beads_status(
     tmp_path: Path,
 ) -> None:
@@ -158,9 +184,12 @@ def test_success_reports_repo_branch_sha_source_kind_and_beads_status(
         == "feature/beads-ok"
     )
     listing = git(scenario.primary, "worktree", "list", "--porcelain").stdout
-    assert f"worktree {target.resolve()}" in listing
-    assert f"HEAD {scenario.remote_head_sha}" in listing
-    assert "branch refs/heads/feature/beads-ok" in listing
+    assert any(
+        stanza.get("worktree") == str(target.resolve())
+        and stanza.get("HEAD") == scenario.remote_head_sha
+        and stanza.get("branch") == "refs/heads/feature/beads-ok"
+        for stanza in _worktree_stanzas(listing)
+    )
 
 
 def test_created_common_directory_matches_requested_repository(tmp_path: Path) -> None:
@@ -204,6 +233,36 @@ def test_beads_context_identity_matches_primary(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     assert target.exists()
     assert "beads" in result.stdout.lower()
+
+
+def test_beads_required_but_bd_absent_fails_closed(tmp_path: Path) -> None:
+    scenario = make_remote_scenario(tmp_path)
+    target = scenario.primary / ".worktrees" / "no-bd"
+    branch = "feature/no-bd"
+    result = run_cli(
+        scenario.primary,
+        "create",
+        "--repo",
+        str(scenario.primary),
+        "--name",
+        "no-bd",
+        "--branch",
+        branch,
+        env=_beads_without_bd_env(tmp_path, scenario),
+    )
+    assert result.returncode != 0
+    assert not target.exists()
+    assert (
+        git(
+            scenario.primary,
+            "show-ref",
+            "--verify",
+            "--quiet",
+            f"refs/heads/{branch}",
+            check=False,
+        ).returncode
+        != 0
+    )
 
 
 def test_mismatched_beads_context_rolls_back_target_and_branch(tmp_path: Path) -> None:

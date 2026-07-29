@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import hashlib
 import shutil
 import subprocess
 import sys
@@ -67,7 +68,7 @@ def _reason(output: dict) -> str:
     return detail["permissionDecisionReason"]
 
 
-def _git_state(repo: Path) -> tuple[str, str]:
+def _git_state(repo: Path) -> tuple[str, str, tuple[tuple[str, str, str], ...]]:
     refs = subprocess.run(
         ["git", "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads"],
         cwd=repo,
@@ -82,7 +83,28 @@ def _git_state(repo: Path) -> tuple[str, str]:
         capture_output=True,
         check=True,
     ).stdout
-    return refs, worktrees
+    filesystem = tuple(
+        sorted(
+            (
+                str(path.relative_to(repo)),
+                "symlink"
+                if path.is_symlink()
+                else "directory"
+                if path.is_dir()
+                else "file",
+                hashlib.sha256(
+                    path.readlink().as_posix().encode()
+                    if path.is_symlink()
+                    else path.read_bytes()
+                    if path.is_file()
+                    else b""
+                ).hexdigest(),
+            )
+            for path in repo.rglob("*")
+            if ".git" not in path.parts
+        )
+    )
+    return refs, worktrees, filesystem
 
 
 def test_git_worktree_add_is_redirected_in_plain_git_repo(tmp_path: Path) -> None:

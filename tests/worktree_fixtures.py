@@ -75,7 +75,9 @@ def snapshot_primary(repo: Path) -> PrimarySnapshot:
                     ).hexdigest(),
                 )
                 for path in repo.rglob("*")
-                if ".git" not in path.parts and (path.is_file() or path.is_symlink())
+                if ".git" not in path.parts
+                and path.relative_to(repo).parts[0] != ".worktrees"
+                and (path.is_file() or path.is_symlink())
             )
         ),
     )

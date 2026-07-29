@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import importlib.util
+import json
 from pathlib import Path
 
 
@@ -59,12 +61,20 @@ def test_renderer_targets_contain_executable_and_importable_module_for_both_plug
         assert (plugin / "bin" / "escapement_worktree.py").is_file()
 
 
-def test_renderer_and_manifest_own_cli_and_module_delivery() -> None:
-    renderer = (ROOT / "tools" / "render_agent_surfaces.py").read_text(encoding="utf-8")
-    manifest = (ROOT / "agent-surfaces" / "manifest.json").read_text(encoding="utf-8")
-    for artifact in ("bin/escapement-worktree", "bin/escapement_worktree.py"):
-        assert artifact in renderer, f"renderer must own {artifact} delivery"
-        assert artifact in manifest, f"surface manifest must declare {artifact}"
+def test_renderer_configures_cli_and_module_delivery_for_both_plugins() -> None:
+    renderer_path = ROOT / "tools" / "render_agent_surfaces.py"
+    spec = importlib.util.spec_from_file_location("worktree_renderer", renderer_path)
+    assert spec and spec.loader
+    renderer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(renderer)
+    manifest = json.loads(
+        (ROOT / "agent-surfaces" / "manifest.json").read_text(encoding="utf-8")
+    )
+    targets = renderer.rendered_targets(ROOT, manifest)
+    for artifact in ("escapement-worktree", "escapement_worktree.py"):
+        canonical = (ROOT / "bin" / artifact).read_text(encoding="utf-8")
+        for plugin in (renderer.CODEX_PLUGIN_ROOT, renderer.CLAUDE_PLUGIN_ROOT):
+            assert targets[ROOT / plugin / "bin" / artifact] == canonical
 
 
 def test_plugin_guard_copies_are_byte_equal_to_canonical_guard() -> None:
