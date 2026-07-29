@@ -3,10 +3,38 @@
 from __future__ import annotations
 
 import os
+import json
+import re
 import shutil
+import subprocess
+import time
 from pathlib import Path
 
-from worktree_fixtures import git, make_remote_scenario, rev, run_cli
+import pytest
+
+from worktree_fixtures import CLI, git, make_remote_scenario, rev, run_cli
+
+
+def _success_record(output: str) -> dict[str, str]:
+    """Accept a concise JSON record or documented labeled text, not loose words."""
+    try:
+        raw = json.loads(output)
+    except json.JSONDecodeError:
+        raw = {
+            key: value.strip('"')
+            for key, value in re.findall(r"([a-z_]+)=([^\s]+)", output)
+        }
+    aliases = {
+        "repository": ("repository", "repo"),
+        "branch": ("branch",),
+        "source": ("source", "sha"),
+        "source_kind": ("source_kind", "source-kind"),
+        "beads": ("beads", "beads_status"),
+    }
+    return {
+        expected: str(next(raw[name] for name in names if name in raw))
+        for expected, names in aliases.items()
+    }
 
 
 def _fake_bd(tmp_path: Path) -> Path:
@@ -42,10 +70,21 @@ if replacement and cwd == replacement:
     (Path(replacement) / "preserve.txt").write_text("unrelated residue\\n", encoding="utf-8")
 if os.environ.get("MOVE_BRANCH") and cwd == os.environ.get("TARGET_CWD"):
     subprocess.run([os.environ["REAL_GIT"], "-C", os.environ["PRIMARY_CWD"], "update-ref", os.environ["MOVE_BRANCH"], os.environ["MOVE_SHA"]], check=True)
+mode = os.environ.get("BROKEN_BD_MODE") if cwd == os.environ.get("BROKEN_BD_CWD") else ""
+if mode == "fail":
+    raise SystemExit(88)
+if mode == "malformed":
+    print("{not-json")
+    raise SystemExit(0)
 identity = os.environ["BD_IDENTITY"]
 if os.environ.get("MISMATCH_CWD") == cwd:
     identity = "mismatched-identity"
-print(json.dumps({"project_id": identity, "database": identity, "beads_dir": identity, "repo_root": identity}))
+context = {"project_id": identity, "database": identity, "beads_dir": identity, "repo_root": identity}
+if mode == "partial":
+    context["database"] = "different-database"
+if mode == "missing":
+    context.pop("repo_root")
+print(json.dumps(context))
 """,
         encoding="utf-8",
     )
@@ -60,6 +99,7 @@ def _beads_env(
     mismatch: Path | None = None,
     move: tuple[str, str, Path] | None = None,
     replace: Path | None = None,
+    broken: tuple[str, Path] | None = None,
 ) -> dict[str, str]:
     (scenario.primary / ".beads").mkdir(exist_ok=True)
     env = {
@@ -81,6 +121,9 @@ def _beads_env(
         )
     if replace is not None:
         env["REPLACE_TARGET"] = str(replace)
+    if broken is not None:
+        mode, target = broken
+        env.update({"BROKEN_BD_MODE": mode, "BROKEN_BD_CWD": str(target)})
     return env
 
 
@@ -101,15 +144,23 @@ def test_success_reports_repo_branch_sha_source_kind_and_beads_status(
         env=_beads_env(tmp_path, scenario),
     )
     assert result.returncode == 0, result.stderr
-    for expected in (
-        str(scenario.primary),
-        "feature/beads-ok",
-        scenario.remote_head_sha,
-        "remote-default",
-        "beads",
-    ):
-        assert expected in result.stdout
+    record = _success_record(result.stdout)
+    assert record == {
+        "repository": str(scenario.primary),
+        "branch": "feature/beads-ok",
+        "source": scenario.remote_head_sha,
+        "source_kind": "remote-default",
+        "beads": "verified",
+    }
     assert rev(target) == scenario.remote_head_sha
+    assert (
+        git(target, "symbolic-ref", "--short", "HEAD").stdout.strip()
+        == "feature/beads-ok"
+    )
+    listing = git(scenario.primary, "worktree", "list", "--porcelain").stdout
+    assert f"worktree {target.resolve()}" in listing
+    assert f"HEAD {scenario.remote_head_sha}" in listing
+    assert "branch refs/heads/feature/beads-ok" in listing
 
 
 def test_created_common_directory_matches_requested_repository(tmp_path: Path) -> None:
@@ -184,6 +235,39 @@ def test_mismatched_beads_context_rolls_back_target_and_branch(tmp_path: Path) -
     )
 
 
+@pytest.mark.parametrize("mode", ["partial", "missing", "malformed", "fail"])
+def test_required_beads_evidence_fails_closed_for_incomplete_or_broken_context(
+    tmp_path: Path, mode: str
+) -> None:
+    scenario = make_remote_scenario(tmp_path)
+    target = scenario.primary / ".worktrees" / f"broken-{mode}"
+    branch = f"feature/broken-{mode}"
+    result = run_cli(
+        scenario.primary,
+        "create",
+        "--repo",
+        str(scenario.primary),
+        "--name",
+        f"broken-{mode}",
+        "--branch",
+        branch,
+        env=_beads_env(tmp_path, scenario, broken=(mode, target)),
+    )
+    assert result.returncode != 0
+    assert not target.exists()
+    assert (
+        git(
+            scenario.primary,
+            "show-ref",
+            "--verify",
+            "--quiet",
+            f"refs/heads/{branch}",
+            check=False,
+        ).returncode
+        != 0
+    )
+
+
 def test_branch_moved_during_failure_survives_guarded_rollback(tmp_path: Path) -> None:
     scenario = make_remote_scenario(tmp_path)
     moved = tmp_path / "moved-commit"
@@ -252,7 +336,7 @@ def _git_proxy(tmp_path: Path, mode: str) -> dict[str, str]:
     proxy = proxy_dir / "git"
     proxy.write_text(
         "#!/usr/bin/env python3\nimport os, subprocess, sys\nargs=sys.argv[1:]\n"
-        "if os.environ['PROXY_MODE'] == 'cleanup' and 'worktree' in args and 'remove' in args: raise SystemExit(43)\n"
+        "if os.environ['PROXY_MODE'] == 'cleanup' and (('worktree' in args and 'remove' in args) or ('update-ref' in args and '-d' in args)): raise SystemExit(43)\n"
         "r=subprocess.run([os.environ['REAL_GIT'], *args])\n"
         "if os.environ['PROXY_MODE'] == 'partial' and 'worktree' in args and 'add' in args: raise SystemExit(42)\nraise SystemExit(r.returncode)\n",
         encoding="utf-8",
@@ -315,4 +399,95 @@ def test_cleanup_failure_reports_exact_residue(tmp_path: Path) -> None:
     )
     assert result.returncode != 0
     assert str(target) in result.stderr
+    assert "refs/heads/feature/cleanup-fails" in result.stderr
     assert target.exists()
+    assert (
+        git(
+            scenario.primary,
+            "show-ref",
+            "--verify",
+            "--quiet",
+            "refs/heads/feature/cleanup-fails",
+            check=False,
+        ).returncode
+        == 0
+    )
+
+
+def test_repository_wide_transaction_lock_serializes_source_resolution(
+    tmp_path: Path,
+) -> None:
+    """Two independent branches cannot enter source resolution concurrently."""
+    assert CLI.is_file(), "the transaction executable is required for this probe"
+    scenario = make_remote_scenario(tmp_path)
+    proxy_dir = tmp_path / "locking-git"
+    proxy_dir.mkdir()
+    entered = tmp_path / "entered"
+    overlap = tmp_path / "overlap"
+    release = tmp_path / "release"
+    proxy = proxy_dir / "git"
+    proxy.write_text(
+        """#!/usr/bin/env python3
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+args = sys.argv[1:]
+entered = Path(os.environ["LOCK_ENTERED"])
+overlap = Path(os.environ["LOCK_OVERLAP"])
+release = Path(os.environ["LOCK_RELEASE"])
+if "ls-remote" in args and args[-1] == "HEAD":
+    if entered.exists():
+        overlap.write_text("concurrent source resolution\\n", encoding="utf-8")
+    else:
+        entered.write_text("first transaction entered\\n", encoding="utf-8")
+        while not release.exists():
+            time.sleep(0.01)
+        entered.unlink()
+result = subprocess.run([os.environ["REAL_GIT"], *args])
+raise SystemExit(result.returncode)
+""",
+        encoding="utf-8",
+    )
+    proxy.chmod(0o755)
+    env = {
+        **os.environ,
+        "PATH": f"{proxy_dir}{os.pathsep}{os.environ['PATH']}",
+        "REAL_GIT": shutil.which("git") or "git",
+        "LOCK_ENTERED": str(entered),
+        "LOCK_OVERLAP": str(overlap),
+        "LOCK_RELEASE": str(release),
+    }
+    command = [str(CLI), "create", "--repo", str(scenario.primary)]
+    first = subprocess.Popen(
+        [*command, "--name", "locked-one", "--branch", "feature/locked-one"],
+        cwd=scenario.primary,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    deadline = time.monotonic() + 10
+    while not entered.exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert entered.exists(), "first transaction never reached remote discovery"
+    second = subprocess.Popen(
+        [*command, "--name", "locked-two", "--branch", "feature/locked-two"],
+        cwd=scenario.primary,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    time.sleep(0.2)
+    assert not overlap.exists(), (
+        "separate transaction reached source resolution before lock release"
+    )
+    release.touch()
+    first_out, first_err = first.communicate(timeout=30)
+    second_out, second_err = second.communicate(timeout=30)
+    assert first.returncode == 0, first_err or first_out
+    assert second.returncode == 0, second_err or second_out
+    assert not overlap.exists()

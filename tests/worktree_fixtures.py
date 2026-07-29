@@ -7,6 +7,7 @@ HEAD, and Git's own object database are the oracle for every CLI assertion.
 from __future__ import annotations
 
 import os
+import hashlib
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,6 +21,16 @@ class GitScenario:
     remote_default_ref: str
     remote_head_sha: str
     stale_primary_sha: str
+
+
+@dataclass(frozen=True)
+class PrimarySnapshot:
+    head: str
+    branch: str
+    status: str
+    cached_diff: str
+    worktree_diff: str
+    files: tuple[tuple[str, str], ...]
 
 
 def git(cwd: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -43,6 +54,31 @@ def git(cwd: Path, *args: str, check: bool = True) -> subprocess.CompletedProces
 
 def rev(cwd: Path, ref: str = "HEAD") -> str:
     return git(cwd, "rev-parse", "--verify", f"{ref}^{{commit}}").stdout.strip()
+
+
+def snapshot_primary(repo: Path) -> PrimarySnapshot:
+    """Capture Git-observable user state that the transaction must not alter."""
+    return PrimarySnapshot(
+        head=rev(repo),
+        branch=git(repo, "symbolic-ref", "--quiet", "--short", "HEAD").stdout.strip(),
+        status=git(repo, "status", "--porcelain=v2", "--untracked-files=all").stdout,
+        cached_diff=git(repo, "diff", "--cached", "--binary").stdout,
+        worktree_diff=git(repo, "diff", "--binary").stdout,
+        files=tuple(
+            sorted(
+                (
+                    str(path.relative_to(repo)),
+                    hashlib.sha256(
+                        path.readlink().as_posix().encode()
+                        if path.is_symlink()
+                        else path.read_bytes()
+                    ).hexdigest(),
+                )
+                for path in repo.rglob("*")
+                if ".git" not in path.parts and (path.is_file() or path.is_symlink())
+            )
+        ),
+    )
 
 
 def make_remote_scenario(

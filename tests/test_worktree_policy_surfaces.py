@@ -59,6 +59,14 @@ def test_renderer_targets_contain_executable_and_importable_module_for_both_plug
         assert (plugin / "bin" / "escapement_worktree.py").is_file()
 
 
+def test_renderer_and_manifest_own_cli_and_module_delivery() -> None:
+    renderer = (ROOT / "tools" / "render_agent_surfaces.py").read_text(encoding="utf-8")
+    manifest = (ROOT / "agent-surfaces" / "manifest.json").read_text(encoding="utf-8")
+    for artifact in ("bin/escapement-worktree", "bin/escapement_worktree.py"):
+        assert artifact in renderer, f"renderer must own {artifact} delivery"
+        assert artifact in manifest, f"surface manifest must declare {artifact}"
+
+
 def test_plugin_guard_copies_are_byte_equal_to_canonical_guard() -> None:
     canonical = (ROOT / "claude" / "hooks" / "beads_worktree_guard.py").read_bytes()
     for plugin in (

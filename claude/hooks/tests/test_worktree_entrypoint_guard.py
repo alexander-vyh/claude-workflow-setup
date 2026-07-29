@@ -5,21 +5,17 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
-
-
 HOOK_PATH = Path(__file__).resolve().parents[1] / "beads_worktree_guard.py"
 
 
-def _load_guard():
-    spec = importlib.util.spec_from_file_location(
-        "worktree_entrypoint_guard", HOOK_PATH
-    )
+def _load_guard(path: Path = HOOK_PATH):
+    spec = importlib.util.spec_from_file_location("worktree_entrypoint_guard", path)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
@@ -40,8 +36,10 @@ def _repo(path: Path) -> Path:
     return path
 
 
-def run_hook(command: str, *, cwd: Path) -> tuple[int, dict]:
-    gate = _load_guard()
+def run_hook(
+    command: str, *, cwd: Path, hook_path: Path = HOOK_PATH
+) -> tuple[int, dict]:
+    gate = _load_guard(hook_path)
     payload = {
         "hook_event_name": "PreToolUse",
         "tool_name": "Bash",
@@ -69,12 +67,32 @@ def _reason(output: dict) -> str:
     return detail["permissionDecisionReason"]
 
 
+def _git_state(repo: Path) -> tuple[str, str]:
+    refs = subprocess.run(
+        ["git", "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads"],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout
+    worktrees = subprocess.run(
+        ["git", "worktree", "list", "--porcelain"],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout
+    return refs, worktrees
+
+
 def test_git_worktree_add_is_redirected_in_plain_git_repo(tmp_path: Path) -> None:
     repo = _repo(tmp_path / "plain")
+    before = _git_state(repo)
     _, output = run_hook("git worktree add .worktrees/x -b feature/x", cwd=repo)
     reason = _reason(output)
     assert "escapement-worktree create" in reason
     assert f"--repo {repo}" in reason
+    assert _git_state(repo) == before
 
 
 def test_bd_worktree_create_is_redirected_in_beads_repo(tmp_path: Path) -> None:
@@ -136,27 +154,17 @@ def test_cli_invocation_is_allowed(tmp_path: Path) -> None:
     assert code == 0 and output == {}
 
 
-def test_missing_bundled_cli_keeps_direct_creation_denied(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_missing_bundled_cli_keeps_direct_creation_denied(tmp_path: Path) -> None:
     repo = _repo(tmp_path / "repo")
-    gate = _load_guard()
-    monkeypatch.setattr(gate, "_find_bundled_cli", lambda: None, raising=False)
-    payload = {
-        "hook_event_name": "PreToolUse",
-        "tool_name": "Bash",
-        "tool_input": {"command": "git worktree add .worktrees/x -b feature/x"},
-        "cwd": str(repo),
-    }
-    captured = io.StringIO()
-    with (
-        patch("sys.stdin", io.StringIO(json.dumps(payload))),
-        patch("sys.stdout", captured),
-        patch.object(gate, "_record_signal", lambda *args, **kwargs: None),
-    ):
-        gate.main()
-    assert "deny" in captured.getvalue()
-    assert "installation" in captured.getvalue().lower()
+    broken_hooks = tmp_path / "broken-plugin" / "claude" / "hooks"
+    shutil.copytree(HOOK_PATH.parent, broken_hooks)
+    _, output = run_hook(
+        "git worktree add .worktrees/x -b feature/x",
+        cwd=repo,
+        hook_path=broken_hooks / HOOK_PATH.name,
+    )
+    reason = _reason(output)
+    assert "installation" in reason.lower()
 
 
 def test_non_creation_git_and_bd_commands_are_allowed(tmp_path: Path) -> None:

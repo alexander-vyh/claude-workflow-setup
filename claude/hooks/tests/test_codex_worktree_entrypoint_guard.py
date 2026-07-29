@@ -67,12 +67,32 @@ def _run_codex(command: str) -> tuple[int, dict]:
     ) if captured.getvalue().strip() else {}
 
 
+def _git_state(repo: Path) -> tuple[str, str]:
+    refs = subprocess.run(
+        ["git", "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads"],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout
+    worktrees = subprocess.run(
+        ["git", "worktree", "list", "--porcelain"],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout
+    return refs, worktrees
+
+
 def test_codex_real_direct_creation_is_denied(tmp_path: Path, monkeypatch) -> None:
     repo = _repo(tmp_path / "repo")
     monkeypatch.chdir(repo)
+    before = _git_state(repo)
     code, output = _run_codex("git worktree add .worktrees/x -b feature/x")
     assert code == 0
     assert output["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert _git_state(repo) == before
 
 
 def test_codex_quoted_text_is_allowed(tmp_path: Path, monkeypatch) -> None:
@@ -88,5 +108,5 @@ def test_codex_repair_names_existing_bundled_cli(tmp_path: Path, monkeypatch) ->
     monkeypatch.chdir(repo)
     _, output = _run_codex("bd worktree create .worktrees/x --branch feature/x")
     reason = output["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "escapement-worktree create" in reason
     assert PLUGIN_CLI.is_file(), "rendered Codex plugin must contain the bundled CLI"
+    assert f"{PLUGIN_CLI} create" in reason
