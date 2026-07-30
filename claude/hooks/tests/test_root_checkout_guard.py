@@ -82,6 +82,8 @@ def test_direct_creation_oracle_ignores_quoted_reference_text(
         "```bash\nprintf '%s' ready\nbd --directory /repo worktree create /tmp/task\n```",
         "<code>printf '%s' ready\ngit -C /repo worktree add /tmp/task</code>",
         "<code>printf '%s' ready\nbd --directory /repo worktree create /tmp/task</code>",
+        "```bash\nprintf '%s' ready\n\ngit -C /repo worktree add /tmp/task\n```",
+        "<code>printf '%s' ready;\nbd --directory /repo worktree create /tmp/task</code>",
     ),
 )
 def test_direct_creation_oracle_splits_fenced_and_html_newlines(
@@ -96,6 +98,7 @@ def test_direct_creation_oracle_splits_fenced_and_html_newlines(
         "```bash\nprintf '%s' \"git -C /repo\nworktree add /tmp/task\"\n```",
         "<code>printf '%s' \"bd --directory /repo\nworktree create /tmp/task\"</code>",
         "<code>rg \"git -C /repo\nworktree add /tmp/task\" docs</code>",
+        "<code>printf '%s' \"git -C /repo\n\nworktree add /tmp/task\"</code>",
     ),
 )
 def test_direct_creation_oracle_preserves_quoted_multiline_arguments(

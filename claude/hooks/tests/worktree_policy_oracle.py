@@ -19,7 +19,7 @@ _INLINE_CODE_RE = re.compile(r"(?<!`)`([^`\n]+)`(?!`)")
 _HTML_CODE_RE = re.compile(r"<code\b[^>]*>(.*?)</code>", re.DOTALL | re.IGNORECASE)
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _ENV_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
-_SHELL_SEPARATORS = frozenset({";", "&&", "||", "|", "&", "\n"})
+_SHELL_SEPARATOR_CHARS = frozenset(";&|\n")
 _GIT_VALUE_OPTIONS = frozenset(
     {"-C", "-c", "--git-dir", "--work-tree", "--git-common-dir", "--namespace"}
 )
@@ -75,7 +75,7 @@ def _shell_segments(command: str) -> list[list[str]]:
 
     segments: list[list[str]] = [[]]
     for token in tokens:
-        if token in _SHELL_SEPARATORS:
+        if token and all(char in _SHELL_SEPARATOR_CHARS for char in token):
             if segments[-1]:
                 segments.append([])
             continue
