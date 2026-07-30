@@ -9,7 +9,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-from legacy_codex_skill_fixture import historical_legacy_skill_bytes
+from legacy_codex_skill_fixture import (
+    historical_legacy_skill_bytes,
+    previous_codex_skill_bytes,
+)
 from scripts import migrate_codex_beads_skill
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -67,6 +70,54 @@ def test_historical_crlf_and_lf_skills_are_recognized_without_hash_override(
         backups = list(case_dir.glob("SKILL.md.backup-*"))
         assert len(backups) == 1
         assert backups[0].read_bytes() == legacy
+
+
+def test_immediately_previous_codex_skill_is_recognized_without_hash_override(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "safe.md"
+    target = tmp_path / "SKILL.md"
+    source.write_text("safe explicit-execution skill\n", encoding="utf-8")
+    previous = previous_codex_skill_bytes()
+    target.write_bytes(previous)
+
+    result = _run(source, target)
+
+    assert result.returncode == 0, result.stderr
+    assert target.read_bytes() == source.read_bytes()
+    backups = list(tmp_path.glob("SKILL.md.backup-*"))
+    assert len(backups) == 1
+    assert backups[0].read_bytes() == previous
+
+
+def test_customized_previous_codex_skill_is_refused(tmp_path: Path) -> None:
+    source = tmp_path / "safe.md"
+    target = tmp_path / "SKILL.md"
+    source.write_text("safe explicit-execution skill\n", encoding="utf-8")
+    customized = previous_codex_skill_bytes() + b"\nUser customization.\n"
+    target.write_bytes(customized)
+
+    result = _run(source, target)
+
+    assert result.returncode == 2
+    assert target.read_bytes() == customized
+    assert list(tmp_path.glob("SKILL.md.backup-*")) == []
+
+
+def test_one_byte_modified_previous_codex_skill_is_refused(tmp_path: Path) -> None:
+    source = tmp_path / "safe.md"
+    target = tmp_path / "SKILL.md"
+    source.write_text("safe explicit-execution skill\n", encoding="utf-8")
+    previous = previous_codex_skill_bytes()
+    modified = previous[:-1]
+    assert len(previous) - len(modified) == 1
+    target.write_bytes(modified)
+
+    result = _run(source, target)
+
+    assert result.returncode == 2
+    assert target.read_bytes() == modified
+    assert list(tmp_path.glob("SKILL.md.backup-*")) == []
 
 
 def test_customized_historical_skill_is_refused(tmp_path: Path) -> None:
