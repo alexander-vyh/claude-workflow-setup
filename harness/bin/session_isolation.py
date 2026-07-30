@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Per-session isolation: detect concurrent sessions sharing one non-isolated
-checkout, and produce the steer to `bd worktree create` (bead e9v.4 / Move 3).
+checkout, and produce the `escapement-worktree create` steer (e9v.4 / Move 3).
 
 The continuation-harness keys thread STATE per session, but `verify` runs the
 contract command against the SHARED WORKING TREE. When two live sessions share
@@ -28,6 +28,7 @@ from __future__ import annotations
 import datetime as _dt
 import json
 import pathlib
+import shlex
 import subprocess
 from typing import Callable, Optional
 
@@ -220,12 +221,17 @@ def build_isolation_steer(
     n = len(peers)
     noun, verb = ("session", "shares") if n == 1 else ("sessions", "share")
     where = "a shared linked worktree" if is_linked_worktree else "the main checkout"
+    command = (
+        "python3 -B <injected-bundled-cli-path> create "
+        f"--repo {shlex.quote(worktree_root)} --name <task> --branch <branch>"
+    )
     return (
         f" ⚠ ISOLATION: {n} other live agent {noun} {verb} this checkout "
         f"({worktree_root} — {where}). A red verify here may reflect THEIR in-flight "
         "edits, not yours — one session's red must not gate another's finish. If your "
         "own change is complete, isolate and verify it on its own: run "
-        "`bd worktree create <name>`, move your work there, re-run "
+        f"the session-injected `escapement-worktree create` command (`{command}`), "
+        "move your work there, re-run "
         "`~/.claude/harness/bin/verify` in the worktree, and file+attribute any "
         "shared-boundary defect you did not cause as a bead."
     )

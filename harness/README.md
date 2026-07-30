@@ -69,7 +69,7 @@ non-isolated checkout, session B's verify picks up session A's in-flight
 breakage — so B's red is actually A's. The 2026-06-17 root-cause (UDE-7 /
 BLOCK-5) concluded the fix is **isolation, not result-state gating**: a session's
 finishing boundary must reflect only its own work, and the repo already mandates
-`bd worktree create` (CLAUDE.md).
+the session-injected `escapement-worktree create` transaction (CLAUDE.md).
 
 `session_isolation.py` implements *detect → steer* (state-only, agent-asserts
 nothing):
@@ -87,11 +87,20 @@ nothing):
   SessionStart, and appended to the `no_completion_or_resumption_proof` Stop
   block (the BLOCK-5 red-boundary case). A solo session is never nagged.
 
-The steer is advisory — like the other Stop-block messages, the mechanical guard
-is the *detection* (unit-tested with positive/negative/staleness controls in
-`tests/test_session_isolation.py`); the de-collision itself happens when the
-agent runs `bd worktree create`. Ultimate proof is observational (does the
-cross-session red-boundary deadlock stop recurring), named not hidden.
+The steer is advisory — like the other Stop-block messages, the mechanical
+guard is the *detection* (unit-tested with positive/negative/staleness controls
+in `tests/test_session_isolation.py`); the de-collision itself happens when the
+agent runs its concrete bundled command:
+
+```bash
+python3 -B <injected-bundled-cli-path> create \
+  --repo <colliding-checkout> \
+  --name <task> \
+  --branch <branch>
+```
+
+Ultimate proof is observational (does the cross-session red-boundary deadlock
+stop recurring), named not hidden.
 
 **Known limits (named, not hidden — tracked as follow-up beads):**
 

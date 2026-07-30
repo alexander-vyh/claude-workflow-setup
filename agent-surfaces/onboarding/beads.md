@@ -8,8 +8,11 @@ Issues live in the local Dolt database under `.beads`; `.beads/issues.jsonl` is
 a passive export and must not be treated as the wire protocol. Use `bd ready`,
 `bd show <id>`, `bd update <id> --claim`, and `bd close <id>` for work state.
 
-Use `bd worktree create` instead of `git worktree add` in this repo so linked
-worktrees share the correct beads database.
+Escapement owns worktree creation policy. Use the concrete bundled
+`escapement-worktree create` command injected into session context so the
+source commit, target repository, isolation, and optional Beads context are
+verified together. Beads remains task state and is checked after native Git
+creation when present.
 
 Do not use TodoWrite, TaskCreate, or markdown TODO lists for project work
 tracking. If follow-up work is discovered, create or update a bead.

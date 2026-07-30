@@ -9,6 +9,8 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -17,6 +19,7 @@ import pytest
 
 
 _HOOK_PATH = Path(__file__).resolve().parents[1] / "root_checkout_guard.py"
+_WORKTREE_CLI = Path(__file__).resolve().parents[3] / "bin" / "escapement-worktree"
 if not _HOOK_PATH.exists():
     pytest.fail(f"root_checkout_guard.py not found at {_HOOK_PATH}")
 
@@ -92,6 +95,35 @@ def _make_linked_worktree(tmp_path: Path) -> tuple[Path, Path]:
     return main, worktree
 
 
+def _run_packaged_guard(
+    tmp_path: Path,
+    hook_parts: tuple[str, ...],
+    payload: dict,
+    *,
+    install_cli: bool,
+) -> tuple[int, dict, str, Path]:
+    plugin = tmp_path / "plugin"
+    hook_dir = plugin.joinpath(*hook_parts)
+    hook_dir.mkdir(parents=True)
+    packaged_hook = hook_dir / _HOOK_PATH.name
+    shutil.copyfile(_HOOK_PATH, packaged_hook)
+    shutil.copyfile(_HOOK_PATH.parent / "_worktree_cli.py", hook_dir / "_worktree_cli.py")
+    cli = plugin / "bin" / "escapement-worktree"
+    if install_cli:
+        cli.parent.mkdir()
+        shutil.copyfile(_WORKTREE_CLI, cli)
+
+    result = subprocess.run(
+        [sys.executable, str(packaged_hook)],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    raw = result.stdout.strip()
+    return result.returncode, json.loads(raw) if raw else {}, raw, cli
+
+
 def test_write_to_primary_checkout_file_is_denied(tmp_path):
     repo = _make_primary_beads_repo(tmp_path)
 
@@ -101,8 +133,60 @@ def test_write_to_primary_checkout_file_is_denied(tmp_path):
     assert _decision(output) == "deny", raw
     reason = _reason(output)
     assert "primary checkout" in reason
-    assert "bd worktree create" in reason
+    assert f"python3 -B {_WORKTREE_CLI} create" in reason
+    assert f"--repo {repo}" in reason
+    assert "--name <task>" in reason
+    assert "--branch <branch>" in reason
     assert "# root-checkout-waiver:" in reason
+
+
+@pytest.mark.parametrize(
+    "hook_parts",
+    (("claude", "hooks"), ("hooks",)),
+    ids=("nested-plugin", "flat-plugin"),
+)
+def test_packaged_root_denial_uses_its_own_bundled_cli(tmp_path, hook_parts):
+    repo = _make_primary_beads_repo(tmp_path)
+
+    code, output, raw, cli = _run_packaged_guard(
+        tmp_path,
+        hook_parts,
+        _write_payload(repo / "src" / "app.py", cwd=repo),
+        install_cli=True,
+    )
+
+    assert code == 0
+    assert _decision(output) == "deny", raw
+    reason = _reason(output)
+    assert f"python3 -B {cli} create" in reason
+    assert f"--repo {repo}" in reason
+    assert str(_WORKTREE_CLI) not in reason
+
+
+@pytest.mark.parametrize(
+    "hook_parts",
+    (("claude", "hooks"), ("hooks",)),
+    ids=("nested-plugin", "flat-plugin"),
+)
+def test_missing_bundled_cli_keeps_root_denial_and_reports_broken_installation(
+    tmp_path,
+    hook_parts,
+):
+    repo = _make_primary_beads_repo(tmp_path)
+
+    code, output, raw, _cli = _run_packaged_guard(
+        tmp_path,
+        hook_parts,
+        _write_payload(repo / "src" / "app.py", cwd=repo),
+        install_cli=False,
+    )
+
+    assert code == 0
+    assert _decision(output) == "deny", raw
+    reason = _reason(output)
+    assert "broken Escapement installation" in reason
+    assert "bd worktree" not in reason
+    assert "git worktree" not in reason
 
 
 @pytest.mark.parametrize("tool_name", ["Write", "Edit", "NotebookEdit"])
