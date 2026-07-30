@@ -1,4 +1,4 @@
-"""Unit tests for ~/.claude/hooks/tdd-gate.py.
+"""Unit tests for the repository-owned ``claude/hooks/tdd-gate.py``.
 
 Tests:
 - is_test_file: correctly classifies test file paths
@@ -6,7 +6,7 @@ Tests:
 - main: exemption fast-paths, git/test-dir guards, TDD nudge logic
 
 Run from anywhere with:
-  python -m pytest ~/.claude/hooks/tests/test_tdd_gate.py -v
+  python -m pytest claude/hooks/tests/test_tdd_gate.py -v
 """
 
 import importlib
@@ -16,11 +16,7 @@ import sys
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
-
-_hooks_dir = Path.home() / ".claude" / "hooks"
-if not _hooks_dir.exists():
-    pytest.skip("~/.claude/hooks/ not found", allow_module_level=True)
+_hooks_dir = Path(__file__).resolve().parents[1]
 
 if str(_hooks_dir) not in sys.path:
     sys.path.insert(0, str(_hooks_dir))

@@ -11,10 +11,9 @@ contradictory double-block, which is exactly what every hard-deny hook in this
 repo was converted away from.
 
 Run from anywhere with:
-  python -m pytest ~/.claude/hooks/tests/test_discovery_gate.py -v
+  python -m pytest claude/hooks/tests/test_discovery_gate.py -v
 """
 
-import importlib
 import io
 import json
 import sys
@@ -22,11 +21,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
-
-_hooks_dir = Path.home() / ".claude" / "hooks"
-if not _hooks_dir.exists():
-    pytest.skip("~/.claude/hooks/ not found", allow_module_level=True)
+_hooks_dir = Path(__file__).resolve().parents[1]
 
 if str(_hooks_dir) not in sys.path:
     sys.path.insert(0, str(_hooks_dir))
@@ -37,8 +32,6 @@ def _load_module():
     import importlib.util
 
     path = _hooks_dir / "discovery-gate.py"
-    if not path.exists():
-        pytest.skip("discovery-gate.py not found in ~/.claude/hooks/")
     spec = importlib.util.spec_from_file_location("discovery_gate_hook", path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
