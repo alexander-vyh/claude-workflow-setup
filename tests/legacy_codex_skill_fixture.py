@@ -7,6 +7,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CURRENT_CLAUDE_SKILL = ROOT / "claude" / "skills" / "beads-execution" / "SKILL.md"
+CURRENT_CODEX_SKILL = ROOT / ".agents" / "skills" / "beads-execution" / "SKILL.md"
+PREVIOUS_CODEX_SKILL_SHA256 = (
+    "d175cacf8aff932af013d0d410a2e8324a505c35b7d7fd5301c34d78c0d22bcc"
+)
 HISTORICAL_CRLF_SHA256 = (
     "2096820ff0d7a712aa4b58ca2590979f80f2d0fd168a23bda788a024f47792e0"
 )
@@ -118,3 +122,19 @@ def historical_legacy_skill_bytes(*, crlf: bool = True) -> bytes:
     crlf_bytes = lf_bytes.replace(b"\n", b"\r\n")
     assert hashlib.sha256(crlf_bytes).hexdigest() == HISTORICAL_CRLF_SHA256
     return crlf_bytes
+
+
+def previous_codex_skill_bytes() -> bytes:
+    """Return the exact immediately previous canonical Codex skill."""
+    current = CURRENT_CODEX_SKILL.read_text(encoding="utf-8")
+    new_policy = (
+        "4. Use the session-injected `escapement-worktree create` transaction when\n"
+        "   isolated implementation work is needed; Beads remains task state only."
+    )
+    old_policy = (
+        "4. Use `bd worktree create` when isolated implementation work is needed."
+    )
+    assert current.count(new_policy) == 1, "previous Codex fixture source drifted"
+    previous = current.replace(new_policy, old_policy).encode("utf-8")
+    assert hashlib.sha256(previous).hexdigest() == PREVIOUS_CODEX_SKILL_SHA256
+    return previous
