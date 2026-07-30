@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -40,12 +42,62 @@ ACTIVE_WORKTREE_POLICY_FILES = (
     Path("README.md"),
     Path("docs/deck.html"),
 )
-DIRECT_CREATION_BYPASSES = (
+LEGACY_ENTRYPOINTS = (
     "cake-worktree",
     ".agents/worktree-entrypoint",
-    "bd worktree create",
-    "git worktree add",
 )
+_CODE_SPAN_RE = re.compile(r"`([^`\n]+)`")
+_GIT_VALUE_OPTIONS = frozenset(
+    {"-C", "-c", "--git-dir", "--work-tree", "--git-common-dir", "--namespace"}
+)
+_BD_VALUE_OPTIONS = frozenset(("-C", "--directory"))
+
+
+def _skip_value_options(tokens: list[str], options: frozenset[str]) -> int:
+    index = 1
+    while index < len(tokens):
+        token = tokens[index]
+        if token in options:
+            index += 2
+            continue
+        if any(token.startswith(option + "=") for option in options):
+            index += 1
+            continue
+        if token.startswith("-C") and token != "-C":
+            index += 1
+            continue
+        if token.startswith("-"):
+            index += 1
+            continue
+        break
+    return index
+
+
+def _is_direct_creation(command: str) -> bool:
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return False
+    if not tokens:
+        return False
+    executable = Path(tokens[0]).name
+    if executable == "git":
+        index = _skip_value_options(tokens, _GIT_VALUE_OPTIONS)
+        return tokens[index : index + 2] == ["worktree", "add"]
+    if executable == "bd":
+        index = _skip_value_options(tokens, _BD_VALUE_OPTIONS)
+        return tokens[index : index + 2] == ["worktree", "create"]
+    return False
+
+
+def _direct_creation_commands(text: str) -> list[str]:
+    candidates = _CODE_SPAN_RE.findall(text)
+    candidates.extend(
+        line.strip().removeprefix("$").strip()
+        for line in text.splitlines()
+        if line.strip().removeprefix("$").strip().startswith(("git ", "bd "))
+    )
+    return [candidate for candidate in candidates if _is_direct_creation(candidate)]
 
 
 def _run(
@@ -305,51 +357,19 @@ def test_precompact_reinjects_the_same_authoritative_contract(tmp_path: Path) ->
     (("claude", "hooks"), ("hooks",)),
     ids=("nested-plugin", "flat-plugin"),
 )
-def test_packaged_context_uses_its_own_bundled_cli(
-    tmp_path: Path,
-    hook_parts: tuple[str, ...],
-) -> None:
-    plugin = tmp_path / "plugin"
-    hook_dir = plugin.joinpath(*hook_parts)
-    cli_dir = plugin / "bin"
-    resolver_dir = plugin / "harness" / "bin"
-    hook_dir.mkdir(parents=True)
-    cli_dir.mkdir()
-    resolver_dir.mkdir(parents=True)
-    packaged_hook = hook_dir / HOOK.name
-    shutil.copyfile(HOOK, packaged_hook)
-    shutil.copyfile(HOOK.parent / "_worktree_cli.py", hook_dir / "_worktree_cli.py")
-    shutil.copyfile(ROOT / "bin" / "escapement-worktree", cli_dir / "escapement-worktree")
-    shutil.copyfile(ROOT / "harness" / "bin" / "repo_outcome.py", resolver_dir / "repo_outcome.py")
-
-    context, _ = _context(
-        subprocess.run(
-            [sys.executable, str(packaged_hook)],
-            cwd=tmp_path,
-            input=json.dumps(
-                {"hook_event_name": "SessionStart", "cwd": str(tmp_path)}
-            ),
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    )
-
-    assert f"python3 -B {cli_dir / 'escapement-worktree'} create" in context
-    assert str(WORKTREE_CLI) not in context
-
-
 @pytest.mark.parametrize(
-    "hook_parts",
-    (("claude", "hooks"), ("hooks",)),
-    ids=("nested-plugin", "flat-plugin"),
+    "install_cli",
+    (True, False),
+    ids=("cli-present", "cli-missing"),
 )
-def test_missing_packaged_cli_reports_broken_installation_without_fallback(
+def test_packaged_context_uses_only_its_own_bundled_cli(
     tmp_path: Path,
     hook_parts: tuple[str, ...],
+    install_cli: bool,
 ) -> None:
     plugin = tmp_path / "plugin"
     hook_dir = plugin.joinpath(*hook_parts)
+    cli = plugin / "bin" / "escapement-worktree"
     resolver_dir = plugin / "harness" / "bin"
     hook_dir.mkdir(parents=True)
     resolver_dir.mkdir(parents=True)
@@ -357,6 +377,9 @@ def test_missing_packaged_cli_reports_broken_installation_without_fallback(
     shutil.copyfile(HOOK, packaged_hook)
     shutil.copyfile(HOOK.parent / "_worktree_cli.py", hook_dir / "_worktree_cli.py")
     shutil.copyfile(ROOT / "harness" / "bin" / "repo_outcome.py", resolver_dir / "repo_outcome.py")
+    if install_cli:
+        cli.parent.mkdir()
+        shutil.copyfile(WORKTREE_CLI, cli)
 
     context, _ = _context(
         subprocess.run(
@@ -371,10 +394,13 @@ def test_missing_packaged_cli_reports_broken_installation_without_fallback(
         )
     )
 
-    assert "broken Escapement installation" in context
-    assert "escapement-worktree" in context
-    assert "bd worktree" not in context
-    assert "git worktree" not in context
+    if install_cli:
+        assert f"python3 -B {cli} create" in context
+        assert str(WORKTREE_CLI) not in context
+    else:
+        assert "broken Escapement installation" in context
+        assert "escapement-worktree" in context
+        assert not _direct_creation_commands(context)
 
 
 def test_every_active_policy_surface_names_generic_creation_without_bypass() -> None:
@@ -388,8 +414,12 @@ def test_every_active_policy_surface_names_generic_creation_without_bypass() -> 
         assert "escapement-worktree" in policy, (
             f"{path} dropped the generic creation path instead of replacing old policy"
         )
-        retained = [term for term in DIRECT_CREATION_BYPASSES if term in policy]
-        assert not retained, f"{path} retains bypass creation policy: {retained}"
+        retained = [term for term in LEGACY_ENTRYPOINTS if term in policy]
+        assert not retained, f"{path} retains legacy entrypoint policy: {retained}"
+        direct_creation = _direct_creation_commands(policy)
+        assert not direct_creation, (
+            f"{path} retains direct Git/Beads creation commands: {direct_creation}"
+        )
 
 
 def test_non_lifecycle_event_is_silent(tmp_path: Path) -> None:

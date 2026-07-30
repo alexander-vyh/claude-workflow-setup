@@ -171,6 +171,21 @@ def test_future_skew_heartbeat_is_live() -> None:
 # ---------------------------------------------------------------------------
 # build_isolation_steer — the escape path must be named (gate-design Rule 1)
 # ---------------------------------------------------------------------------
+def _assert_placeholder_is_reference_to_concrete_sessionstart(message: str) -> None:
+    low = message.lower()
+    placeholder = "<injected-bundled-cli-path>"
+    if placeholder not in low:
+        return
+    assert "template" in low or "reference" in low, (
+        "a placeholder path must be labeled as a template/reference, not an "
+        "executable concrete command"
+    )
+    assert "sessionstart" in low and "concrete" in low, (
+        "the template must direct the agent to the concrete command emitted by "
+        "SessionStart"
+    )
+
+
 def test_steer_names_worktree_escape_path() -> None:
     peers = [_rec("B", "/work/repo", _now())]
     steer = si.build_isolation_steer(peers, "/work/repo", is_linked_worktree=False)
@@ -185,6 +200,7 @@ def test_steer_names_worktree_escape_path() -> None:
     assert ("red" in low or "verif" in low), (
         "the steer must connect the collision to a possibly-not-yours red/verify"
     )
+    _assert_placeholder_is_reference_to_concrete_sessionstart(steer)
 
 
 def test_steer_distinguishes_checkout_location() -> None:
@@ -358,6 +374,43 @@ def test_stop_block_in_collision_includes_steer(tmp_path) -> None:
     assert f"--repo {toplevel}" in out["reason"]
     assert "--name" in out["reason"]
     assert "--branch" in out["reason"]
+    _assert_placeholder_is_reference_to_concrete_sessionstart(out["reason"])
+
+
+def test_stop_block_in_shared_linked_worktree_includes_steer(tmp_path) -> None:
+    """POSITIVE CONTROL (e2e): two live sessions sharing one linked-worktree root
+    still collide; only different linked-worktree roots are isolated."""
+    main = _make_git_repo(tmp_path)
+    linked = tmp_path / "shared-linked"
+    _git(["worktree", "add", "-q", "-b", "shared-linked", str(linked)], main)
+    identity = si.checkout_identity(str(linked))
+    assert identity is not None and identity["is_linked_worktree"] is True
+    harness = tmp_path / "harness"
+
+    def linked_identity(_args, _cwd):
+        return identity
+
+    si.write_checkout(
+        harness / "threads" / "PEER",
+        "PEER",
+        str(linked),
+        _now(),
+        identity_fn=linked_identity,
+    )
+    _seed_failing_contract(harness / "threads" / "ME")
+
+    proc = _run_stop_hook(linked, harness, "ME")
+    out = json.loads(proc.stdout)
+    reason = out["reason"]
+
+    assert out["decision"] == "block"
+    assert "isolation:" in reason.lower()
+    assert "shared linked worktree" in reason.lower()
+    assert "escapement-worktree create" in reason.lower()
+    assert f"--repo {identity['worktree_root']}" in reason
+    assert "--name" in reason
+    assert "--branch" in reason
+    _assert_placeholder_is_reference_to_concrete_sessionstart(reason)
 
 
 def test_stop_block_solo_has_no_steer(tmp_path) -> None:

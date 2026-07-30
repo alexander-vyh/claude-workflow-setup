@@ -9,6 +9,8 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -20,6 +22,11 @@ import pytest
 
 _HOOK_PATH = Path(__file__).resolve().parents[1] / "root_checkout_guard.py"
 _WORKTREE_CLI = Path(__file__).resolve().parents[3] / "bin" / "escapement-worktree"
+_CODE_SPAN_RE = re.compile(r"`([^`\n]+)`")
+_GIT_VALUE_OPTIONS = frozenset(
+    {"-C", "-c", "--git-dir", "--work-tree", "--git-common-dir", "--namespace"}
+)
+_BD_VALUE_OPTIONS = frozenset(("-C", "--directory"))
 if not _HOOK_PATH.exists():
     pytest.fail(f"root_checkout_guard.py not found at {_HOOK_PATH}")
 
@@ -28,6 +35,89 @@ guard = importlib.util.module_from_spec(_spec)
 sys.modules["root_checkout_guard"] = guard
 assert _spec.loader is not None
 _spec.loader.exec_module(guard)
+
+
+def _skip_cli_selectors(
+    tokens: list[str],
+    index: int,
+    value_options: frozenset[str],
+) -> int:
+    while index < len(tokens):
+        token = tokens[index]
+        if token in value_options:
+            index += 2
+            continue
+        if any(token.startswith(option + "=") for option in value_options):
+            index += 1
+            continue
+        if token.startswith("-C") and token != "-C":
+            index += 1
+            continue
+        if token.startswith("-"):
+            index += 1
+            continue
+        break
+    return index
+
+
+def _is_direct_creation(command: str) -> bool:
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return False
+    if not tokens:
+        return False
+    executable = Path(tokens[0]).name
+    if executable == "git":
+        index = _skip_cli_selectors(tokens, 1, _GIT_VALUE_OPTIONS)
+        return tokens[index : index + 2] == ["worktree", "add"]
+    if executable == "bd":
+        index = _skip_cli_selectors(tokens, 1, _BD_VALUE_OPTIONS)
+        return tokens[index : index + 2] == ["worktree", "create"]
+    return False
+
+
+def _direct_creation_commands(text: str) -> list[str]:
+    return [
+        command
+        for command in _CODE_SPAN_RE.findall(text)
+        if _is_direct_creation(command)
+    ]
+
+
+@pytest.mark.parametrize(
+    "command",
+    (
+        "git worktree add .worktrees/task -b task",
+        "git -C /repo worktree add .worktrees/task -b task",
+        "git --git-dir /repo/.git --work-tree /repo worktree add /tmp/task",
+        "git --git-dir=/repo/.git --work-tree=/repo worktree add /tmp/task",
+        "bd --directory /repo worktree create .worktrees/task",
+        "bd --directory=/repo worktree create .worktrees/task",
+        "bd -C /repo worktree create .worktrees/task",
+        "bd -C/repo worktree create .worktrees/task",
+    ),
+)
+def test_direct_creation_oracle_rejects_supported_selector_placements(
+    command: str,
+) -> None:
+    assert _direct_creation_commands(f"Fallback: `{command}`") == [command]
+
+
+@pytest.mark.parametrize(
+    "reference",
+    (
+        'rg "git -C /repo worktree add" docs',
+        'printf "%s\\n" "bd --directory /repo worktree create"',
+        "echo 'git --git-dir=/repo/.git --work-tree=/repo worktree add /tmp/wt'",
+        'python3 audit.py --reference "bd -C /repo worktree create"',
+        'Historical reference: "git -C /repo worktree add"',
+    ),
+)
+def test_direct_creation_oracle_ignores_quoted_reference_text(
+    reference: str,
+) -> None:
+    assert not _direct_creation_commands(f"Documentation check: `{reference}`")
 
 
 def _run_payload(payload: dict) -> tuple[int, dict, str]:
@@ -185,8 +275,7 @@ def test_missing_bundled_cli_keeps_root_denial_and_reports_broken_installation(
     assert _decision(output) == "deny", raw
     reason = _reason(output)
     assert "broken Escapement installation" in reason
-    assert "bd worktree" not in reason
-    assert "git worktree" not in reason
+    assert not _direct_creation_commands(reason)
 
 
 @pytest.mark.parametrize("tool_name", ["Write", "Edit", "NotebookEdit"])
