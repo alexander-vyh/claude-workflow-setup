@@ -393,4 +393,3 @@ The change is delivered only when:
 5. the deployed Escapement plugin contains the new CLI and guard behavior; and
 6. a fresh Claude and Codex session receives the new repair path rather than
    `cake-worktree` or `bd worktree create`.
-
