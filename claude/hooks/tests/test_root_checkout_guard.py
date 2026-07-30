@@ -78,13 +78,30 @@ def test_direct_creation_oracle_ignores_quoted_reference_text(
 @pytest.mark.parametrize(
     "surface",
     (
-        "```bash\ncd /repo\ngit -C /repo worktree add /tmp/task\n```",
-        "<code>git --git-dir=/repo/.git worktree add /tmp/task</code>",
-        "<pre><code>bd --directory /repo worktree create .worktrees/task</code></pre>",
+        "```bash\nprintf '%s' ready\ngit -C /repo worktree add /tmp/task\n```",
+        "```bash\nprintf '%s' ready\nbd --directory /repo worktree create /tmp/task\n```",
+        "<code>printf '%s' ready\ngit -C /repo worktree add /tmp/task</code>",
+        "<code>printf '%s' ready\nbd --directory /repo worktree create /tmp/task</code>",
     ),
 )
-def test_direct_creation_oracle_extracts_fenced_and_html_code(surface: str) -> None:
+def test_direct_creation_oracle_splits_fenced_and_html_newlines(
+    surface: str,
+) -> None:
     assert direct_creation_commands(surface)
+
+
+@pytest.mark.parametrize(
+    "surface",
+    (
+        "```bash\nprintf '%s' \"git -C /repo\nworktree add /tmp/task\"\n```",
+        "<code>printf '%s' \"bd --directory /repo\nworktree create /tmp/task\"</code>",
+        "<code>rg \"git -C /repo\nworktree add /tmp/task\" docs</code>",
+    ),
+)
+def test_direct_creation_oracle_preserves_quoted_multiline_arguments(
+    surface: str,
+) -> None:
+    assert not direct_creation_commands(surface)
 
 
 def _run_payload(payload: dict) -> tuple[int, dict, str]:

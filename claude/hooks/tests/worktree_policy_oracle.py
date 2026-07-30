@@ -19,7 +19,7 @@ _INLINE_CODE_RE = re.compile(r"(?<!`)`([^`\n]+)`(?!`)")
 _HTML_CODE_RE = re.compile(r"<code\b[^>]*>(.*?)</code>", re.DOTALL | re.IGNORECASE)
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _ENV_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
-_SHELL_SEPARATORS = frozenset({";", "&&", "||", "|", "&"})
+_SHELL_SEPARATORS = frozenset({";", "&&", "||", "|", "&", "\n"})
 _GIT_VALUE_OPTIONS = frozenset(
     {"-C", "-c", "--git-dir", "--work-tree", "--git-common-dir", "--namespace"}
 )
@@ -39,24 +39,25 @@ def _shell_looking_line(line: str) -> str | None:
 def extract_code_candidates(text: str) -> list[str]:
     """Extract executable-looking Markdown, HTML, and plain shell candidates."""
     candidates: list[str] = []
-    for match in _FENCED_CODE_RE.finditer(text):
-        block = match.group(1).strip()
-        if block:
-            candidates.append(block)
-            candidates.extend(
-                candidate
-                for line in block.splitlines()
-                if (candidate := _shell_looking_line(line)) is not None
-            )
-    candidates.extend(match.group(1).strip() for match in _INLINE_CODE_RE.finditer(text))
-    candidates.extend(
-        candidate
-        for match in _HTML_CODE_RE.finditer(text)
-        if (candidate := _clean_html_code(match.group(1)))
+    remaining = text
+    extractors = (
+        (_FENCED_CODE_RE, lambda match: match.group(1).strip()),
+        (_HTML_CODE_RE, lambda match: _clean_html_code(match.group(1))),
+        (_INLINE_CODE_RE, lambda match: match.group(1).strip()),
     )
+    for pattern, extract in extractors:
+        candidates.extend(
+            candidate
+            for match in pattern.finditer(remaining)
+            if (candidate := extract(match))
+        )
+        remaining = pattern.sub(
+            lambda match: "\n" * match.group(0).count("\n") or " ",
+            remaining,
+        )
     candidates.extend(
         candidate
-        for line in text.splitlines()
+        for line in remaining.splitlines()
         if (candidate := _shell_looking_line(line)) is not None
     )
     return list(dict.fromkeys(candidate for candidate in candidates if candidate))
@@ -64,7 +65,8 @@ def extract_code_candidates(text: str) -> list[str]:
 
 def _shell_segments(command: str) -> list[list[str]]:
     try:
-        lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|")
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|\n")
+        lexer.whitespace = " \t\r"
         lexer.whitespace_split = True
         lexer.commenters = "#"
         tokens = list(lexer)
