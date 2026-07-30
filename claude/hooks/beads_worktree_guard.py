@@ -38,7 +38,7 @@ class LiteralCreation:
 _DYNAMIC_CHARS = frozenset("$`*?[]{}")
 _BRANCH_FLAGS = frozenset({"-b", "-B", "--branch"})
 _SOURCE_FLAGS = frozenset({"--source", "--commit-ish"})
-_VALUE_FLAGS = frozenset({"--reason", "--track", "--orphan", "--lock"})
+_VALUE_FLAGS = frozenset({"--reason"})
 _GIT_VALUE_OPTIONS = frozenset({
     "-c", "-C", "--config-env", "--exec-path", "--git-dir", "--namespace",
     "--super-prefix", "--work-tree",
@@ -71,17 +71,130 @@ def _repository_root(cwd: Path) -> Path:
     except OSError:
         start = cwd
     for directory in (start, *start.parents):
-        if (directory / ".git").exists():
+        git_marker = directory / ".git"
+        if git_marker.is_dir() and not git_marker.is_symlink():
             return directory
+        primary = _linked_worktree_primary(git_marker)
+        if primary is not None:
+            return primary
     return start
 
 
-def _shell_tokens(command: str) -> list[str] | None:
+def _metadata_path(
+    metadata_file: Path,
+    *,
+    relative_to: Path,
+    prefix: str = "",
+) -> Path | None:
+    """Resolve one literal path stored in Git metadata."""
+    if metadata_file.is_symlink() or not metadata_file.is_file():
+        return None
     try:
-        lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|")
+        lines = metadata_file.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError):
+        return None
+    if len(lines) != 1 or not lines[0].startswith(prefix):
+        return None
+    value = lines[0][len(prefix):]
+    if not value or "\x00" in value:
+        return None
+    path = Path(value)
+    if not path.is_absolute():
+        path = relative_to / path
+    try:
+        return path.resolve(strict=True)
+    except OSError:
+        return None
+
+
+def _linked_worktree_primary(git_marker: Path) -> Path | None:
+    """Map a linked checkout's Git metadata to its primary checkout."""
+    git_dir = _metadata_path(
+        git_marker,
+        relative_to=git_marker.parent,
+        prefix="gitdir: ",
+    )
+    if git_dir is None or not git_dir.is_dir():
+        return None
+    common_dir = _metadata_path(
+        git_dir / "commondir",
+        relative_to=git_dir,
+    )
+    if common_dir is None or common_dir.name != ".git" or not common_dir.is_dir():
+        return None
+    primary = common_dir.parent
+    primary_git = primary / ".git"
+    if primary_git.is_symlink() or not primary_git.is_dir():
+        return None
+    try:
+        if primary_git.resolve(strict=True) != common_dir:
+            return None
+    except OSError:
+        return None
+    return primary
+
+
+def _protect_quoted_punctuation(command: str) -> tuple[str, dict[str, str]]:
+    """Hide quoted/escaped shell punctuation until after segmentation."""
+    base = "__ESCAPEMENT_QUOTED_PUNCT__"
+    while base in command:
+        base += "_"
+    sentinels = {
+        punctuation: f"{base}{ord(punctuation)}__"
+        for punctuation in ";&|"
+    }
+    replacements = {sentinel: punctuation for punctuation, sentinel in sentinels.items()}
+    protected: list[str] = []
+    quote: str | None = None
+    i = 0
+    while i < len(command):
+        char = command[i]
+        if quote == "'":
+            if char == "'":
+                quote = None
+                protected.append(char)
+            else:
+                protected.append(sentinels.get(char, char))
+            i += 1
+            continue
+        if char == "\\" and i + 1 < len(command):
+            following = command[i + 1]
+            if quote is None and following in sentinels:
+                protected.extend(("\\", sentinels[following]))
+            else:
+                protected.extend((char, following))
+            i += 2
+            continue
+        if char == '"':
+            quote = None if quote == '"' else '"'
+            protected.append(char)
+        elif char == "'" and quote is None:
+            quote = "'"
+            protected.append(char)
+        elif quote == '"' and char in sentinels:
+            protected.append(sentinels[char])
+        else:
+            protected.append(char)
+        i += 1
+    return "".join(protected), replacements
+
+
+def _restore_tokens(tokens: list[str], replacements: dict[str, str]) -> list[str]:
+    restored: list[str] = []
+    for token in tokens:
+        for sentinel, punctuation in replacements.items():
+            token = token.replace(sentinel, punctuation)
+        restored.append(token)
+    return restored
+
+
+def _shell_tokens(command: str) -> tuple[list[str], dict[str, str]] | None:
+    protected, replacements = _protect_quoted_punctuation(command)
+    try:
+        lexer = shlex.shlex(protected, posix=True, punctuation_chars=";&|")
         lexer.whitespace_split = True
         lexer.commenters = ""
-        return list(lexer)
+        return list(lexer), replacements
     except ValueError:
         return None
 
@@ -122,6 +235,7 @@ def _command_cwd(
     payload_cwd: Path,
     options: frozenset[str],
     terminal_options: frozenset[str],
+    cwd_options: frozenset[str],
 ) -> tuple[int, Path] | None:
     """Consume only literal global options and apply a literal ``-C``."""
     cwd = payload_cwd
@@ -132,11 +246,17 @@ def _command_cwd(
             return None
         if token in terminal_options:
             return None
-        if token == "-C":
+        if token in cwd_options:
             if i + 1 >= len(tokens) or not _is_literal(tokens[i + 1]):
                 return None
             cwd = _path_from(tokens[i + 1], cwd)
             i += 2
+        elif "--directory" in cwd_options and token.startswith("--directory="):
+            value = token.partition("=")[2]
+            if not _is_literal(value):
+                return None
+            cwd = _path_from(value, cwd)
+            i += 1
         elif token.startswith("-C") and len(token) > 2:
             value = token[2:]
             if not _is_literal(value):
@@ -178,6 +298,8 @@ def _creation_arguments(
             branch = token.partition("=")[2]
         elif token.startswith("--source="):
             source = token.partition("=")[2]
+        elif token.startswith("--reason=") or token.startswith("--track="):
+            pass
         elif token.startswith("-"):
             pass
         elif path is None:
@@ -199,7 +321,11 @@ def _creation_from_segment(
     executable = tokens[0].split("/")[-1]
     if executable == "git":
         command = _command_cwd(
-            tokens, payload_cwd, _GIT_VALUE_OPTIONS, _GIT_TERMINAL_OPTIONS
+            tokens,
+            payload_cwd,
+            _GIT_VALUE_OPTIONS,
+            _GIT_TERMINAL_OPTIONS,
+            frozenset({"-C"}),
         )
         if command is None:
             return None
@@ -210,7 +336,11 @@ def _creation_from_segment(
         kind: Literal["git", "bd"] = "git"
     elif executable == "bd":
         command = _command_cwd(
-            tokens, payload_cwd, _BD_VALUE_OPTIONS, _BD_TERMINAL_OPTIONS
+            tokens,
+            payload_cwd,
+            _BD_VALUE_OPTIONS,
+            _BD_TERMINAL_OPTIONS,
+            frozenset({"-C", "--directory"}),
         )
         if command is None:
             return None
@@ -231,11 +361,13 @@ def literal_creations(
     command: str, payload_cwd: Path
 ) -> Iterator[LiteralCreation]:
     """Yield direct worktree creations in ordinary literal shell segments."""
-    tokens = _shell_tokens(command)
-    if tokens is None:
+    tokenized = _shell_tokens(command)
+    if tokenized is None:
         return
+    tokens, replacements = tokenized
     cwd = payload_cwd
     for segment, separator in _segments(tokens):
+        segment = _restore_tokens(segment, replacements)
         if (
             len(segment) == 2
             and segment[0] == "cd"
