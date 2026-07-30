@@ -70,18 +70,20 @@ def validate_request(ctx: RepositoryContext, request: WorktreeRequest) -> Path:
     if branch_check.returncode or branch_check.stdout.strip() != request.branch:
         raise WorktreeError(f"invalid branch name: {request.branch!r}")
     branch_ref = f"refs/heads/{request.branch}"
-    if (
-        git(
-            ctx,
-            "show-ref",
-            "--verify",
-            "--quiet",
-            branch_ref,
-            check=False,
-        ).returncode
-        == 0
-    ):
+    branch_presence = git(
+        ctx,
+        "show-ref",
+        "--verify",
+        "--quiet",
+        branch_ref,
+        check=False,
+    )
+    if branch_presence.returncode == 0:
         raise WorktreeError(f"branch already exists: {request.branch}")
+    if branch_presence.returncode != 1:
+        detail = branch_presence.stderr.strip() or branch_presence.stdout.strip()
+        detail = detail or f"exit status {branch_presence.returncode}"
+        raise WorktreeError(f"failed to inspect branch {branch_ref}: {detail}")
 
     relative_target = target.relative_to(ctx.primary)
     ignored = git(
@@ -193,7 +195,12 @@ def verify_created_worktree(
             f"created worktree belongs to unexpected common directory: {common_dir}"
         )
 
-    expected_target = target.resolve(strict=True)
+    try:
+        expected_target = target.resolve(strict=True)
+    except OSError as error:
+        raise WorktreeError(
+            f"failed to resolve created worktree target {target}: {error}"
+        ) from error
     expected_branch = f"refs/heads/{request.branch}"
     records = _worktree_records(
         git(ctx, "worktree", "list", "--porcelain").stdout
@@ -209,7 +216,13 @@ def verify_created_worktree(
     worktrees_dir = ctx.primary / ".worktrees"
     if worktrees_dir.is_symlink() or not worktrees_dir.is_dir():
         raise WorktreeError(f"worktree directory changed during creation: {worktrees_dir}")
-    if target.is_symlink() or expected_target.parent != worktrees_dir.resolve(strict=True):
+    try:
+        expected_parent = worktrees_dir.resolve(strict=True)
+    except OSError as error:
+        raise WorktreeError(
+            f"failed to resolve worktree target parent {worktrees_dir}: {error}"
+        ) from error
+    if target.is_symlink() or expected_target.parent != expected_parent:
         raise WorktreeError(f"created target escaped worktree directory: {target}")
     ignored = git(
         ctx,
@@ -299,27 +312,45 @@ def rollback_created_artifacts(
             f"{branch_ref}^{{commit}}",
             check=False,
         )
-        if current.returncode == 0:
-            current_sha = current.stdout.strip()
-            if current_sha != expected_sha:
-                residue.append(
-                    "refused to delete moved branch "
-                    f"{branch_ref}: expected {expected_sha}, found {current_sha}"
+        if current.returncode != 0:
+            presence = git(
+                ctx,
+                "show-ref",
+                "--verify",
+                "--quiet",
+                branch_ref,
+                check=False,
+            )
+            if presence.returncode == 1:
+                return residue
+            detail = current.stderr.strip() or current.stdout.strip()
+            detail = detail or f"rev-parse exited {current.returncode}"
+            if presence.returncode not in {0, 1}:
+                presence_detail = presence.stderr.strip() or presence.stdout.strip()
+                presence_detail = presence_detail or (
+                    f"show-ref exited {presence.returncode}"
                 )
-            else:
-                deleted = git(
-                    ctx,
-                    "update-ref",
-                    "-d",
-                    branch_ref,
-                    expected_sha,
-                    check=False,
-                )
-                if deleted.returncode:
-                    detail = deleted.stderr.strip() or deleted.stdout.strip()
-                    residue.append(
-                        f"failed to delete branch {branch_ref}: {detail}"
-                    )
+                detail = f"{detail}; absence check failed: {presence_detail}"
+            residue.append(f"failed to inspect branch {branch_ref}: {detail}")
+            return residue
+        current_sha = current.stdout.strip()
+        if current_sha != expected_sha:
+            residue.append(
+                "refused to delete moved branch "
+                f"{branch_ref}: expected {expected_sha}, found {current_sha}"
+            )
+        else:
+            deleted = git(
+                ctx,
+                "update-ref",
+                "-d",
+                branch_ref,
+                expected_sha,
+                check=False,
+            )
+            if deleted.returncode:
+                detail = deleted.stderr.strip() or deleted.stdout.strip()
+                residue.append(f"failed to delete branch {branch_ref}: {detail}")
     except WorktreeError as error:
         residue.append(f"failed to inspect branch {branch_ref}: {error}")
     return residue
@@ -350,7 +381,12 @@ def create_worktree(request: WorktreeRequest) -> CreationResult:
             beads_verified = verify_created_worktree(
                 ctx, request, target, source, root_beads
             )
-        except WorktreeError as error:
+        except (WorktreeError, OSError) as error:
+            failure = (
+                error
+                if isinstance(error, WorktreeError)
+                else WorktreeError(f"worktree operation failed: {error}")
+            )
             residue = (
                 rollback_created_artifacts(
                     ctx, target, request.branch, source.sha
@@ -360,9 +396,9 @@ def create_worktree(request: WorktreeRequest) -> CreationResult:
             )
             if residue:
                 raise WorktreeError(
-                    f"{error}; rollback residue: {'; '.join(residue)}"
+                    f"{failure}; rollback residue: {'; '.join(residue)}"
                 ) from None
-            raise
+            raise failure from None
         return CreationResult(
             repo=ctx.primary,
             target=target,
