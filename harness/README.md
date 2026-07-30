@@ -90,7 +90,8 @@ nothing):
 The steer is advisory — like the other Stop-block messages, the mechanical
 guard is the *detection* (unit-tested with positive/negative/staleness controls
 in `tests/test_session_isolation.py`); the de-collision itself happens when the
-agent runs its concrete bundled command:
+agent runs the concrete bundled command emitted by SessionStart. The static
+reference template is:
 
 ```bash
 python3 -B <injected-bundled-cli-path> create \

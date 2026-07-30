@@ -216,8 +216,7 @@ def build_isolation_steer(
     worktree_root: str,
     is_linked_worktree: bool,
 ) -> str:
-    """The agent-facing steer. Names the concrete escape path (gate-design Rule 1)
-    and connects the collision to a possibly-not-yours red verify (BLOCK-5)."""
+    """Point to SessionStart's concrete command and show its reference template."""
     n = len(peers)
     noun, verb = ("session", "shares") if n == 1 else ("sessions", "share")
     where = "a shared linked worktree" if is_linked_worktree else "the main checkout"
@@ -229,8 +228,10 @@ def build_isolation_steer(
         f" ⚠ ISOLATION: {n} other live agent {noun} {verb} this checkout "
         f"({worktree_root} — {where}). A red verify here may reflect THEIR in-flight "
         "edits, not yours — one session's red must not gate another's finish. If your "
-        "own change is complete, isolate and verify it on its own: run "
-        f"the session-injected `escapement-worktree create` command (`{command}`), "
+        "own change is complete, isolate and verify it on its own: run the concrete "
+        "`escapement-worktree create` command emitted by SessionStart. Its reference "
+        "template is "
+        f"`{command}`. Then "
         "move your work there, re-run "
         "`~/.claude/harness/bin/verify` in the worktree, and file+attribute any "
         "shared-boundary defect you did not cause as a bead."
