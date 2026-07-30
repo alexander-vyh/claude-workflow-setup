@@ -128,7 +128,9 @@ def test_codex_quoted_text_is_allowed(tmp_path: Path, monkeypatch) -> None:
 def test_codex_repair_names_existing_bundled_cli(tmp_path: Path, monkeypatch) -> None:
     repo = _repo(tmp_path / "repo")
     monkeypatch.chdir(repo)
+    before = _git_state(repo)
     _, output = _run_codex("bd worktree create .worktrees/x --branch feature/x")
     reason = output["hookSpecificOutput"]["permissionDecisionReason"]
     assert PLUGIN_CLI.is_file(), "rendered Codex plugin must contain the bundled CLI"
     assert f"{PLUGIN_CLI} create" in reason
+    assert _git_state(repo) == before

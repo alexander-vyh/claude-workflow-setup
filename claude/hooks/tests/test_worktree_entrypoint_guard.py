@@ -120,8 +120,10 @@ def test_git_worktree_add_is_redirected_in_plain_git_repo(tmp_path: Path) -> Non
 def test_bd_worktree_create_is_redirected_in_beads_repo(tmp_path: Path) -> None:
     repo = _repo(tmp_path / "beads")
     (repo / ".beads").mkdir()
+    before = _git_state(repo)
     _, output = run_hook("bd worktree create .worktrees/x --branch feature/x", cwd=repo)
     assert "escapement-worktree create" in _reason(output)
+    assert _git_state(repo) == before
 
 
 def test_literal_cd_routes_repair_to_target_repo_not_payload_cwd(
