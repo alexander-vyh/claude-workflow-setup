@@ -20,6 +20,8 @@ from pathlib import Path
 from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).parent))
+from _worktree_cli import bundled_cli_prefix
+
 try:
     from _gate_signal import record as _record_signal
 except ImportError:  # pragma: no cover
@@ -207,11 +209,27 @@ def _bash_mutation_target(command: str, cwd: Path) -> tuple[Path, str] | None:
 
 
 def _deny_reason(operation: str, root: Path) -> str:
+    prefix = bundled_cli_prefix(Path(__file__))
+    if prefix is None:
+        repair = (
+            "Worktree creation is unavailable: broken Escapement installation; "
+            "the bundled escapement-worktree CLI "
+            "is missing. Repair or reinstall Escapement before creating a worktree."
+        )
+    else:
+        command = (
+            f"{shlex.join(prefix)} create --repo {shlex.quote(str(root))} "
+            "--name <task> --branch <branch>"
+        )
+        repair = (
+            "Create a linked worktree with the Escapement-owned "
+            f"`escapement-worktree create` transaction: `{command}`, then make "
+            "the change there."
+        )
     return (
         f"`{operation}` targets the primary checkout of a beads-managed repo at `{root}`. "
-        "Routine agent implementation work must not dirty the root checkout; create a "
-        "linked worktree instead, for example `bd worktree create .worktrees/<name> -b <branch>`, "
-        "then make the change there. If this is intentional root maintenance, rerun the Bash "
+        "Routine agent implementation work must not dirty the root checkout. "
+        f"{repair} If this is intentional root maintenance, rerun the Bash "
         "command with `# root-checkout-waiver: <reason>` using a substantive reason. "
         "Placeholder waiver reasons are rejected."
     )

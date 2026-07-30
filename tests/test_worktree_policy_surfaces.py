@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 from pathlib import Path
 
 
@@ -57,8 +58,11 @@ def test_renderer_targets_contain_executable_and_importable_module_for_both_plug
         ROOT / "plugins" / "escapement",
         ROOT / "plugins" / "escapement-claude",
     ):
-        assert (plugin / "bin" / "escapement-worktree").is_file()
+        executable = plugin / "bin" / "escapement-worktree"
+        assert executable.is_file()
+        assert os.access(executable, os.X_OK)
         assert (plugin / "bin" / "escapement_worktree.py").is_file()
+        assert (plugin / "bin" / "escapement_worktree_git.py").is_file()
 
 
 def test_renderer_configures_cli_and_module_delivery_for_both_plugins() -> None:
@@ -71,7 +75,11 @@ def test_renderer_configures_cli_and_module_delivery_for_both_plugins() -> None:
         (ROOT / "agent-surfaces" / "manifest.json").read_text(encoding="utf-8")
     )
     targets = renderer.rendered_targets(ROOT, manifest)
-    for artifact in ("escapement-worktree", "escapement_worktree.py"):
+    for artifact in (
+        "escapement-worktree",
+        "escapement_worktree.py",
+        "escapement_worktree_git.py",
+    ):
         canonical = (ROOT / "bin" / artifact).read_text(encoding="utf-8")
         for plugin in (renderer.CODEX_PLUGIN_ROOT, renderer.CLAUDE_PLUGIN_ROOT):
             assert targets[ROOT / plugin / "bin" / artifact] == canonical
@@ -79,17 +87,29 @@ def test_renderer_configures_cli_and_module_delivery_for_both_plugins() -> None:
 
 def test_plugin_guard_copies_are_byte_equal_to_canonical_guard() -> None:
     canonical = (ROOT / "claude" / "hooks" / "beads_worktree_guard.py").read_bytes()
-    for plugin in (
-        ROOT / "plugins" / "escapement",
-        ROOT / "plugins" / "escapement-claude",
-    ):
-        assert (
-            plugin / "claude" / "hooks" / "beads_worktree_guard.py"
-        ).read_bytes() == canonical
+    assert (
+        ROOT
+        / "plugins"
+        / "escapement"
+        / "claude"
+        / "hooks"
+        / "beads_worktree_guard.py"
+    ).read_bytes() == canonical
+    assert (
+        ROOT
+        / "plugins"
+        / "escapement-claude"
+        / "hooks"
+        / "beads_worktree_guard.py"
+    ).read_bytes() == canonical
 
 
 def test_plugin_cli_and_module_copies_are_byte_equal_to_canonical_sources() -> None:
-    for filename in ("escapement-worktree", "escapement_worktree.py"):
+    for filename in (
+        "escapement-worktree",
+        "escapement_worktree.py",
+        "escapement_worktree_git.py",
+    ):
         canonical = (ROOT / "bin" / filename).read_bytes()
         for plugin in (
             ROOT / "plugins" / "escapement",
@@ -110,7 +130,6 @@ def test_obsolete_generated_location_guard_copies_do_not_exist() -> None:
         ROOT
         / "plugins"
         / "escapement-claude"
-        / "claude"
         / "hooks"
         / "beads_worktree_location_guard.py",
     ):

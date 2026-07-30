@@ -143,7 +143,7 @@ def _git_state(repo: Path) -> tuple[str, str, tuple[tuple[str, str, str], ...]]:
     return refs, worktrees, filesystem
 
 
-def test_codex_real_direct_creation_is_denied(tmp_path: Path, monkeypatch) -> None:
+def test_codex_direct_creation_is_denied(tmp_path: Path, monkeypatch) -> None:
     repo = _repo(tmp_path / "repo")
     monkeypatch.chdir(repo)
     before = _git_state(repo)
@@ -160,7 +160,7 @@ def test_codex_real_direct_creation_is_denied(tmp_path: Path, monkeypatch) -> No
     assert _git_state(repo) == before
 
 
-def test_codex_quoted_text_is_allowed(tmp_path: Path, monkeypatch) -> None:
+def test_codex_quoted_creation_text_is_allowed(tmp_path: Path, monkeypatch) -> None:
     repo = _repo(tmp_path / "repo")
     monkeypatch.chdir(repo)
     code, output = _run_codex("echo 'git worktree add .worktrees/x -b feature/x'")

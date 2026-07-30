@@ -30,7 +30,8 @@ Positive routing examples:
 2. Resolve the requested task with `bd show <id>`. If the user explicitly asks
    to run ready work without naming an ID, inspect `bd ready`.
 3. Claim the task before implementation with `bd update <id> --claim`.
-4. Use `bd worktree create` when isolated implementation work is needed.
+4. Use the session-injected `escapement-worktree create` transaction when
+   isolated implementation work is needed; Beads remains task state only.
 5. Follow the repository's outcome-and-oracle discipline before production
    code: define the outcome, independent oracle, constraints, controls, and
    final verification.

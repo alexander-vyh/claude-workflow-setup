@@ -19,10 +19,15 @@ CODEX_PLUGIN_ROOT = Path("plugins/escapement")
 CLAUDE_PLUGIN_ROOT = Path("plugins/escapement-claude")
 VALID_STATUSES = {"ready", "partial", "unsupported"}
 SHARED_HOOK_SUPPORT = {
-    "claude/hooks/beads_worktree_location_guard.py",
+    "claude/hooks/_worktree_cli.py",
     "claude/hooks/_gate_signal.py",
     "claude/hooks/_local_judge_client.py",
     "claude/hooks/_gh_command.py",
+}
+SHARED_RUNTIME_SUPPORT = {
+    "bin/escapement-worktree",
+    "bin/escapement_worktree.py",
+    "bin/escapement_worktree_git.py",
 }
 CODEX_HOOK_SUPPORT = {
     # merge_authorization_gate.py resolves this sibling via its plugin-relative
@@ -405,6 +410,11 @@ def rendered_targets(root: Path, manifest: dict[str, Any]) -> dict[Path, str]:
         rel = skill_path.relative_to(root / ".agents")
         targets[root / CODEX_PLUGIN_ROOT / rel] = skill_path.read_text(encoding="utf-8")
 
+    for source in sorted(SHARED_RUNTIME_SUPPORT):
+        content = (root / source).read_text(encoding="utf-8")
+        targets[root / CODEX_PLUGIN_ROOT / source] = content
+        targets[root / CLAUDE_PLUGIN_ROOT / source] = content
+
     hook_sources = _codex_ready_hook_sources(manifest)
     if hook_sources:
         hook_sources.update(SHARED_HOOK_SUPPORT)
@@ -494,6 +504,18 @@ def _validate_fixture(root: Path, kind: str, item_id: str, host: str, fixture: s
             errors.append(f"{kind} {item_id}: host {host} fixture selector not found: {fixture}")
 
 
+def _fixture_matches_hook_source(root: Path, fixture: str, source: str, item_id: str) -> bool:
+    path_text, _, _selector = fixture.partition("::")
+    fixture_path = root / path_text
+    if not fixture_path.is_file():
+        return False
+    fixture_text = fixture_path.read_text(encoding="utf-8", errors="replace")
+    normalized_fixture = fixture_text.lower().replace("-", "_")
+    source_stem = Path(source).stem.lower().replace("-", "_")
+    hook_id = item_id.lower().replace("-", "_")
+    return source_stem in normalized_fixture or hook_id in normalized_fixture
+
+
 def _frontmatter(text: str) -> dict[str, str] | None:
     lines = text.splitlines()
     if not lines or lines[0].strip() != "---":
@@ -564,10 +586,11 @@ def validate_manifest(root: Path, manifest: dict[str, Any]) -> list[str]:
         if codex.get("status") == "ready":
             source = hook.get("source")
             if source and source != "bd" and Path(source).suffix == ".py":
-                fixture_text = "\n".join(codex.get("fixtures", [])).lower().replace("-", "_")
-                source_stem = Path(source).stem.lower().replace("-", "_")
-                hook_id = item_id.lower().replace("-", "_")
-                if source_stem not in fixture_text and hook_id not in fixture_text:
+                fixtures = codex.get("fixtures", [])
+                if not any(
+                    _fixture_matches_hook_source(root, fixture, source, item_id)
+                    for fixture in fixtures
+                ):
                     errors.append(f"hook {item_id}: Codex hook fixture must match hook source: {source}")
             for event in codex.get("events", []):
                 command = event.get("command", "")
@@ -687,6 +710,8 @@ def render(root: Path, manifest_path: Path) -> int:
     for path, content in rendered_targets(root, manifest).items():
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
+        if path.name == "escapement-worktree" and path.parent.name == "bin":
+            path.chmod(0o755)
     return 0
 
 

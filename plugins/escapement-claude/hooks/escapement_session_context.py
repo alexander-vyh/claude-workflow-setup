@@ -5,10 +5,13 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import shlex
 import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+
+from _worktree_cli import bundled_cli_prefix
 
 _LIFECYCLE_EVENTS = {"SessionStart", "PreCompact"}
 _SUPPORTED_OUTCOMES = ("committed", "pr-opened", "merged", "merged-and-deployed")
@@ -92,7 +95,26 @@ def _resolve_outcome(repo_root: Path):
     return module.resolve(repo_root)
 
 
-def _additional_context(outcome) -> str:
+def _worktree_context(repo_root: Path) -> str:
+    prefix = bundled_cli_prefix(Path(__file__))
+    if prefix is None:
+        return (
+            "Worktree creation is unavailable: broken Escapement installation; "
+            "the bundled escapement-worktree CLI "
+            "is missing. Repair or reinstall Escapement before creating a worktree."
+        )
+    command = (
+        f"{shlex.join(prefix)} create --repo {shlex.quote(str(repo_root))} "
+        "--name <task> --branch <branch>"
+    )
+    return (
+        "Escapement owns Git worktree creation policy. Use the session-specific "
+        f"`escapement-worktree create` transaction: `{command}`. Beads remains "
+        "task state and is checked after creation when present."
+    )
+
+
+def _additional_context(outcome, repo_root: Path) -> str:
     auto_merge = str(outcome.auto_merge_on_green).lower()
     lines = [
         "Escapement owns workflow policy. Beads is the task-state system only.",
@@ -103,8 +125,9 @@ def _additional_context(outcome) -> str:
         ),
         (
             "Use Beads only for work state: bd ready; bd show <id>; "
-            "bd update <id> --claim; bd close <id>; and bd worktree create."
+            "bd update <id> --claim; and bd close <id>."
         ),
+        _worktree_context(repo_root),
         (
             f"Resolved landing policy: intended_outcome={outcome.intended_outcome}; "
             f"auto_merge_on_green={auto_merge}; source={outcome.source}."
@@ -132,8 +155,9 @@ def main() -> int:
     if event not in _LIFECYCLE_EVENTS:
         return 0
 
+    repo_root = _repo_root(payload)
     try:
-        outcome = _resolve_outcome(_repo_root(payload))
+        outcome = _resolve_outcome(repo_root)
     except Exception:  # noqa: BLE001 - hook boundary must fail closed on version skew
         outcome = SimpleNamespace(
             intended_outcome="pr-opened",
@@ -150,7 +174,7 @@ def main() -> int:
                 "systemMessage": "Escapement workflow policy is active.",
                 "hookSpecificOutput": {
                     "hookEventName": event,
-                    "additionalContext": _additional_context(outcome),
+                    "additionalContext": _additional_context(outcome, repo_root),
                 },
             }
         )
