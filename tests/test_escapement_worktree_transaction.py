@@ -133,7 +133,12 @@ def _beads_env(
             }
         )
     if replace is not None:
-        env["REPLACE_TARGET"] = str(replace)
+        env.update(
+            {
+                "REPLACE_TARGET": str(replace),
+                "PRIMARY_CWD": str(scenario.primary),
+            }
+        )
     if broken is not None:
         mode, target = broken
         env.update({"BROKEN_BD_MODE": mode, "BROKEN_BD_CWD": str(target)})
