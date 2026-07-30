@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import json
 import os
-import re
-import shlex
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+from worktree_policy_oracle import direct_creation_commands
 
 
 HOOK = Path(__file__).resolve().parents[1] / "escapement_session_context.py"
@@ -46,58 +46,6 @@ LEGACY_ENTRYPOINTS = (
     "cake-worktree",
     ".agents/worktree-entrypoint",
 )
-_CODE_SPAN_RE = re.compile(r"`([^`\n]+)`")
-_GIT_VALUE_OPTIONS = frozenset(
-    {"-C", "-c", "--git-dir", "--work-tree", "--git-common-dir", "--namespace"}
-)
-_BD_VALUE_OPTIONS = frozenset(("-C", "--directory"))
-
-
-def _skip_value_options(tokens: list[str], options: frozenset[str]) -> int:
-    index = 1
-    while index < len(tokens):
-        token = tokens[index]
-        if token in options:
-            index += 2
-            continue
-        if any(token.startswith(option + "=") for option in options):
-            index += 1
-            continue
-        if token.startswith("-C") and token != "-C":
-            index += 1
-            continue
-        if token.startswith("-"):
-            index += 1
-            continue
-        break
-    return index
-
-
-def _is_direct_creation(command: str) -> bool:
-    try:
-        tokens = shlex.split(command)
-    except ValueError:
-        return False
-    if not tokens:
-        return False
-    executable = Path(tokens[0]).name
-    if executable == "git":
-        index = _skip_value_options(tokens, _GIT_VALUE_OPTIONS)
-        return tokens[index : index + 2] == ["worktree", "add"]
-    if executable == "bd":
-        index = _skip_value_options(tokens, _BD_VALUE_OPTIONS)
-        return tokens[index : index + 2] == ["worktree", "create"]
-    return False
-
-
-def _direct_creation_commands(text: str) -> list[str]:
-    candidates = _CODE_SPAN_RE.findall(text)
-    candidates.extend(
-        line.strip().removeprefix("$").strip()
-        for line in text.splitlines()
-        if line.strip().removeprefix("$").strip().startswith(("git ", "bd "))
-    )
-    return [candidate for candidate in candidates if _is_direct_creation(candidate)]
 
 
 def _run(
@@ -400,7 +348,7 @@ def test_packaged_context_uses_only_its_own_bundled_cli(
     else:
         assert "broken Escapement installation" in context
         assert "escapement-worktree" in context
-        assert not _direct_creation_commands(context)
+        assert not direct_creation_commands(context)
 
 
 def test_every_active_policy_surface_names_generic_creation_without_bypass() -> None:
@@ -416,7 +364,7 @@ def test_every_active_policy_surface_names_generic_creation_without_bypass() -> 
         )
         retained = [term for term in LEGACY_ENTRYPOINTS if term in policy]
         assert not retained, f"{path} retains legacy entrypoint policy: {retained}"
-        direct_creation = _direct_creation_commands(policy)
+        direct_creation = direct_creation_commands(policy)
         assert not direct_creation, (
             f"{path} retains direct Git/Beads creation commands: {direct_creation}"
         )

@@ -29,12 +29,15 @@ TEST ORACLE BRIEF
      colliding — the opposite of the goal) -> rejected by the real-git
      linked-worktree control.
    - always-append the steer -> rejected by the solo-session negative control.
+   - presenting `<injected-bundled-cli-path>` as executable concrete guidance
+     -> rejected unless it references the concrete SessionStart command.
 4. Named fragile implementation: `collision = len(read_checkouts) >= 2`.
    Defeated by test_different_worktree_root_no_collision and
    test_stale_peer_not_live.
 5. Negative controls: different worktree_root; stale peer heartbeat; solo session.
-6. Positive controls: two live same-root sessions -> peer returned; a blocked
-   Stop in that collision -> block message contains `escapement-worktree create`.
+6. Positive controls: two live same-root sessions -> peer returned; blocked
+   Stops in a shared main or shared linked-worktree root contain
+   `escapement-worktree create`.
 7. Final outcome verification: this file green + test_session_watermark.py +
    test_stop_messages.py green (no SessionStart / Stop-message regression).
 
