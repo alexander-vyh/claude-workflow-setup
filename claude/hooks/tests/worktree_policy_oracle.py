@@ -20,6 +20,13 @@ _HTML_CODE_RE = re.compile(r"<code\b[^>]*>(.*?)</code>", re.DOTALL | re.IGNORECA
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _ENV_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 _SHELL_SEPARATOR_CHARS = frozenset(";&|\n")
+_SEPARATOR_SENTINELS = {
+    separator: chr(0xE000 + index)
+    for index, separator in enumerate(sorted(_SHELL_SEPARATOR_CHARS))
+}
+_SENTINEL_RESTORE = str.maketrans(
+    {sentinel: separator for separator, sentinel in _SEPARATOR_SENTINELS.items()}
+)
 _GIT_VALUE_OPTIONS = frozenset(
     {"-C", "-c", "--git-dir", "--work-tree", "--git-common-dir", "--namespace"}
 )
@@ -63,9 +70,50 @@ def extract_code_candidates(text: str) -> list[str]:
     return list(dict.fromkeys(candidate for candidate in candidates if candidate))
 
 
+def _protect_quoted_or_escaped_separators(command: str) -> str:
+    protected: list[str] = []
+    quote: str | None = None
+    index = 0
+    while index < len(command):
+        char = command[index]
+        if quote == "'":
+            if char == "'":
+                quote = None
+                protected.append(char)
+            else:
+                protected.append(_SEPARATOR_SENTINELS.get(char, char))
+            index += 1
+            continue
+        if char == "\\":
+            if index + 1 < len(command):
+                escaped = command[index + 1]
+                if escaped in _SHELL_SEPARATOR_CHARS:
+                    protected.append(_SEPARATOR_SENTINELS[escaped])
+                else:
+                    protected.extend((char, escaped))
+                index += 2
+            else:
+                protected.append(char)
+                index += 1
+            continue
+        if char == quote:
+            quote = None
+            protected.append(char)
+        elif char in {"'", '"'} and quote is None:
+            quote = char
+            protected.append(char)
+        elif quote is not None and char in _SHELL_SEPARATOR_CHARS:
+            protected.append(_SEPARATOR_SENTINELS[char])
+        else:
+            protected.append(char)
+        index += 1
+    return "".join(protected)
+
+
 def _shell_segments(command: str) -> list[list[str]]:
     try:
-        lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|\n")
+        protected = _protect_quoted_or_escaped_separators(command)
+        lexer = shlex.shlex(protected, posix=True, punctuation_chars=";&|\n")
         lexer.whitespace = " \t\r"
         lexer.whitespace_split = True
         lexer.commenters = "#"
@@ -79,7 +127,7 @@ def _shell_segments(command: str) -> list[list[str]]:
             if segments[-1]:
                 segments.append([])
             continue
-        segments[-1].append(token)
+        segments[-1].append(token.translate(_SENTINEL_RESTORE))
     return [segment for segment in segments if segment]
 
 

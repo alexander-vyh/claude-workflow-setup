@@ -107,6 +107,21 @@ def test_direct_creation_oracle_preserves_quoted_multiline_arguments(
     assert not direct_creation_commands(surface)
 
 
+@pytest.mark.parametrize(
+    "surface",
+    (
+        "```bash\nprintf '%s' '&&' git -C /repo worktree add /tmp/task\n```",
+        '<code>printf "%s" ";\n" bd --directory /repo worktree create /tmp/task</code>',
+        "```bash\nprintf '%s' \\;\\; git -C /repo worktree add /tmp/task\n```",
+        "<code>printf '%s' \\&\\& bd --directory /repo worktree create /tmp/task</code>",
+    ),
+)
+def test_direct_creation_oracle_preserves_quoted_and_escaped_separator_runs(
+    surface: str,
+) -> None:
+    assert not direct_creation_commands(surface)
+
+
 def _run_payload(payload: dict) -> tuple[int, dict, str]:
     stdout = io.StringIO()
     with (
