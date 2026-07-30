@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -104,8 +105,8 @@ def _git(root: Path, *args: str) -> None:
 
 
 def _init_stale_policy_worktree(tmp_path: Path) -> Path:
-    primary = tmp_path / "primary"
-    sibling = tmp_path / "sibling"
+    primary = tmp_path / "authority-checkout-7f3a"
+    sibling = tmp_path / "agent-worktree-c91d"
     origin = tmp_path / "origin.git"
     primary.mkdir()
     _git(primary, "init", "--initial-branch=main")
@@ -115,6 +116,7 @@ def _init_stale_policy_worktree(tmp_path: Path) -> Path:
         primary,
         {"intended_outcome": "merged", "auto_merge_on_green": True},
     )
+    (primary / ".gitignore").write_text(".worktrees/\n", encoding="utf-8")
     _git(primary, "add", ".")
     _git(primary, "commit", "-m", "primary policy")
     subprocess.run(
@@ -285,6 +287,50 @@ def test_default_branch_policy_wins_over_stale_worktree_policy(tmp_path: Path) -
     assert "intended_outcome=merged" in context
     assert "auto_merge_on_green=true" in context
     assert "source=declared-default-branch" in context
+
+
+def test_linked_worktree_context_emits_an_executable_primary_checkout_command(
+    tmp_path: Path,
+) -> None:
+    sibling = _init_stale_policy_worktree(tmp_path)
+    primary = tmp_path / "authority-checkout-7f3a"
+
+    context, _ = _context(
+        _run(sibling, {"hook_event_name": "SessionStart", "cwd": str(sibling)})
+    )
+
+    marker = "transaction: `"
+    command = context.split(marker, 1)[1].split("`", 1)[0]
+    command = command.replace("<task>", "context-linked").replace(
+        "<branch>", "probe/context-linked"
+    )
+    result = subprocess.run(
+        shlex.split(command),
+        cwd=sibling,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert f"--repo {primary}" in command
+    assert result.returncode == 0, result.stderr
+    created = primary / ".worktrees" / "context-linked"
+    assert (
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(created),
+                "rev-parse",
+                "--path-format=absolute",
+                "--git-common-dir",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        == str(primary / ".git")
+    )
 
 
 def test_precompact_reinjects_the_same_authoritative_contract(tmp_path: Path) -> None:

@@ -405,6 +405,7 @@ def _git_proxy(
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 args = sys.argv[1:]
 mode = os.environ["PROXY_MODE"]
@@ -413,6 +414,26 @@ if mode == "cleanup" and (
     or ("update-ref" in args and "-d" in args)
 ):
     raise SystemExit(43)
+if mode == "external-branch":
+    marker = Path(os.environ["EXTERNAL_BRANCH_MARKER"])
+    if "worktree" in args and "add" in args and "-b" in args and not marker.exists():
+        branch = args[args.index("-b") + 1]
+        source = args[-1]
+        subprocess.run(
+            [
+                os.environ["REAL_GIT"],
+                "-C",
+                args[args.index("-C") + 1],
+                "update-ref",
+                f"refs/heads/{branch}",
+                source,
+            ],
+            check=True,
+        )
+        marker.touch()
+    elif "update-ref" in args and args[-1] == "" and not marker.exists():
+        subprocess.run([os.environ["REAL_GIT"], *args[:-1]], check=True)
+        marker.touch()
 if (
     mode == "branch-inspection"
     and "rev-parse" in args
@@ -435,6 +456,8 @@ raise SystemExit(result.returncode)
     }
     if inspection_ref is not None:
         env["INSPECTION_REF"] = f"{inspection_ref}^{{commit}}"
+    if mode == "external-branch":
+        env["EXTERNAL_BRANCH_MARKER"] = str(tmp_path / "external-branch-created")
     return env
 
 
@@ -531,6 +554,33 @@ def test_partial_git_creation_failure_is_inspected_and_cleaned(tmp_path: Path) -
         ).returncode
         != 0
     )
+
+
+def test_same_sha_branch_created_by_another_writer_survives_failed_creation(
+    tmp_path: Path,
+) -> None:
+    scenario = make_remote_scenario(tmp_path)
+    target = scenario.primary / ".worktrees" / "external-winner"
+    branch = "feature/external-winner"
+    branch_ref = f"refs/heads/{branch}"
+    env = _git_proxy(tmp_path, "external-branch")
+
+    result = run_cli(
+        scenario.primary,
+        "create",
+        "--repo",
+        str(scenario.primary),
+        "--name",
+        "external-winner",
+        "--branch",
+        branch,
+        env=env,
+    )
+
+    assert result.returncode != 0
+    assert Path(env["EXTERNAL_BRANCH_MARKER"]).exists()
+    assert not target.exists()
+    assert rev(scenario.primary, branch_ref) == scenario.remote_head_sha
 
 
 def test_cleanup_failure_reports_exact_residue(tmp_path: Path) -> None:

@@ -366,17 +366,22 @@ def create_worktree(request: WorktreeRequest) -> CreationResult:
             else resolve_default_source(ctx)
         )
         root_beads = beads_context(ctx.primary)
-        attempted_creation = False
+        branch_created = False
         try:
-            attempted_creation = True
+            git(
+                ctx,
+                "update-ref",
+                f"refs/heads/{request.branch}",
+                source.sha,
+                "",
+            )
+            branch_created = True
             git(
                 ctx,
                 "worktree",
                 "add",
-                "-b",
-                request.branch,
                 str(target),
-                source.sha,
+                request.branch,
             )
             beads_verified = verify_created_worktree(
                 ctx, request, target, source, root_beads
@@ -391,7 +396,7 @@ def create_worktree(request: WorktreeRequest) -> CreationResult:
                 rollback_created_artifacts(
                     ctx, target, request.branch, source.sha
                 )
-                if attempted_creation
+                if branch_created
                 else []
             )
             if residue:

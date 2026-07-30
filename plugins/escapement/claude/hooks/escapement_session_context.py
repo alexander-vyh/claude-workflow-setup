@@ -58,7 +58,37 @@ def _repo_root(payload: dict) -> Path:
     except (OSError, subprocess.TimeoutExpired):
         return start
     root = result.stdout.strip()
-    return Path(root) if result.returncode == 0 and root else start
+    top_level = Path(root) if result.returncode == 0 and root else start
+    try:
+        common_result = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(start),
+                "rev-parse",
+                "--path-format=absolute",
+                "--git-common-dir",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return top_level
+    common_text = common_result.stdout.strip()
+    if common_result.returncode != 0 or not common_text:
+        return top_level
+    common_dir = Path(common_text).resolve()
+    primary = common_dir.parent
+    primary_git = primary / ".git"
+    if (
+        common_dir.name == ".git"
+        and primary_git.is_dir()
+        and not primary_git.is_symlink()
+    ):
+        return primary
+    return top_level
 
 
 def _resolver_path() -> Path | None:
