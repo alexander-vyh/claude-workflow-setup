@@ -642,7 +642,11 @@ def test_branch_inspection_failure_reports_surviving_ref_residue(
     assert result.returncode != 0
     assert not target.exists()
     assert rev(scenario.primary, branch_ref) == scenario.remote_head_sha
-    assert branch_ref in result.stderr
+    rollback_label = "rollback residue: "
+    assert rollback_label in result.stderr
+    rollback_residue = result.stderr.split(rollback_label, 1)[1]
+    assert f"failed to inspect branch {branch_ref}:" in rollback_residue
+    assert "simulated rollback branch inspection failure" in rollback_residue
     assert "Traceback" not in result.stderr
 
 
