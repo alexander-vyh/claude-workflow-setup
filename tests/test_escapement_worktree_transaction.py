@@ -394,22 +394,114 @@ def test_displaced_target_survives_guarded_rollback(tmp_path: Path) -> None:
     )
 
 
-def _git_proxy(tmp_path: Path, mode: str) -> dict[str, str]:
+def _git_proxy(
+    tmp_path: Path, mode: str, *, inspection_ref: str | None = None
+) -> dict[str, str]:
     proxy_dir = tmp_path / f"git-{mode}"
     proxy_dir.mkdir()
     proxy = proxy_dir / "git"
     proxy.write_text(
-        "#!/usr/bin/env python3\nimport os, subprocess, sys\nargs=sys.argv[1:]\n"
-        "if os.environ['PROXY_MODE'] == 'cleanup' and (('worktree' in args and 'remove' in args) or ('update-ref' in args and '-d' in args)): raise SystemExit(43)\n"
-        "r=subprocess.run([os.environ['REAL_GIT'], *args])\n"
-        "if os.environ['PROXY_MODE'] == 'partial' and 'worktree' in args and 'add' in args: raise SystemExit(42)\nraise SystemExit(r.returncode)\n",
+        """#!/usr/bin/env python3
+import os
+import subprocess
+import sys
+
+args = sys.argv[1:]
+mode = os.environ["PROXY_MODE"]
+if mode == "cleanup" and (
+    ("worktree" in args and "remove" in args)
+    or ("update-ref" in args and "-d" in args)
+):
+    raise SystemExit(43)
+if (
+    mode == "branch-inspection"
+    and "rev-parse" in args
+    and args[-1] == os.environ["INSPECTION_REF"]
+):
+    print("simulated rollback branch inspection failure", file=sys.stderr)
+    raise SystemExit(74)
+result = subprocess.run([os.environ["REAL_GIT"], *args])
+if mode == "partial" and "worktree" in args and "add" in args:
+    raise SystemExit(42)
+raise SystemExit(result.returncode)
+""",
+        encoding="utf-8",
+    )
+    proxy.chmod(0o755)
+    env = {
+        "PATH": f"{proxy_dir}{os.pathsep}{os.environ['PATH']}",
+        "REAL_GIT": shutil.which("git") or "git",
+        "PROXY_MODE": mode,
+    }
+    if inspection_ref is not None:
+        env["INSPECTION_REF"] = f"{inspection_ref}^{{commit}}"
+    return env
+
+
+def _verification_displacement_env(
+    tmp_path: Path,
+    scenario,
+    target: Path,
+    replacement: Path,
+) -> dict[str, str]:
+    proxy_dir = tmp_path / "verification-displacement-git"
+    proxy_dir.mkdir()
+    proxy = proxy_dir / "git"
+    proxy.write_text(
+        """#!/usr/bin/env python3
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+args = sys.argv[1:]
+result = subprocess.run(
+    [os.environ["REAL_GIT"], *args],
+    text=True,
+    capture_output=True,
+)
+sys.stdout.write(result.stdout)
+sys.stderr.write(result.stderr)
+target = Path(os.environ["DISPLACE_TARGET"])
+if (
+    result.returncode == 0
+    and args[:2] == ["-C", str(target)]
+    and args[2:] == [
+        "rev-parse",
+        "--path-format=absolute",
+        "--git-common-dir",
+    ]
+):
+    removal = subprocess.run(
+        [
+            os.environ["REAL_GIT"],
+            "-C",
+            os.environ["PRIMARY_CWD"],
+            "worktree",
+            "remove",
+            "--force",
+            str(target),
+        ],
+        text=True,
+        capture_output=True,
+    )
+    if removal.returncode:
+        sys.stderr.write(removal.stderr or removal.stdout)
+        raise SystemExit(removal.returncode)
+    target.symlink_to(Path(os.environ["REPLACEMENT_TARGET"]), target_is_directory=True)
+    Path(os.environ["DISPLACEMENT_MARKER"]).touch()
+raise SystemExit(result.returncode)
+""",
         encoding="utf-8",
     )
     proxy.chmod(0o755)
     return {
         "PATH": f"{proxy_dir}{os.pathsep}{os.environ['PATH']}",
         "REAL_GIT": shutil.which("git") or "git",
-        "PROXY_MODE": mode,
+        "PRIMARY_CWD": str(scenario.primary),
+        "DISPLACE_TARGET": str(target),
+        "REPLACEMENT_TARGET": str(replacement),
+        "DISPLACEMENT_MARKER": str(tmp_path / "verification-displaced"),
     }
 
 
@@ -476,6 +568,82 @@ def test_cleanup_failure_reports_exact_residue(tmp_path: Path) -> None:
         ).returncode
         == 0
     )
+
+
+def test_verification_resolution_race_uses_public_error_and_guarded_cleanup(
+    tmp_path: Path,
+) -> None:
+    scenario = make_remote_scenario(tmp_path)
+    target = scenario.primary / ".worktrees" / "resolution-race"
+    replacement = tmp_path / "unrelated-missing-replacement"
+    branch = "feature/resolution-race"
+    branch_ref = f"refs/heads/{branch}"
+    env = _verification_displacement_env(tmp_path, scenario, target, replacement)
+
+    result = run_cli(
+        scenario.primary,
+        "create",
+        "--repo",
+        str(scenario.primary),
+        "--name",
+        "resolution-race",
+        "--branch",
+        branch,
+        env=env,
+    )
+
+    assert Path(env["DISPLACEMENT_MARKER"]).exists()
+    assert result.returncode != 0
+    assert result.stderr.startswith("escapement-worktree: "), result.stderr
+    assert "Traceback" not in result.stderr
+    assert str(target) in result.stderr
+    assert target.is_symlink()
+    assert target.readlink() == replacement
+    assert not replacement.exists()
+    assert (
+        git(
+            scenario.primary,
+            "show-ref",
+            "--verify",
+            "--quiet",
+            branch_ref,
+            check=False,
+        ).returncode
+        != 0
+    )
+
+
+def test_branch_inspection_failure_reports_surviving_ref_residue(
+    tmp_path: Path,
+) -> None:
+    scenario = make_remote_scenario(tmp_path)
+    target = scenario.primary / ".worktrees" / "branch-inspection-residue"
+    branch = "feature/branch-inspection-residue"
+    branch_ref = f"refs/heads/{branch}"
+    git_env = _git_proxy(tmp_path, "branch-inspection", inspection_ref=branch_ref)
+    beads_env = _beads_env(tmp_path, scenario, mismatch=target)
+    env = {**git_env, **beads_env}
+    env["PATH"] = (
+        f"{git_env['PATH'].split(os.pathsep, 1)[0]}{os.pathsep}{beads_env['PATH']}"
+    )
+
+    result = run_cli(
+        scenario.primary,
+        "create",
+        "--repo",
+        str(scenario.primary),
+        "--name",
+        "branch-inspection-residue",
+        "--branch",
+        branch,
+        env=env,
+    )
+
+    assert result.returncode != 0
+    assert not target.exists()
+    assert rev(scenario.primary, branch_ref) == scenario.remote_head_sha
+    assert branch_ref in result.stderr
+    assert "Traceback" not in result.stderr
 
 
 def test_repository_wide_transaction_lock_serializes_source_resolution(

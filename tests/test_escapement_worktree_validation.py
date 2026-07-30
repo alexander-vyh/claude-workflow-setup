@@ -274,6 +274,62 @@ def test_rejects_preexisting_branch_without_moving_it(tmp_path: Path) -> None:
     assert not (scenario.primary / ".worktrees" / "existing").exists()
 
 
+def test_branch_inspection_error_fails_before_creation_and_preserves_ref(
+    tmp_path: Path,
+) -> None:
+    scenario = make_remote_scenario(tmp_path)
+    branch = "feature/inspection-fails"
+    branch_ref = f"refs/heads/{branch}"
+    before = _create_branch(scenario.primary, branch)
+    creation_attempted = tmp_path / "creation-attempted"
+    proxy_dir = tmp_path / "branch-inspection-git"
+    proxy_dir.mkdir()
+    proxy = proxy_dir / "git"
+    proxy.write_text(
+        """#!/usr/bin/env python3
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+args = sys.argv[1:]
+if "show-ref" in args and args[-1] == os.environ["INSPECTION_REF"]:
+    print("simulated branch inspection failure", file=sys.stderr)
+    raise SystemExit(74)
+if "worktree" in args and "add" in args:
+    Path(os.environ["CREATION_ATTEMPTED"]).touch()
+result = subprocess.run([os.environ["REAL_GIT"], *args])
+raise SystemExit(result.returncode)
+""",
+        encoding="utf-8",
+    )
+    proxy.chmod(0o755)
+
+    result = run_cli(
+        scenario.primary,
+        "create",
+        "--repo",
+        str(scenario.primary),
+        "--name",
+        "inspection-fails",
+        "--branch",
+        branch,
+        "--source",
+        "HEAD",
+        env={
+            "PATH": f"{proxy_dir}{os.pathsep}{os.environ['PATH']}",
+            "REAL_GIT": shutil.which("git") or "git",
+            "INSPECTION_REF": branch_ref,
+            "CREATION_ATTEMPTED": str(creation_attempted),
+        },
+    )
+
+    assert result.returncode != 0
+    assert not creation_attempted.exists(), result.stderr
+    assert rev(scenario.primary, branch_ref) == before
+    assert not (scenario.primary / ".worktrees" / "inspection-fails").exists()
+
+
 def test_plain_git_repository_does_not_require_beads(tmp_path: Path) -> None:
     scenario = make_remote_scenario(tmp_path)
     (scenario.primary / "staged-user-state.txt").write_text(
