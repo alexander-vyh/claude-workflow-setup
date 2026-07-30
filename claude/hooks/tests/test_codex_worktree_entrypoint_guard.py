@@ -6,6 +6,7 @@ import importlib.util
 import io
 import json
 import hashlib
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -13,6 +14,15 @@ from unittest.mock import patch
 
 
 HOOK_PATH = Path(__file__).resolve().parents[1] / "beads_worktree_guard.py"
+SOURCE_CLI = Path(__file__).resolve().parents[3] / "bin" / "escapement-worktree"
+PLUGIN_HOOK = (
+    Path(__file__).resolve().parents[3]
+    / "plugins"
+    / "escapement"
+    / "claude"
+    / "hooks"
+    / "beads_worktree_guard.py"
+)
 PLUGIN_CLI = (
     Path(__file__).resolve().parents[3]
     / "plugins"
@@ -22,9 +32,9 @@ PLUGIN_CLI = (
 )
 
 
-def _guard():
+def _guard(hook_path: Path = HOOK_PATH):
     spec = importlib.util.spec_from_file_location(
-        "codex_worktree_entrypoint_guard", HOOK_PATH
+        "codex_worktree_entrypoint_guard", hook_path
     )
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
@@ -46,8 +56,10 @@ def _repo(path: Path) -> Path:
     return path
 
 
-def _run_codex(command: str) -> tuple[int, dict]:
-    gate = _guard()
+def _run_codex(
+    command: str, *, hook_path: Path = HOOK_PATH
+) -> tuple[int, dict]:
+    gate = _guard(hook_path)
     payload = {
         "hook_event_name": "PreToolUse",
         "tool_name": "Bash",
@@ -66,6 +78,30 @@ def _run_codex(command: str) -> tuple[int, dict]:
     return code or 0, json.loads(
         captured.getvalue()
     ) if captured.getvalue().strip() else {}
+
+
+def _assert_repair(
+    output: dict,
+    *,
+    cli: Path,
+    repo: Path,
+    name: str,
+    branch: str,
+) -> None:
+    reason = output["hookSpecificOutput"]["permissionDecisionReason"]
+    command = reason.rsplit("`", 2)[1]
+    assert shlex.split(command) == [
+        "python3",
+        "-B",
+        str(cli),
+        "create",
+        "--repo",
+        str(repo),
+        "--name",
+        name,
+        "--branch",
+        branch,
+    ]
 
 
 def _git_state(repo: Path) -> tuple[str, str, tuple[tuple[str, str, str], ...]]:
@@ -114,6 +150,13 @@ def test_codex_real_direct_creation_is_denied(tmp_path: Path, monkeypatch) -> No
     code, output = _run_codex("git worktree add .worktrees/x -b feature/x")
     assert code == 0
     assert output["hookSpecificOutput"]["permissionDecision"] == "deny"
+    _assert_repair(
+        output,
+        cli=SOURCE_CLI,
+        repo=repo,
+        name="x",
+        branch="feature/x",
+    )
     assert _git_state(repo) == before
 
 
@@ -129,8 +172,19 @@ def test_codex_repair_names_existing_bundled_cli(tmp_path: Path, monkeypatch) ->
     repo = _repo(tmp_path / "repo")
     monkeypatch.chdir(repo)
     before = _git_state(repo)
-    _, output = _run_codex("bd worktree create .worktrees/x --branch feature/x")
-    reason = output["hookSpecificOutput"]["permissionDecisionReason"]
-    assert PLUGIN_CLI.is_file(), "rendered Codex plugin must contain the bundled CLI"
-    assert f"{PLUGIN_CLI} create" in reason
+    assert PLUGIN_CLI.is_file(), (
+        "Task 6 must render the bundled CLI before this packaging oracle can run"
+    )
+    assert PLUGIN_HOOK.is_file(), "rendered Codex plugin must contain the guard"
+    _, output = _run_codex(
+        "bd worktree create .worktrees/x --branch feature/x",
+        hook_path=PLUGIN_HOOK,
+    )
+    _assert_repair(
+        output,
+        cli=PLUGIN_CLI,
+        repo=repo,
+        name="x",
+        branch="feature/x",
+    )
     assert _git_state(repo) == before
