@@ -10,23 +10,18 @@ primary, docs/plans/ legacy fallback), and surfaces four things as an "ask":
 It is advisory only — always exit 0 (ask or silent allow), never deny.
 
 Run from anywhere with:
-  python -m pytest ~/.claude/hooks/tests/test_discovery_close_gate.py -v
+  python -m pytest claude/hooks/tests/test_discovery_close_gate.py -v
 """
 
 import importlib
 import io
 import json
 import sys
-import time
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
-
-_hooks_dir = Path.home() / ".claude" / "hooks"
-if not _hooks_dir.exists():
-    pytest.skip("~/.claude/hooks/ not found", allow_module_level=True)
+_hooks_dir = Path(__file__).resolve().parents[1]
 
 if str(_hooks_dir) not in sys.path:
     sys.path.insert(0, str(_hooks_dir))

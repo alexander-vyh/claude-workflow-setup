@@ -281,7 +281,7 @@ The `rules/` directory encodes strong opinions:
 - **`agent-teams-default.md`** — `TeamCreate` + named agents for anything multi-step
 - **`outcome-ownership.md`** — done = verified end-to-end, not "my change compiles"
 - **`molecule-awareness.md`** — surface active molecules on every session start
-- **`beads-worktree-integration.md`** — `bd worktree create` instead of `git worktree add`
+- **`worktree-discipline.md`** — the session-injected `escapement-worktree create` transaction
 - **`never-suppress.md`** — no `# noqa`, no `--no-verify`, no test downgrades — fix the underlying issue
 - **`serena-first.md`** — symbol tools over full-file Read when Serena is onboarded
 

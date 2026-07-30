@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+from worktree_policy_oracle import direct_creation_commands
 
 
 HOOK = Path(__file__).resolve().parents[1] / "escapement_session_context.py"
@@ -23,9 +26,27 @@ TRACKER_COMMANDS = (
     "bd show <id>",
     "bd update <id> --claim",
     "bd close <id>",
-    "bd worktree create",
 )
+WORKTREE_CLI = ROOT / "bin" / "escapement-worktree"
 BEADS_POLICY_PHRASES = ("bd prime", "stealth mode", "no git operations")
+ACTIVE_WORKTREE_POLICY_FILES = (
+    Path("agent-surfaces/onboarding/beads.md"),
+    Path("claude/rules/worktree-discipline.md"),
+    Path("claude/rules/agent-teams-default.md"),
+    Path("claude/skills/beads-worktree/SKILL.md"),
+    Path("claude/skills/beads-execution/SKILL.md"),
+    Path(".agents/skills/beads-execution/SKILL.md"),
+    Path("claude/hooks/escapement_session_context.py"),
+    Path("claude/hooks/root_checkout_guard.py"),
+    Path("harness/bin/session_isolation.py"),
+    Path("harness/README.md"),
+    Path("README.md"),
+    Path("docs/deck.html"),
+)
+LEGACY_ENTRYPOINTS = (
+    "cake-worktree",
+    ".agents/worktree-entrypoint",
+)
 
 
 def _run(
@@ -84,8 +105,8 @@ def _git(root: Path, *args: str) -> None:
 
 
 def _init_stale_policy_worktree(tmp_path: Path) -> Path:
-    primary = tmp_path / "primary"
-    sibling = tmp_path / "sibling"
+    primary = tmp_path / "authority-checkout-7f3a"
+    sibling = tmp_path / "agent-worktree-c91d"
     origin = tmp_path / "origin.git"
     primary.mkdir()
     _git(primary, "init", "--initial-branch=main")
@@ -95,6 +116,7 @@ def _init_stale_policy_worktree(tmp_path: Path) -> Path:
         primary,
         {"intended_outcome": "merged", "auto_merge_on_green": True},
     )
+    (primary / ".gitignore").write_text(".worktrees/\n", encoding="utf-8")
     _git(primary, "add", ".")
     _git(primary, "commit", "-m", "primary policy")
     subprocess.run(
@@ -139,6 +161,11 @@ def test_missing_policy_defaults_to_branch_push_pr_and_offers_configuration(
     assert "merged-and-deployed" in context
     assert "offer" in context.lower()
     assert all(command in context for command in TRACKER_COMMANDS)
+    assert f"python3 -B {WORKTREE_CLI} create" in context
+    assert f"--repo {tmp_path}" in context
+    assert "--name <task>" in context
+    assert "--branch <branch>" in context
+    assert "bd worktree" not in context.lower()
     assert all(phrase not in context.lower() for phrase in BEADS_POLICY_PHRASES)
 
 
@@ -262,6 +289,50 @@ def test_default_branch_policy_wins_over_stale_worktree_policy(tmp_path: Path) -
     assert "source=declared-default-branch" in context
 
 
+def test_linked_worktree_context_emits_an_executable_primary_checkout_command(
+    tmp_path: Path,
+) -> None:
+    sibling = _init_stale_policy_worktree(tmp_path)
+    primary = tmp_path / "authority-checkout-7f3a"
+
+    context, _ = _context(
+        _run(sibling, {"hook_event_name": "SessionStart", "cwd": str(sibling)})
+    )
+
+    marker = "transaction: `"
+    command = context.split(marker, 1)[1].split("`", 1)[0]
+    command = command.replace("<task>", "context-linked").replace(
+        "<branch>", "probe/context-linked"
+    )
+    result = subprocess.run(
+        shlex.split(command),
+        cwd=sibling,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert f"--repo {primary}" in command
+    assert result.returncode == 0, result.stderr
+    created = primary / ".worktrees" / "context-linked"
+    assert (
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(created),
+                "rev-parse",
+                "--path-format=absolute",
+                "--git-common-dir",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        == str(primary / ".git")
+    )
+
+
 def test_precompact_reinjects_the_same_authoritative_contract(tmp_path: Path) -> None:
     context, output = _context(
         _run(tmp_path, {"hookEventName": "PreCompact", "cwd": str(tmp_path)})
@@ -271,6 +342,78 @@ def test_precompact_reinjects_the_same_authoritative_contract(tmp_path: Path) ->
     assert "Escapement owns workflow policy" in context
     assert "pull request" in context
     assert all(command in context for command in TRACKER_COMMANDS)
+    assert f"python3 -B {WORKTREE_CLI} create" in context
+    assert "bd worktree" not in context.lower()
+
+
+@pytest.mark.parametrize(
+    "hook_parts",
+    (("claude", "hooks"), ("hooks",)),
+    ids=("nested-plugin", "flat-plugin"),
+)
+@pytest.mark.parametrize(
+    "install_cli",
+    (True, False),
+    ids=("cli-present", "cli-missing"),
+)
+def test_packaged_context_uses_only_its_own_bundled_cli(
+    tmp_path: Path,
+    hook_parts: tuple[str, ...],
+    install_cli: bool,
+) -> None:
+    plugin = tmp_path / "plugin"
+    hook_dir = plugin.joinpath(*hook_parts)
+    cli = plugin / "bin" / "escapement-worktree"
+    resolver_dir = plugin / "harness" / "bin"
+    hook_dir.mkdir(parents=True)
+    resolver_dir.mkdir(parents=True)
+    packaged_hook = hook_dir / HOOK.name
+    shutil.copyfile(HOOK, packaged_hook)
+    shutil.copyfile(HOOK.parent / "_worktree_cli.py", hook_dir / "_worktree_cli.py")
+    shutil.copyfile(ROOT / "harness" / "bin" / "repo_outcome.py", resolver_dir / "repo_outcome.py")
+    if install_cli:
+        cli.parent.mkdir()
+        shutil.copyfile(WORKTREE_CLI, cli)
+
+    context, _ = _context(
+        subprocess.run(
+            [sys.executable, str(packaged_hook)],
+            cwd=tmp_path,
+            input=json.dumps(
+                {"hook_event_name": "SessionStart", "cwd": str(tmp_path)}
+            ),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    )
+
+    if install_cli:
+        assert f"python3 -B {cli} create" in context
+        assert str(WORKTREE_CLI) not in context
+    else:
+        assert "broken Escapement installation" in context
+        assert "escapement-worktree" in context
+        assert not direct_creation_commands(context)
+
+
+def test_every_active_policy_surface_names_generic_creation_without_bypass() -> None:
+    missing = [
+        str(path) for path in ACTIVE_WORKTREE_POLICY_FILES if not (ROOT / path).is_file()
+    ]
+    assert not missing, f"active worktree policy surfaces missing: {missing}"
+
+    for path in ACTIVE_WORKTREE_POLICY_FILES:
+        policy = (ROOT / path).read_text(encoding="utf-8").lower()
+        assert "escapement-worktree" in policy, (
+            f"{path} dropped the generic creation path instead of replacing old policy"
+        )
+        retained = [term for term in LEGACY_ENTRYPOINTS if term in policy]
+        assert not retained, f"{path} retains legacy entrypoint policy: {retained}"
+        direct_creation = direct_creation_commands(policy)
+        assert not direct_creation, (
+            f"{path} retains direct Git/Beads creation commands: {direct_creation}"
+        )
 
 
 def test_non_lifecycle_event_is_silent(tmp_path: Path) -> None:
@@ -302,6 +445,7 @@ def test_broken_packaged_resolver_fails_closed_with_context(tmp_path: Path) -> N
     resolver_dir.mkdir(parents=True)
     packaged_hook = hook_dir / HOOK.name
     shutil.copyfile(HOOK, packaged_hook)
+    shutil.copyfile(HOOK.parent / "_worktree_cli.py", hook_dir / "_worktree_cli.py")
     (resolver_dir / "repo_outcome.py").write_text(
         "this is not valid Python !!!\n",
         encoding="utf-8",

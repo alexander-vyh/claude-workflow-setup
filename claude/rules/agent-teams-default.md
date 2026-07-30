@@ -131,11 +131,11 @@ faster delivery = easier verification.
 ## Writer Isolation
 
 Two or more agents that will COMMIT means one worktree and branch each —
-`bd worktree create` per agent or `isolation: "worktree"` on dispatch, with the
-lead merging branches back deliberately. Prompt-level "you own these files"
-lanes are merge-planning notes, never the isolation mechanism. This applies to
-concurrent *sessions* exactly as it applies to dispatched agents — full rule:
-`worktree-discipline.md`.
+one session-injected `escapement-worktree create` transaction per agent or
+`isolation: "worktree"` on dispatch, with the lead merging branches back
+deliberately. Prompt-level "you own these files" lanes are merge-planning notes,
+never the isolation mechanism. This applies to concurrent *sessions* exactly as
+it applies to dispatched agents — full rule: `worktree-discipline.md`.
 
 ## Anti-Patterns
 

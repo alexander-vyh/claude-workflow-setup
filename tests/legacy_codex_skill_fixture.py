@@ -81,7 +81,7 @@ repo's own review template (the `adversarial-reviewer` agent / the
     ),
     (
         """**Required workflow setup:**
-- **Isolated workspace** — REQUIRED: create the worktree with `bd worktree create <path> -b <branch>`. This is a beads project; never use `git worktree add` (it leaves a broken `.beads/` skeleton — see `beads-worktree-integration.md`).
+- **Isolated workspace** — REQUIRED: use the concrete bundled `escapement-worktree create` transaction injected into session context. It verifies repository, source, location, branch, and shared Beads task state together.
 - **Code review** — use the repo's own review template (the `adversarial-reviewer` agent / the `dispatching-parallel-agents` review prompt) for the quality gate (Step 2f).
 - **Finish** — PR-only branch finish, inline in Step 4 (push + open PR; never merge to main).
 """,

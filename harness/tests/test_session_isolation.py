@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Per-session isolation: detect concurrent sessions sharing one non-isolated
-checkout and steer the blocked one to `bd worktree create` (bead e9v.4 / Move 3).
+checkout and steer the blocked one to `escapement-worktree create` (bead e9v.4 /
+Move 3).
 
 WHY THIS EXISTS
 ---------------
@@ -10,7 +11,7 @@ When two live sessions share one non-isolated checkout, session B's verify picks
 up session A's in-flight breakage -> B's red is actually A's. The 2026-06-17
 root-cause (UDE-7 / BLOCK-5) lands on: the fix is ISOLATION, not result-state
 gating. A session's finishing boundary must reflect only its own work; the repo
-already mandates `bd worktree create` (CLAUDE.md), so the harness detects the
+already mandates `escapement-worktree create` (CLAUDE.md), so the harness detects the
 collision and steers the blocked session there.
 
 TEST ORACLE BRIEF
@@ -28,12 +29,15 @@ TEST ORACLE BRIEF
      colliding — the opposite of the goal) -> rejected by the real-git
      linked-worktree control.
    - always-append the steer -> rejected by the solo-session negative control.
+   - presenting `<injected-bundled-cli-path>` as executable concrete guidance
+     -> rejected unless it references the concrete SessionStart command.
 4. Named fragile implementation: `collision = len(read_checkouts) >= 2`.
    Defeated by test_different_worktree_root_no_collision and
    test_stale_peer_not_live.
 5. Negative controls: different worktree_root; stale peer heartbeat; solo session.
-6. Positive controls: two live same-root sessions -> peer returned; a blocked
-   Stop in that collision -> block message contains `bd worktree create`.
+6. Positive controls: two live same-root sessions -> peer returned; blocked
+   Stops in a shared main or shared linked-worktree root contain
+   `escapement-worktree create`.
 7. Final outcome verification: this file green + test_session_watermark.py +
    test_stop_messages.py green (no SessionStart / Stop-message regression).
 
@@ -170,15 +174,36 @@ def test_future_skew_heartbeat_is_live() -> None:
 # ---------------------------------------------------------------------------
 # build_isolation_steer — the escape path must be named (gate-design Rule 1)
 # ---------------------------------------------------------------------------
+def _assert_placeholder_is_reference_to_concrete_sessionstart(message: str) -> None:
+    low = message.lower()
+    placeholder = "<injected-bundled-cli-path>"
+    if placeholder not in low:
+        return
+    assert "template" in low or "reference" in low, (
+        "a placeholder path must be labeled as a template/reference, not an "
+        "executable concrete command"
+    )
+    assert "sessionstart" in low and "concrete" in low, (
+        "the template must direct the agent to the concrete command emitted by "
+        "SessionStart"
+    )
+
+
 def test_steer_names_worktree_escape_path() -> None:
     peers = [_rec("B", "/work/repo", _now())]
     steer = si.build_isolation_steer(peers, "/work/repo", is_linked_worktree=False)
     low = steer.lower()
-    assert "bd worktree create" in low, "the steer must name the concrete escape command"
+    assert "escapement-worktree create" in low, (
+        "the steer must name the generic Escapement escape command"
+    )
+    assert "--repo /work/repo" in low
+    assert "--name" in low
+    assert "--branch" in low
     assert "isolat" in low, "the steer must explain it is about isolation"
     assert ("red" in low or "verif" in low), (
         "the steer must connect the collision to a possibly-not-yours red/verify"
     )
+    _assert_placeholder_is_reference_to_concrete_sessionstart(steer)
 
 
 def test_steer_distinguishes_checkout_location() -> None:
@@ -276,7 +301,7 @@ def test_detect_collision_end_to_end(tmp_path) -> None:
     peers = si.detect_collision(harness, "A", harness / "threads" / "A", now)
     assert [r["session_id"] for r in peers] == ["B"]
     steer = si.isolation_steer_for_thread(harness, "A", harness / "threads" / "A", now)
-    assert steer is not None and "bd worktree create" in steer.lower()
+    assert steer is not None and "escapement-worktree create" in steer.lower()
 
 
 def test_detect_no_peer_returns_none_steer(tmp_path) -> None:
@@ -345,10 +370,50 @@ def test_stop_block_in_collision_includes_steer(tmp_path) -> None:
     proc = _run_stop_hook(repo, harness, "ME")
     out = json.loads(proc.stdout)
     assert out["decision"] == "block"
-    assert "bd worktree create" in out["reason"].lower(), (
+    assert "escapement-worktree create" in out["reason"].lower(), (
         f"a blocked Stop in a shared-checkout collision must steer to worktree "
         f"isolation; got: {out['reason']!r}"
     )
+    assert f"--repo {toplevel}" in out["reason"]
+    assert "--name" in out["reason"]
+    assert "--branch" in out["reason"]
+    _assert_placeholder_is_reference_to_concrete_sessionstart(out["reason"])
+
+
+def test_stop_block_in_shared_linked_worktree_includes_steer(tmp_path) -> None:
+    """POSITIVE CONTROL (e2e): two live sessions sharing one linked-worktree root
+    still collide; only different linked-worktree roots are isolated."""
+    main = _make_git_repo(tmp_path)
+    linked = tmp_path / "shared-linked"
+    _git(["worktree", "add", "-q", "-b", "shared-linked", str(linked)], main)
+    identity = si.checkout_identity(str(linked))
+    assert identity is not None and identity["is_linked_worktree"] is True
+    harness = tmp_path / "harness"
+
+    def linked_identity(_args, _cwd):
+        return identity
+
+    si.write_checkout(
+        harness / "threads" / "PEER",
+        "PEER",
+        str(linked),
+        _now(),
+        identity_fn=linked_identity,
+    )
+    _seed_failing_contract(harness / "threads" / "ME")
+
+    proc = _run_stop_hook(linked, harness, "ME")
+    out = json.loads(proc.stdout)
+    reason = out["reason"]
+
+    assert out["decision"] == "block"
+    assert "isolation:" in reason.lower()
+    assert "shared linked worktree" in reason.lower()
+    assert "escapement-worktree create" in reason.lower()
+    assert f"--repo {identity['worktree_root']}" in reason
+    assert "--name" in reason
+    assert "--branch" in reason
+    _assert_placeholder_is_reference_to_concrete_sessionstart(reason)
 
 
 def test_stop_block_solo_has_no_steer(tmp_path) -> None:
@@ -361,9 +426,55 @@ def test_stop_block_solo_has_no_steer(tmp_path) -> None:
     proc = _run_stop_hook(repo, harness, "ME")
     out = json.loads(proc.stdout)
     assert out["decision"] == "block"
-    assert "bd worktree create" not in out["reason"].lower(), (
+    assert "escapement-worktree create" not in out["reason"].lower(), (
         f"a solo session must not be steered to a worktree; got: {out['reason']!r}"
     )
+    assert "isolation:" not in out["reason"].lower()
+
+
+@pytest.mark.parametrize(
+    "peer_kind",
+    ("stale-same-checkout", "live-isolated-worktree"),
+)
+def test_stop_block_noncollision_peer_has_no_steer(tmp_path, peer_kind) -> None:
+    """Final-output negatives: only a live peer in this exact checkout gets a steer."""
+    repo = _make_git_repo(tmp_path)
+    harness = tmp_path / "harness"
+    now = _now()
+    toplevel = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        cwd=str(repo),
+        stdout=subprocess.PIPE,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    common_dir = str(repo / ".git")
+    if peer_kind == "stale-same-checkout":
+        peer = _rec(
+            "PEER",
+            toplevel,
+            now - _dt.timedelta(seconds=si.LIVENESS_WINDOW_SECONDS + 1),
+            git_common_dir=common_dir,
+        )
+    else:
+        peer = _rec(
+            "PEER",
+            str(tmp_path / "other-linked-worktree"),
+            now,
+            git_common_dir=common_dir,
+            is_linked_worktree=True,
+        )
+    peer_dir = harness / "threads" / "PEER"
+    peer_dir.mkdir(parents=True)
+    (peer_dir / "checkout.json").write_text(json.dumps(peer), encoding="utf-8")
+    _seed_failing_contract(harness / "threads" / "ME")
+
+    proc = _run_stop_hook(repo, harness, "ME")
+    out = json.loads(proc.stdout)
+
+    assert out["decision"] == "block"
+    assert "escapement-worktree" not in out["reason"].lower()
+    assert "isolation:" not in out["reason"].lower()
 
 
 if __name__ == "__main__":

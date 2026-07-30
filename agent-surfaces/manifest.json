@@ -160,7 +160,7 @@
     },
     {
       "id": "beads_worktree_guard",
-      "description": "Route ordinary literal Git and Beads worktree creation through each repository's declared managed entrypoint.",
+      "description": "Route literal Git and Beads worktree creation through Escapement-owned worktree policy.",
       "source": "claude/hooks/beads_worktree_guard.py",
       "hosts": {
         "codex": {
@@ -174,8 +174,8 @@
             }
           ],
           "fixtures": [
-            "claude/hooks/tests/test_codex_beads_worktree_guard.py::test_codex_worktree_add_denied_inside_beads_project",
-            "claude/hooks/tests/test_codex_beads_worktree_guard.py::test_codex_worktree_add_allowed_outside_beads_project"
+            "claude/hooks/tests/test_codex_worktree_entrypoint_guard.py::test_codex_direct_creation_is_denied",
+            "claude/hooks/tests/test_codex_worktree_entrypoint_guard.py::test_codex_quoted_creation_text_is_allowed"
           ]
         },
         "claude": {
@@ -188,7 +188,7 @@
             }
           ],
           "fixtures": [
-            "claude/hooks/tests/test_beads_worktree_guard.py"
+            "claude/hooks/tests/test_worktree_entrypoint_guard.py"
           ]
         }
       }

@@ -19,10 +19,19 @@ still clobbered by *other concurrent sessions* sharing the root checkout
 
 1. **Sessions claim a worktree before write work.** Before the first
    git-mutating action of any task, create your own worktree + branch and do
-   ALL write work there:
-   - beads repo (`.beads/` exists): `bd worktree create .worktrees/<task> --branch=<branch>`
-     (never `git worktree add` — the `beads_worktree_guard.py` hook enforces this)
-   - otherwise: `git worktree add .worktrees/<task> -b <branch>`
+   ALL write work there. Use the concrete bundled command injected into live
+   session context:
+
+   ```bash
+   python3 -B <injected-bundled-cli-path> create \
+     --repo "$(git rev-parse --show-toplevel)" \
+     --name <task> \
+     --branch <branch>
+   ```
+
+   This is the `escapement-worktree create` transaction: Escapement resolves
+   and verifies source, location, isolation, and optional tracker context
+   together.
 
    "I'm only making one small commit" is not an exemption — the wrong-branch
    incidents were single commits.
@@ -33,12 +42,12 @@ still clobbered by *other concurrent sessions* sharing the root checkout
    running. Uncommitted WIP you find there belongs to someone else; leave it.
 
 3. **Two or more writing agents → one worktree and branch each** —
-   `bd worktree create` per agent, or `isolation: "worktree"` on the Agent
-   dispatch. Prompt-level "you own these files" lanes are merge-planning
-   notes, **never** the isolation mechanism; compliance-based lanes leaked
-   twice in one evening (2026-07-08: one agent's commit swept a sibling's
-   uncommitted edits; another agent drifted into the root checkout and
-   committed onto an unrelated in-flight branch).
+   one `escapement-worktree create` transaction per agent, or
+   `isolation: "worktree"` on the Agent dispatch. Prompt-level "you own these
+   files" lanes are merge-planning notes, **never** the isolation mechanism;
+   compliance-based lanes leaked twice in one evening (2026-07-08: one agent's
+   commit swept a sibling's uncommitted edits; another agent drifted into the
+   root checkout and committed onto an unrelated in-flight branch).
 
 4. **Merges are deliberate.** The session that owns the feature branch merges
    writer branches back explicitly. No writer merges into, or rebases, a
@@ -86,5 +95,5 @@ worktree-per-writer. The rule converts a recurring recovery burden into a
 one-command setup cost.
 
 Related: `agent-teams-default.md` (dispatch mechanics),
-`beads-worktree` skill (bd worktree specifics),
+`beads-worktree` skill (Escapement creation and tracker verification),
 `continuation-harness.md` (outcome delivery from the worktree's branch).
