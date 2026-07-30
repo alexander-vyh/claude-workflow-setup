@@ -122,6 +122,32 @@ def test_direct_creation_oracle_preserves_quoted_and_escaped_separator_runs(
     assert not direct_creation_commands(surface)
 
 
+@pytest.mark.parametrize(
+    "surface",
+    (
+        "```bash\nprintf '%s' ready # unmatched \" ; &&\ngit -C /repo worktree add /tmp/task\n```",
+        "<code>printf '%s' ready # unmatched ' ; ||\nbd --directory /repo worktree create /tmp/task</code>",
+    ),
+)
+def test_direct_creation_oracle_ignores_comment_syntax_until_newline(
+    surface: str,
+) -> None:
+    assert direct_creation_commands(surface)
+
+
+@pytest.mark.parametrize(
+    "surface",
+    (
+        "```bash\nprintf '%s' \"# literal\ngit -C /repo worktree add /tmp/task\"\n```",
+        "<code>printf '%s' \\#\" literal\nbd --directory /repo worktree create /tmp/task\"</code>",
+    ),
+)
+def test_direct_creation_oracle_preserves_quoted_and_escaped_hashes(
+    surface: str,
+) -> None:
+    assert not direct_creation_commands(surface)
+
+
 def _run_payload(payload: dict) -> tuple[int, dict, str]:
     stdout = io.StringIO()
     with (

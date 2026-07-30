@@ -24,8 +24,15 @@ _SEPARATOR_SENTINELS = {
     separator: chr(0xE000 + index)
     for index, separator in enumerate(sorted(_SHELL_SEPARATOR_CHARS))
 }
+_LITERAL_HASH_SENTINEL = chr(0xE000 + len(_SEPARATOR_SENTINELS))
 _SENTINEL_RESTORE = str.maketrans(
-    {sentinel: separator for separator, sentinel in _SEPARATOR_SENTINELS.items()}
+    {
+        **{
+            sentinel: separator
+            for separator, sentinel in _SEPARATOR_SENTINELS.items()
+        },
+        _LITERAL_HASH_SENTINEL: "#",
+    }
 )
 _GIT_VALUE_OPTIONS = frozenset(
     {"-C", "-c", "--git-dir", "--work-tree", "--git-common-dir", "--namespace"}
@@ -70,18 +77,28 @@ def extract_code_candidates(text: str) -> list[str]:
     return list(dict.fromkeys(candidate for candidate in candidates if candidate))
 
 
-def _protect_quoted_or_escaped_separators(command: str) -> str:
+def _protect_shell_provenance(command: str) -> str:
     protected: list[str] = []
     quote: str | None = None
+    in_comment = False
+    at_comment_boundary = True
     index = 0
     while index < len(command):
         char = command[index]
+        if in_comment:
+            if char == "\n":
+                protected.append(char)
+                in_comment = False
+                at_comment_boundary = True
+            index += 1
+            continue
         if quote == "'":
             if char == "'":
                 quote = None
                 protected.append(char)
             else:
                 protected.append(_SEPARATOR_SENTINELS.get(char, char))
+            at_comment_boundary = False
             index += 1
             continue
         if char == "\\":
@@ -89,30 +106,46 @@ def _protect_quoted_or_escaped_separators(command: str) -> str:
                 escaped = command[index + 1]
                 if escaped in _SHELL_SEPARATOR_CHARS:
                     protected.append(_SEPARATOR_SENTINELS[escaped])
+                elif escaped == "#":
+                    protected.append(_LITERAL_HASH_SENTINEL)
                 else:
                     protected.extend((char, escaped))
                 index += 2
             else:
                 protected.append(char)
                 index += 1
+            at_comment_boundary = False
             continue
         if char == quote:
             quote = None
             protected.append(char)
-        elif char in {"'", '"'} and quote is None:
+            at_comment_boundary = False
+        elif quote is not None:
+            protected.append(_SEPARATOR_SENTINELS.get(char, char))
+            at_comment_boundary = False
+        elif char in {"'", '"'}:
             quote = char
             protected.append(char)
-        elif quote is not None and char in _SHELL_SEPARATOR_CHARS:
-            protected.append(_SEPARATOR_SENTINELS[char])
+            at_comment_boundary = False
+        elif char == "#" and at_comment_boundary:
+            protected.append(" ")
+            in_comment = True
+        elif char == "#":
+            protected.append(_LITERAL_HASH_SENTINEL)
+            at_comment_boundary = False
+        elif char in _SHELL_SEPARATOR_CHARS or char in " \t\r":
+            protected.append(char)
+            at_comment_boundary = True
         else:
             protected.append(char)
+            at_comment_boundary = False
         index += 1
     return "".join(protected)
 
 
 def _shell_segments(command: str) -> list[list[str]]:
     try:
-        protected = _protect_quoted_or_escaped_separators(command)
+        protected = _protect_shell_provenance(command)
         lexer = shlex.shlex(protected, posix=True, punctuation_chars=";&|\n")
         lexer.whitespace = " \t\r"
         lexer.whitespace_split = True
