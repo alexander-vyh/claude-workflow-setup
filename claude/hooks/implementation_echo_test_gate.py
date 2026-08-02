@@ -323,10 +323,18 @@ def git_files(repo_root: Path, args: list[str]) -> list[str]:
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
-def upstream_ref(repo_root: Path) -> str | None:
+def remote_default_ref(repo_root: Path) -> str | None:
+    """Return the locally known remote landing ref only when it names a commit.
+
+    ``refs/remotes/origin/HEAD`` is Git's local symbolic record of the remote
+    default branch.  A feature's tracking ref is deliberately not a fallback:
+    it identifies the feature, not where the change will land.  When the
+    symbolic landing identity is absent or stale, committed scope is unknown
+    and callers must retain only working-tree scope.
+    """
     try:
         result = subprocess.run(
-            ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
+            ["git", "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"],
             cwd=str(repo_root),
             capture_output=True,
             text=True,
@@ -337,8 +345,22 @@ def upstream_ref(repo_root: Path) -> str | None:
         return None
     if result.returncode != 0:
         return None
-    value = result.stdout.strip()
-    return value or None
+    ref = result.stdout.strip()
+    if not ref:
+        return None
+
+    try:
+        resolved = subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return ref if resolved.returncode == 0 and resolved.stdout.strip() else None
 
 
 def changed_files(repo_root: Path) -> list[str]:
@@ -347,9 +369,9 @@ def changed_files(repo_root: Path) -> list[str]:
     files.update(git_files(repo_root, ["diff", "--cached", "--name-only"]))
     files.update(git_files(repo_root, ["ls-files", "--others", "--exclude-standard"]))
 
-    upstream = upstream_ref(repo_root)
-    if upstream:
-        files.update(git_files(repo_root, ["diff", "--name-only", f"{upstream}...HEAD"]))
+    landing_ref = remote_default_ref(repo_root)
+    if landing_ref:
+        files.update(git_files(repo_root, ["diff", "--name-only", f"{landing_ref}...HEAD"]))
 
     return sorted(files)
 
