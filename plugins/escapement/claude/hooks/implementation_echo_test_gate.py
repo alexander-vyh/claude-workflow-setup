@@ -323,10 +323,18 @@ def git_files(repo_root: Path, args: list[str]) -> list[str]:
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
-def upstream_ref(repo_root: Path) -> str | None:
+def remote_default_ref(repo_root: Path) -> str | None:
+    """Return the locally known remote landing ref only when it names a commit.
+
+    ``refs/remotes/origin/HEAD`` is Git's local symbolic record of the remote
+    default branch.  A feature's tracking ref is deliberately not a fallback:
+    it identifies the feature, not where the change will land.  When the
+    symbolic landing identity is absent or stale, committed scope is unknown
+    and callers must retain only working-tree scope.
+    """
     try:
         result = subprocess.run(
-            ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
+            ["git", "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"],
             cwd=str(repo_root),
             capture_output=True,
             text=True,
@@ -337,21 +345,79 @@ def upstream_ref(repo_root: Path) -> str | None:
         return None
     if result.returncode != 0:
         return None
-    value = result.stdout.strip()
-    return value or None
+    ref = result.stdout.strip()
+    remote_prefix = "refs/remotes/origin/"
+    if not ref.startswith(remote_prefix) or ref == f"{remote_prefix}HEAD":
+        return None
+
+    try:
+        resolved = subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return ref if resolved.returncode == 0 and resolved.stdout.strip() else None
 
 
-def changed_files(repo_root: Path) -> list[str]:
+def committed_change_files(repo_root: Path, landing_ref: str) -> tuple[list[str] | None, str | None]:
+    """Return the strict three-dot committed scope or a repairable failure.
+
+    Unlike the working-tree probes, this result decides whether a known landing
+    ref can safely omit committed history. A valid ref with an uncomputable
+    merge base must therefore be surfaced to the finishing-command gate.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--name-only", f"{landing_ref}...HEAD"],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return None, (
+            f"could not compute committed change scope from {landing_ref}: Git timed out. "
+            f"Run `git merge-base {landing_ref} HEAD`, repair the branch history, and retry."
+        )
+    except OSError:
+        return None, (
+            f"could not compute committed change scope from {landing_ref}. "
+            f"Run `git merge-base {landing_ref} HEAD`, repair the branch history, and retry."
+        )
+    if result.returncode != 0:
+        return None, (
+            f"could not compute committed change scope from {landing_ref}. "
+            f"Run `git merge-base {landing_ref} HEAD`, repair the branch history, and retry."
+        )
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()], None
+
+
+def change_scope(repo_root: Path) -> tuple[list[str], str | None]:
     files: set[str] = set()
     files.update(git_files(repo_root, ["diff", "--name-only"]))
     files.update(git_files(repo_root, ["diff", "--cached", "--name-only"]))
     files.update(git_files(repo_root, ["ls-files", "--others", "--exclude-standard"]))
 
-    upstream = upstream_ref(repo_root)
-    if upstream:
-        files.update(git_files(repo_root, ["diff", "--name-only", f"{upstream}...HEAD"]))
+    landing_ref = remote_default_ref(repo_root)
+    if landing_ref:
+        committed_files, scope_error = committed_change_files(repo_root, landing_ref)
+        if scope_error:
+            return sorted(files), scope_error
+        assert committed_files is not None
+        files.update(committed_files)
 
-    return sorted(files)
+    return sorted(files), None
+
+
+def changed_files(repo_root: Path) -> list[str]:
+    """Return the public changed-file list, omitting internal scope diagnostics."""
+    return change_scope(repo_root)[0]
 
 
 def is_test_file(filepath: str) -> bool:
@@ -689,7 +755,18 @@ def main() -> int:
     if repo_root is None:
         return allow()
 
-    issues, test_files = analyze(repo_root, changed_files(repo_root))
+    files, scope_error = change_scope(repo_root)
+    if scope_error:
+        _record_signal(
+            gate_name="implementation_echo_test_gate",
+            decision="deny",
+            reason=scope_error,
+        )
+        return deny(
+            "IMPLEMENTATION-ECHO TEST GATE: " + scope_error
+        )
+
+    issues, test_files = analyze(repo_root, files)
     if not issues:
         _record_signal(
             gate_name="implementation_echo_test_gate",
