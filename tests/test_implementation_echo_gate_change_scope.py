@@ -120,6 +120,18 @@ def assert_denied_once(repo: Path) -> None:
     assert output["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
+def assert_scope_computation_denied(repo: Path) -> None:
+    """A valid landing ref with uncomputable history fails closed once."""
+    code, raw, output = hook_result(repo)
+    assert code == 0
+    assert len(raw.splitlines()) == 1
+    assert output is not None
+    decision = output["hookSpecificOutput"]
+    assert decision["permissionDecision"] == "deny"
+    assert "committed change scope" in decision["permissionDecisionReason"]
+    assert "git merge-base" in decision["permissionDecisionReason"]
+
+
 def test_rebased_feature_excludes_landing_only_echo_despite_stale_feature_ref(tmp_path: Path):
     """Landing-only commits after rebase cannot be attributed to the feature."""
     origin, repo = make_origin_clone(tmp_path)
@@ -183,6 +195,26 @@ def test_missing_remote_default_omits_committed_history_instead_of_guessing_feat
     assert_allowed(repo)
 
 
+@pytest.mark.parametrize(
+    "invalid_target",
+    ["refs/remotes/origin/dangling", "refs/heads/trunk"],
+)
+def test_invalid_remote_default_omits_commits_but_still_scans_uncommitted_echo(
+    tmp_path: Path, invalid_target: str
+):
+    """Only a non-HEAD origin remote-tracking ref is landing authority."""
+    _origin, repo = make_origin_clone(tmp_path)
+    git(repo, "checkout", "-b", "feature")
+    write_files(repo, echo_pair("committed"))
+    commit_all(repo, "committed echo")
+    git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", invalid_target)
+    working_files = echo_pair("working", "0124p000000ABCDEFA")
+    write_files(repo, working_files)
+
+    assert set(gate.changed_files(repo)) == set(working_files)
+    assert_denied_once(repo)
+
+
 @pytest.mark.parametrize("state", ["unstaged", "staged", "untracked"])
 def test_missing_remote_default_still_scans_each_working_tree_state(tmp_path: Path, state: str):
     """Failing open for unknown committed scope never drops local changes."""
@@ -216,3 +248,23 @@ def test_local_trunk_ahead_of_remote_default_scans_its_committed_echo(tmp_path: 
 
     assert set(gate.changed_files(repo)) == {"src/local_trunk.py", "tests/test_local_trunk.py"}
     assert_denied_once(repo)
+
+
+def test_valid_remote_default_without_merge_base_denies_with_repairable_scope_reason(tmp_path: Path):
+    """A valid landing ref cannot fail open merely because history is unrelated."""
+    _origin, repo = make_origin_clone(tmp_path)
+    git(repo, "checkout", "--orphan", "unrelated-feature")
+    git(repo, "rm", "-rf", ".")
+    write_files(repo, echo_pair("unrelated"))
+    commit_all(repo, "unrelated feature echo")
+
+    assert gate.remote_default_ref(repo) == "refs/remotes/origin/trunk"
+    no_merge_base = subprocess.run(
+        ["git", "merge-base", "refs/remotes/origin/trunk", "HEAD"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert no_merge_base.returncode == 1
+    assert_scope_computation_denied(repo)
