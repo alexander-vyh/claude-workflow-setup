@@ -1,0 +1,381 @@
+"""Public-hook regressions for nonblocking but visible data-fixture echoes.
+
+These tests execute the real hook in subprocesses against real Git working
+trees and inspect both user-visible JSON and the persistent gate-signal corpus.
+They intentionally reject both blanket fixture exemption and blanket warning.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import hashlib
+import importlib.util
+import io
+import json
+import os
+import subprocess
+import sys
+import uuid
+from pathlib import Path
+
+import pytest
+
+
+ROOT = Path(__file__).resolve().parents[1]
+HOOK = ROOT / "claude/hooks/implementation_echo_test_gate.py"
+
+
+def _git(repo: Path, *args: str) -> None:
+    subprocess.run(
+        ["git", *args],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _repo(tmp_path: Path) -> Path:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "--quiet", "--initial-branch=main")
+    _git(repo, "config", "user.email", "oracle@example.com")
+    _git(repo, "config", "user.name", "Oracle")
+    (repo / ".beads").mkdir()
+    return repo
+
+
+def _opaque_literal(
+    tmp_path: Path,
+    label: str,
+    shape: str = "uuid",
+) -> str:
+    """Produce an opaque value independently of the hook and its fixtures."""
+    seed = f"{tmp_path}:{label}:{shape}"
+    if shape == "uuid":
+        return str(uuid.uuid5(uuid.NAMESPACE_URL, seed))
+    digest = hashlib.sha256(seed.encode("utf-8")).hexdigest()
+    if shape == "salesforce":
+        return "012" + digest[:15]
+    if shape == "hex":
+        return digest[:32]
+    raise ValueError(f"unknown opaque literal shape: {shape}")
+
+
+def _write_source(repo: Path, *literals: str) -> None:
+    (repo / "src").mkdir()
+    (repo / "src" / "service.py").write_text(
+        "".join(
+            f'RECORD_TYPE_ID_{index} = "{literal}"\n'
+            for index, literal in enumerate(literals, start=1)
+        ),
+        encoding="utf-8",
+    )
+
+
+def _run_hook(repo: Path) -> tuple[dict | None, list[dict]]:
+    payload = {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "cwd": str(repo),
+        "tool_input": {"command": "git commit -m change"},
+    }
+    env = os.environ.copy()
+    env["BEADS_DIR"] = str(repo / ".beads")
+    env["GATE_SIGNAL_FALLBACK_DIR"] = str(repo / "fallback-signals")
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    result = subprocess.run(
+        [sys.executable, "-B", str(HOOK)],
+        cwd=repo,
+        env=env,
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    output = json.loads(result.stdout) if result.stdout.strip() else None
+    signal_path = repo / ".beads/.gate-signal.jsonl"
+    signals = (
+        [
+            json.loads(line)
+            for line in signal_path.read_text(encoding="utf-8").splitlines()
+        ]
+        if signal_path.is_file()
+        else []
+    )
+    return output, signals
+
+
+def _load_gate():
+    name = "implementation_echo_test_gate_data_fixture_contract"
+    spec = importlib.util.spec_from_file_location(name, HOOK)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    sys.path.insert(0, str(HOOK.parent))
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.remove(str(HOOK.parent))
+    return module
+
+
+@pytest.mark.parametrize(
+    ("fixture_path", "fixture_template", "literal_shape"),
+    [
+        (
+            "tests/fixtures/manifest.json",
+            '{"required_record_type": "{literal}"}\n',
+            "uuid",
+        ),
+        (
+            "spec/data/rows.jsonl",
+            '{"record_type": "{literal}"}\n',
+            "salesforce",
+        ),
+        (
+            "test/golden/config.yaml",
+            'record_type: "{literal}"\n',
+            "hex",
+        ),
+        (
+            "__tests__/fixtures/config.yml",
+            'record_type: "{literal}"\n',
+            "uuid",
+        ),
+        (
+            "tests/data/settings.toml",
+            'record_type = "{literal}"\n',
+            "salesforce",
+        ),
+        (
+            "spec/fixtures/settings.ini",
+            'record_type = "{literal}"\n',
+            "hex",
+        ),
+        (
+            "test/data/settings.cfg",
+            'record_type = "{literal}"\n',
+            "uuid",
+        ),
+        (
+            "__specs__/golden/expected.csv",
+            'record_type\n"{literal}"\n',
+            "salesforce",
+        ),
+        (
+            "tests/golden/expected.tsv",
+            'record_type\n"{literal}"\n',
+            "hex",
+        ),
+    ],
+)
+def test_shared_literal_in_text_fixture_warns_once_without_blocking(
+    tmp_path: Path,
+    fixture_path: str,
+    fixture_template: str,
+    literal_shape: str,
+) -> None:
+    """Catches blanket exemption, hard-deny retention, and duplicate signals."""
+    repo = _repo(tmp_path)
+    literal = _opaque_literal(tmp_path, fixture_path, literal_shape)
+    _write_source(repo, literal)
+    fixture = repo / fixture_path
+    fixture.parent.mkdir(parents=True)
+    fixture.write_text(
+        fixture_template.replace("{literal}", literal),
+        encoding="utf-8",
+    )
+
+    output, signals = _run_hook(repo)
+
+    assert output is not None
+    assert "permissionDecision" not in output.get("hookSpecificOutput", {})
+    message = output["systemMessage"]
+    assert fixture_path in message
+    assert "shared-generated-literal" in message
+    assert "does not block" in message.lower()
+
+    assert len(signals) == 1
+    signal = signals[0]
+    assert signal["gate"] == "implementation_echo_test_gate"
+    assert signal["decision"] == "allow-with-warning"
+    assert signal["extras"]["issue_count"] == 1
+    assert signal["extras"]["issue_kinds"] == [
+        "data-fixture-shared-generated-literal"
+    ]
+    assert signal["extras"]["fixture_files"] == [fixture_path]
+
+
+def test_two_shared_literals_produce_one_decision_level_warning(
+    tmp_path: Path,
+) -> None:
+    """Catches one-warning-per-match implementations and duplicate file lists."""
+    repo = _repo(tmp_path)
+    first = _opaque_literal(tmp_path, "first")
+    second = _opaque_literal(tmp_path, "second", "salesforce")
+    third = _opaque_literal(tmp_path, "third", "hex")
+    _write_source(repo, first, second, third)
+    first_fixture_path = "tests/fixtures/manifest.json"
+    first_fixture = repo / first_fixture_path
+    first_fixture.parent.mkdir(parents=True)
+    first_fixture.write_text(
+        json.dumps({"record_types": [first, second]}) + "\n",
+        encoding="utf-8",
+    )
+    second_fixture_path = "spec/data/secondary.json"
+    second_fixture = repo / second_fixture_path
+    second_fixture.parent.mkdir(parents=True)
+    second_fixture.write_text(
+        json.dumps({"record_type": third}) + "\n",
+        encoding="utf-8",
+    )
+
+    output, signals = _run_hook(repo)
+
+    assert output is not None
+    assert "permissionDecision" not in output.get("hookSpecificOutput", {})
+    assert first_fixture_path in output["systemMessage"]
+    assert second_fixture_path in output["systemMessage"]
+    assert len(signals) == 1
+    assert signals[0]["decision"] == "allow-with-warning"
+    assert signals[0]["extras"]["issue_count"] == 3
+    assert signals[0]["extras"]["fixture_files"] == [
+        second_fixture_path,
+        first_fixture_path,
+    ]
+
+
+def test_executable_test_echo_still_denies(tmp_path: Path) -> None:
+    """Catches an implementation that downgrades every echo to a warning."""
+    repo = _repo(tmp_path)
+    literal = _opaque_literal(tmp_path, "executable-test", "salesforce")
+    _write_source(repo, literal)
+    test_file = repo / "tests/test_service.py"
+    test_file.parent.mkdir()
+    test_file.write_text(
+        "def test_record_type():\n"
+        f'    assert record_type() == "{literal}"\n',
+        encoding="utf-8",
+    )
+
+    output, signals = _run_hook(repo)
+
+    assert output is not None
+    assert output["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "systemMessage" not in output
+    assert len(signals) == 1
+    assert signals[0]["decision"] == "deny"
+
+
+def test_unrelated_text_fixture_stays_silent(tmp_path: Path) -> None:
+    """Catches an implementation that warns on every changed fixture."""
+    repo = _repo(tmp_path)
+    source_literal = _opaque_literal(tmp_path, "source-only", "hex")
+    fixture_literal = _opaque_literal(tmp_path, "fixture-only", "salesforce")
+    _write_source(repo, source_literal)
+    fixture = repo / "tests/fixtures/manifest.json"
+    fixture.parent.mkdir(parents=True)
+    fixture.write_text(
+        json.dumps({"required_record_type": fixture_literal}) + "\n",
+        encoding="utf-8",
+    )
+
+    output, signals = _run_hook(repo)
+
+    assert output is None
+    assert len(signals) == 1
+    assert signals[0]["decision"] == "allow"
+
+
+def test_two_fixtures_never_treat_each_other_as_production_source(
+    tmp_path: Path,
+) -> None:
+    """Catches reclassifying data fixtures as source files."""
+    repo = _repo(tmp_path)
+    literal = _opaque_literal(tmp_path, "fixture-only-shared", "salesforce")
+    first = repo / "tests/fixtures/manifest.json"
+    second = repo / "spec/data/secondary.yaml"
+    first.parent.mkdir(parents=True)
+    second.parent.mkdir(parents=True)
+    first.write_text(
+        json.dumps({"required_record_type": literal}) + "\n",
+        encoding="utf-8",
+    )
+    second.write_text(
+        f'record_type: "{literal}"\n',
+        encoding="utf-8",
+    )
+
+    output, signals = _run_hook(repo)
+
+    assert output is None
+    assert len(signals) == 1
+    assert signals[0]["decision"] == "allow"
+
+
+def test_signal_write_failure_does_not_turn_fixture_warning_into_a_block(
+    tmp_path: Path,
+) -> None:
+    """Catches direct, enforcement-coupled persistence instead of _gate_signal."""
+    repo = _repo(tmp_path)
+    literal = _opaque_literal(tmp_path, "unwritable-signal", "hex")
+    _write_source(repo, literal)
+    fixture = repo / "tests/fixtures/manifest.json"
+    fixture.parent.mkdir(parents=True)
+    fixture.write_text(
+        json.dumps({"required_record_type": literal}) + "\n",
+        encoding="utf-8",
+    )
+    (repo / ".beads/.gate-signal.jsonl").mkdir()
+
+    output, signals = _run_hook(repo)
+
+    assert output is not None
+    assert "permissionDecision" not in output.get("hookSpecificOutput", {})
+    assert "systemMessage" in output
+    assert signals == []
+
+
+def test_fixture_warning_uses_the_shared_signal_owner_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Architecture contract: persistence stays owned by _gate_signal."""
+    repo = _repo(tmp_path)
+    literal = _opaque_literal(tmp_path, "signal-owner", "salesforce")
+    _write_source(repo, literal)
+    fixture = repo / "tests/fixtures/manifest.json"
+    fixture.parent.mkdir(parents=True)
+    fixture.write_text(
+        json.dumps({"required_record_type": literal}) + "\n",
+        encoding="utf-8",
+    )
+    payload = {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "cwd": str(repo),
+        "tool_input": {"command": "git commit -m change"},
+    }
+    gate = _load_gate()
+    recorded: list[dict] = []
+    monkeypatch.setattr(
+        gate,
+        "_record_signal",
+        lambda **fields: recorded.append(fields),
+    )
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
+    stdout = io.StringIO()
+
+    with contextlib.redirect_stdout(stdout):
+        code = gate.main()
+
+    assert code == 0
+    output = json.loads(stdout.getvalue())
+    assert "permissionDecision" not in output.get("hookSpecificOutput", {})
+    assert "systemMessage" in output
+    assert len(recorded) == 1
+    assert recorded[0]["gate_name"] == "implementation_echo_test_gate"
+    assert recorded[0]["decision"] == "allow-with-warning"

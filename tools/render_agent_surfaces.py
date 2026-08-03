@@ -23,6 +23,9 @@ SHARED_HOOK_SUPPORT = {
     "claude/hooks/_gate_signal.py",
     "claude/hooks/_local_judge_client.py",
     "claude/hooks/_gh_command.py",
+    # implementation_echo_test_gate imports this policy helper in both hosts.
+    # Omitting it makes the defensive import fallback hard-deny fixture echoes.
+    "claude/hooks/data_fixture_echo.py",
 }
 SHARED_RUNTIME_SUPPORT = {
     "bin/escapement-worktree",

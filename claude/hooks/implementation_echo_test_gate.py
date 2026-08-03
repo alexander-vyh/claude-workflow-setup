@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# file-complexity-waiver: pre-existing 669-line file; this change only wires main() to the extracted oracle_reason_validation sibling module — full responsibility split tracked in escapement-55k
+# file-complexity-waiver: pre-existing large landing gate; data-fixture classification and message framing are extracted to a sibling, while the full responsibility split remains tracked in escapement-55k
 """Hook gate for rejecting high-confidence implementation-echo tests.
 
 This is intentionally a landing-time scanner. It compares changed tests with
@@ -29,6 +29,18 @@ try:
 except ImportError:  # pragma: no cover
     def _record_signal(*_args, **_kwargs) -> None:
         return None
+
+try:
+    from data_fixture_echo import (
+        build_data_fixture_warning,
+        is_text_data_fixture,
+    )
+except ImportError:  # pragma: no cover
+    def is_text_data_fixture(_filepath: str) -> bool:
+        return False
+
+    def build_data_fixture_warning(_issues) -> str:
+        return "IMPLEMENTATION-ECHO DATA-FIXTURE NOTICE"
 
 # Substance bar for the `# oracle:` override (gate-design.md Rule 3). Fail-open:
 # if the validator module is unavailable, keep the prior presence-only behavior
@@ -207,6 +219,11 @@ class Issue:
 
 
 def allow() -> int:
+    return 0
+
+
+def warn(message: str) -> int:
+    print(json.dumps({"systemMessage": message}))
     return 0
 
 
@@ -423,6 +440,8 @@ def changed_files(repo_root: Path) -> list[str]:
 def is_test_file(filepath: str) -> bool:
     path = Path(filepath)
     parts = set(path.parts)
+    if is_text_data_fixture(filepath):
+        return False
     if parts & {"tests", "test", "spec", "__tests__", "__specs__"}:
         return True
     return any(pattern.match(path.name) for pattern in TEST_FILE_PATTERNS)
@@ -649,17 +668,25 @@ def find_oracle_overrides(test_files: dict[str, str]) -> dict[str, list[str]]:
     return overrides
 
 
-def analyze(repo_root: Path, files: list[str]) -> tuple[list[Issue], dict[str, str]]:
-    """Return (issues, test_files). test_files is returned so callers can find
-    oracle overrides without re-reading the disk.
+def analyze(
+    repo_root: Path,
+    files: list[str],
+) -> tuple[list[Issue], dict[str, str], list[Issue]]:
+    """Return (blocking issues, test files, data-fixture advisories).
+
+    Test files are returned so callers can find oracle overrides without
+    re-reading the disk. Fixture advisories reuse the same opaque-literal
+    evidence but remain separate from blocking executable-test findings.
     """
     source_paths = [path for path in files if is_source_file(path)]
     test_paths = [path for path in files if is_test_file(path)]
-    if not test_paths:
-        return [], {}
+    fixture_paths = [path for path in files if is_text_data_fixture(path)]
+    if not test_paths and not fixture_paths:
+        return [], {}, []
 
     source_files = {path: read_file(repo_root, path) for path in source_paths}
     test_files = {path: read_file(repo_root, path) for path in test_paths}
+    fixture_files = {path: read_file(repo_root, path) for path in fixture_paths}
 
     issues: list[Issue] = []
     issues.extend(find_shared_generated_literals(source_files, test_files))
@@ -674,7 +701,15 @@ def analyze(repo_root: Path, files: list[str]) -> tuple[list[Issue], dict[str, s
         )
         for finding in find_magic_number_echoes(source_files, test_files)
     )
-    return issues, test_files
+    fixture_issues = [
+        Issue(
+            issue.filepath,
+            f"data-fixture-{issue.kind}",
+            issue.detail,
+        )
+        for issue in find_shared_generated_literals(source_files, fixture_files)
+    ]
+    return issues, test_files, fixture_issues
 
 
 _REJECTION_HINT = {
@@ -733,6 +768,22 @@ def build_message(
     )
 
 
+def allow_with_fixture_warning(issues: list[Issue]) -> int:
+    fixture_files = sorted({issue.filepath for issue in issues})
+    _record_signal(
+        gate_name="implementation_echo_test_gate",
+        decision="allow-with-warning",
+        reason=(
+            f"{len(issues)} textual data-fixture echo signal(s); "
+            "fixture provenance is unresolved"
+        ),
+        issue_count=len(issues),
+        issue_kinds=sorted({issue.kind for issue in issues}),
+        fixture_files=fixture_files,
+    )
+    return warn(build_data_fixture_warning(issues))
+
+
 def main() -> int:
     try:
         data = json.load(sys.stdin)
@@ -766,8 +817,10 @@ def main() -> int:
             "IMPLEMENTATION-ECHO TEST GATE: " + scope_error
         )
 
-    issues, test_files = analyze(repo_root, files)
+    issues, test_files, fixture_issues = analyze(repo_root, files)
     if not issues:
+        if fixture_issues:
+            return allow_with_fixture_warning(fixture_issues)
         _record_signal(
             gate_name="implementation_echo_test_gate",
             decision="allow",
@@ -813,6 +866,8 @@ def main() -> int:
 
     if not remaining_issues:
         # All issues were overridden by valid reasons — allow with the capture above.
+        if fixture_issues:
+            return allow_with_fixture_warning(fixture_issues)
         return allow()
 
     # Issues remain — deny the finishing command. The denial message itself
@@ -826,8 +881,13 @@ def main() -> int:
         reason=f"{len(remaining_issues)} implementation-echo issue(s) remaining after overrides",
         issue_count=len(remaining_issues),
         issue_kinds=sorted({i.kind for i in remaining_issues}),
+        data_fixture_issue_count=len(fixture_issues),
+        data_fixture_files=sorted({i.filepath for i in fixture_issues}),
     )
-    return deny(build_message(remaining_issues, rejected_overrides))
+    message = build_message(remaining_issues, rejected_overrides)
+    if fixture_issues:
+        message += "\n\n" + build_data_fixture_warning(fixture_issues)
+    return deny(message)
 
 
 if __name__ == "__main__":
