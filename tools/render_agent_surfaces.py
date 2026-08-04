@@ -26,6 +26,10 @@ SHARED_HOOK_SUPPORT = {
     # implementation_echo_test_gate imports this policy helper in both hosts.
     # Omitting it makes the defensive import fallback hard-deny fixture echoes.
     "claude/hooks/data_fixture_echo.py",
+    # implementation_echo_test_gate imports both analyzers in both hosts.
+    # Omitting either silently activates a permissive defensive fallback.
+    "claude/hooks/magic_number_echo.py",
+    "claude/hooks/oracle_reason_validation.py",
 }
 SHARED_RUNTIME_SUPPORT = {
     "bin/escapement-worktree",
@@ -40,11 +44,6 @@ CODEX_HOOK_SUPPORT = {
 }
 CLAUDE_EXTRA_HOOK_SUPPORT = {
     "claude/hooks/local_judge_health.py",
-    # implementation_echo_test_gate imports both analyzers. Its defensive
-    # ImportError fallbacks intentionally keep the hook process alive, but an
-    # incomplete plugin would otherwise silently disable these protections.
-    "claude/hooks/magic_number_echo.py",
-    "claude/hooks/oracle_reason_validation.py",
     # oracle_downgrade_stop.py imports this differ at runtime; it is a library
     # (no events), so it ships as a companion rather than a manifest hook.
     # The differ in turn loads its parser sibling — ship the whole closure or

@@ -301,6 +301,71 @@ def test_both_plugin_wrappers_bundle_data_fixture_echo_policy():
         assert path.read_bytes() == canonical
 
 
+@pytest.mark.parametrize(
+    "plugin_hooks",
+    (
+        ROOT / "plugins" / "escapement-claude" / "hooks",
+        ROOT / "plugins" / "escapement" / "claude" / "hooks",
+    ),
+)
+def test_both_rendered_gates_load_their_real_analyzers(plugin_hooks):
+    """Renderer and packaged runtime must preserve the gate's import closure."""
+    renderer_spec = importlib.util.spec_from_file_location(
+        "agent_surface_renderer_for_test",
+        RENDERER,
+    )
+    assert renderer_spec is not None and renderer_spec.loader is not None
+    renderer = importlib.util.module_from_spec(renderer_spec)
+    renderer_spec.loader.exec_module(renderer)
+    manifest = renderer._load_manifest(MANIFEST)
+    targets = renderer.rendered_targets(ROOT, manifest)
+
+    dependencies = (
+        "data_fixture_echo.py",
+        "magic_number_echo.py",
+        "oracle_reason_validation.py",
+    )
+    for dependency in dependencies:
+        canonical = (ROOT / "claude" / "hooks" / dependency).read_text(
+            encoding="utf-8"
+        )
+        target = plugin_hooks / dependency
+        assert targets.get(target) == canonical, (
+            "renderer omits or stales an implementation-echo dependency and "
+            f"would activate a permissive runtime fallback: {target}"
+        )
+
+    probe = (
+        "import importlib.util,json,sys;"
+        "root=sys.argv[1];"
+        "sys.path.insert(0,root);"
+        "spec=importlib.util.spec_from_file_location("
+        "'packaged_gate',root+'/implementation_echo_test_gate.py');"
+        "gate=importlib.util.module_from_spec(spec);"
+        "sys.modules['packaged_gate']=gate;"
+        "spec.loader.exec_module(gate);"
+        "asserted=gate.asserted_tokens({'pct_automated'});"
+        "print(json.dumps(["
+        "gate.validate_oracle_reason("
+        "'the pct_automated literal is the asserted oracle',asserted),"
+        "gate.validate_oracle_reason("
+        "'cross-checked against the upstream Salesforce report export totals',asserted),"
+        "gate.find_magic_number_echoes.__module__"
+        "]))"
+    )
+    result = subprocess.run(
+        [sys.executable, "-I", "-c", probe, str(plugin_hooks)],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == [
+        "circular",
+        None,
+        "magic_number_echo",
+    ]
+
+
 def test_repo_root_is_a_marketplace_not_a_shadow_plugin():
     """The repo root must expose ONLY a marketplace, never a self-plugin (escapement-hnid).
 
