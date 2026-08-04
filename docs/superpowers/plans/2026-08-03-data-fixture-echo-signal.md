@@ -39,7 +39,10 @@
      read solely to detect truncation. The public subprocess oracle must finish
      within 7 seconds.
    - Keep executable test classification and oracle overrides unchanged.
-   - Render the canonical hook into both installable plugin surfaces.
+   - Render the canonical hook and its complete imported policy/analyzer
+     closure into both installable plugin surfaces. A host must not silently
+     enter the gate's defensive ImportError fallbacks because a sibling helper
+     was omitted.
    - Do not introduce fixture attestations, sidecars, or consumer graph
      analysis without evidence that warning-only handling is insufficient.
 
@@ -50,6 +53,8 @@
    - Warning on every changed fixture regardless of shared evidence.
    - Emitting user-visible text without a persistent signal.
    - Recording multiple fixture-warning signals for one hook decision.
+   - Shipping matching top-level gate files while omitting or staling an
+     imported helper in either host package.
    - Treating a fixture as production source after removing it from the test
      bucket.
    - Hardcoding the regression fixture's known opaque literal or recognizing
@@ -98,7 +103,8 @@
    copies, deploy merged main with both authoritative plugin updaters, then
    execute the installed Claude and Codex hook entrypoints against real
    temporary repositories for suspicious-fixture warning, unrelated-fixture
-   silence, and executable-test denial.
+   silence, executable-test denial, circular-override denial, and independent
+   override allowance.
 
 ## Mutation challenge
 
@@ -121,3 +127,7 @@ The pre-implementation challenger must verify that the proposed tests reject:
     using quote-only extraction after executable-test precedence is established.
 11. Detecting an unquoted declarative echo with data-scalar parsing but
     validating its override with quote-only asserted-token extraction.
+12. Copying only the top-level gate or new fixture helper while either host
+    omits `oracle_reason_validation.py` and silently honors circular overrides.
+13. Keeping the gate's analyzer dependencies Claude-only even though the gate
+    executes in both hosts.
