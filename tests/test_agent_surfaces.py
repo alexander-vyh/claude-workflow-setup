@@ -285,6 +285,22 @@ def test_claude_plugin_implementation_echo_gate_is_behaviorally_complete(tmp_pat
     )
 
 
+def test_both_plugin_wrappers_bundle_data_fixture_echo_policy():
+    """The gate's fixture classifier must not fall back in either host."""
+    canonical = (ROOT / "claude" / "hooks" / "data_fixture_echo.py").read_bytes()
+    packaged = (
+        ROOT / "plugins" / "escapement-claude" / "hooks" / "data_fixture_echo.py",
+        ROOT / "plugins" / "escapement" / "claude" / "hooks" / "data_fixture_echo.py",
+    )
+
+    for path in packaged:
+        assert path.is_file(), (
+            "plugin omits the implementation-echo data-fixture policy and "
+            f"silently falls back to hard-deny behavior: {path}"
+        )
+        assert path.read_bytes() == canonical
+
+
 def test_repo_root_is_a_marketplace_not_a_shadow_plugin():
     """The repo root must expose ONLY a marketplace, never a self-plugin (escapement-hnid).
 
