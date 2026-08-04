@@ -25,6 +25,9 @@
      also has a textual data extension (for example, `service.test.json`).
      Declarative executable tests use data-scalar extraction, including valid
      unquoted YAML/CSV values, and must never enter fixture advisory metadata.
+   - Use the same parser lane to derive asserted tokens for `# oracle:`
+     substance validation, so circular declarative overrides remain rejected
+     and genuinely independent overrides remain usable.
    - Preserve the canonical deny contract: one deny JSON document and exit 0.
    - Use the existing `_gate_signal` persistence owner and its
      `allow-with-warning` vocabulary.
@@ -68,6 +71,8 @@
    - An explicitly test-shaped data filename repeating the literal still
      denies rather than being reclassified as an inert fixture; quoted JSON
      and unquoted YAML/CSV forms are all negative controls.
+   - A circular override naming an unquoted declarative value still denies,
+     while an override naming an independent source is allowed.
    - A textual fixture containing a different opaque literal stays silent.
 
 7. **Positive control**
@@ -114,3 +119,5 @@ The pre-implementation challenger must verify that the proposed tests reject:
    exposing resource-budget truncation.
 10. Classifying an explicit declarative test as both executable and inert, or
     using quote-only extraction after executable-test precedence is established.
+11. Detecting an unquoted declarative echo with data-scalar parsing but
+    validating its override with quote-only asserted-token extraction.

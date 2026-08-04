@@ -696,6 +696,14 @@ def find_oracle_overrides(test_files: dict[str, str]) -> dict[str, list[str]]:
     return overrides
 
 
+def asserted_literal_values(filepath: str, text: str) -> set[str]:
+    """Extract asserted values without treating the override reason as evidence."""
+    test_body = _ORACLE_OVERRIDE_RE.sub("", text)
+    if has_text_data_extension(filepath):
+        return data_scalar_tokens(test_body)
+    return string_literals(test_body)
+
+
 def analyze(
     repo_root: Path,
     files: list[str],
@@ -905,7 +913,10 @@ def main() -> int:
     # too-short reason does NOT exempt the file.
     overrides = find_oracle_overrides(test_files)
     asserted_by_file = {
-        fp: asserted_tokens(string_literals(test_files.get(fp, ""))) for fp in overrides
+        fp: asserted_tokens(
+            asserted_literal_values(fp, test_files.get(fp, ""))
+        )
+        for fp in overrides
     }
     files_overridden, rejected_overrides = partition_overrides(overrides, asserted_by_file)
 

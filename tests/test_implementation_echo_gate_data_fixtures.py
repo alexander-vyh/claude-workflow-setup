@@ -83,6 +83,29 @@ EXPLICIT_DECLARATIVE_CASES = [
     ),
 ]
 
+DECLARATIVE_OVERRIDE_CASES = [
+    (
+        "contracts/access-policy.test.yaml",
+        "expected_record_type: {literal}\n",
+        "uuid",
+    ),
+    (
+        "__specs__/grant-map.test.yml",
+        "expected_record_type: {literal}\n",
+        "salesforce",
+    ),
+    (
+        "spec/identity-map.test.ini",
+        "expected_record_type = {literal}\n",
+        "hex",
+    ),
+    (
+        "test/role-contract.spec.cfg",
+        "expected_record_type = {literal}\n",
+        "uuid",
+    ),
+]
+
 
 def _git(repo: Path, *args: str) -> None:
     subprocess.run(
@@ -417,6 +440,170 @@ def test_unrelated_explicit_declarative_test_stays_silent(
     assert len(signals) == 1
     assert signals[0]["decision"] == "allow"
     assert signals[0].get("extras", {}).get("data_fixture_files", []) == []
+
+
+@pytest.mark.parametrize(
+    ("test_path", "test_template", "literal_shape"),
+    DECLARATIVE_OVERRIDE_CASES,
+)
+def test_circular_declarative_oracle_override_still_denies(
+    tmp_path: Path,
+    test_path: str,
+    test_template: str,
+    literal_shape: str,
+) -> None:
+    """Catches quote-only asserted-token extraction in the override lane."""
+    repo = _repo(tmp_path)
+    literal = _opaque_literal(tmp_path, f"circular-{test_path}", literal_shape)
+    _write_source(repo, literal)
+    test_file = repo / test_path
+    test_file.parent.mkdir(parents=True)
+    test_file.write_text(
+        f"# oracle: the {literal} literal is the asserted oracle value\n"
+        + test_template.replace("{literal}", literal),
+        encoding="utf-8",
+    )
+
+    output, signals = _run_hook(repo)
+
+    assert output is not None
+    assert output["hookSpecificOutput"]["permissionDecision"] == "deny"
+    reason = output["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "REJECTED" in reason
+    assert "circular" in reason
+    assert [signal["decision"] for signal in signals] == [
+        "override-rejected",
+        "deny",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("test_path", "test_template", "literal_shape"),
+    DECLARATIVE_OVERRIDE_CASES,
+)
+def test_independent_declarative_oracle_override_stays_usable(
+    tmp_path: Path,
+    test_path: str,
+    test_template: str,
+    literal_shape: str,
+) -> None:
+    """Positive control: the parser repair must not disable valid overrides."""
+    repo = _repo(tmp_path)
+    literal = _opaque_literal(tmp_path, f"independent-{test_path}", literal_shape)
+    _write_source(repo, literal)
+    test_file = repo / test_path
+    test_file.parent.mkdir(parents=True)
+    test_file.write_text(
+        "# oracle: cross-checked against the upstream Salesforce report export totals\n"
+        + test_template.replace("{literal}", literal),
+        encoding="utf-8",
+    )
+
+    output, signals = _run_hook(repo)
+
+    assert output is None
+    assert len(signals) == 1
+    assert signals[0]["decision"] == "override-applied"
+
+
+@pytest.mark.parametrize(
+    ("test_path", "test_template", "literal_shape", "external_reason"),
+    [
+        (*DECLARATIVE_OVERRIDE_CASES[0], "upstream Salesforce export totals"),
+        (*DECLARATIVE_OVERRIDE_CASES[1], "published Finance schema contract"),
+        (*DECLARATIVE_OVERRIDE_CASES[2], "customer API consumer contract"),
+        (*DECLARATIVE_OVERRIDE_CASES[3], "warehouse source report snapshot"),
+    ],
+)
+def test_mixed_declarative_oracle_override_stays_usable(
+    tmp_path: Path,
+    test_path: str,
+    test_template: str,
+    literal_shape: str,
+    external_reason: str,
+) -> None:
+    """A self-reference is valid when an independent referent also exists."""
+    repo = _repo(tmp_path)
+    literal = _opaque_literal(tmp_path, f"mixed-{test_path}", literal_shape)
+    _write_source(repo, literal)
+    test_file = repo / test_path
+    test_file.parent.mkdir(parents=True)
+    test_file.write_text(
+        f"# oracle: {literal} was cross-checked against {external_reason}\n"
+        + test_template.replace("{literal}", literal),
+        encoding="utf-8",
+    )
+
+    output, signals = _run_hook(repo)
+
+    assert output is None
+    assert len(signals) == 1
+    assert signals[0]["decision"] == "override-applied"
+
+
+@pytest.mark.parametrize(
+    ("test_path", "test_template", "literal_shape"),
+    DECLARATIVE_OVERRIDE_CASES,
+)
+def test_nonmember_opaque_declarative_oracle_override_stays_usable(
+    tmp_path: Path,
+    test_path: str,
+    test_template: str,
+    literal_shape: str,
+) -> None:
+    """Token membership, not opaque shape alone, determines circularity."""
+    repo = _repo(tmp_path)
+    asserted_literal = _opaque_literal(
+        tmp_path,
+        f"asserted-member-{test_path}",
+        literal_shape,
+    )
+    external_literal = _opaque_literal(
+        tmp_path,
+        f"external-nonmember-{test_path}",
+        literal_shape,
+    )
+    _write_source(repo, asserted_literal)
+    test_file = repo / test_path
+    test_file.parent.mkdir(parents=True)
+    test_file.write_text(
+        f"# oracle: the {external_literal} literal is the asserted oracle value\n"
+        + test_template.replace("{literal}", asserted_literal),
+        encoding="utf-8",
+    )
+
+    output, signals = _run_hook(repo)
+
+    assert output is None
+    assert len(signals) == 1
+    assert signals[0]["decision"] == "override-applied"
+
+
+def test_test_only_opaque_declarative_oracle_override_is_circular(
+    tmp_path: Path,
+) -> None:
+    """Asserted membership comes from the test, not source or issue evidence."""
+    repo = _repo(tmp_path)
+    shared_literal = _opaque_literal(tmp_path, "shared-issue", "uuid")
+    test_only_literal = _opaque_literal(tmp_path, "test-only-member", "uuid")
+    _write_source(repo, shared_literal)
+    test_file = repo / "contracts/access-policy.test.yaml"
+    test_file.parent.mkdir(parents=True)
+    test_file.write_text(
+        f"# oracle: the {test_only_literal} literal is the asserted oracle value\n"
+        f"expected_record_type: {shared_literal}\n"
+        f"secondary_record_type: {test_only_literal}\n",
+        encoding="utf-8",
+    )
+
+    output, signals = _run_hook(repo)
+
+    assert output is not None
+    assert output["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert [signal["decision"] for signal in signals] == [
+        "override-rejected",
+        "deny",
+    ]
 
 
 def test_two_shared_literals_produce_one_decision_level_warning(
