@@ -33,6 +33,8 @@ except ImportError:  # pragma: no cover
 try:
     from data_fixture_echo import (
         build_data_fixture_warning,
+        data_scalar_tokens,
+        has_text_data_extension,
         is_text_data_fixture,
         scan_data_fixture_matches,
     )
@@ -42,6 +44,12 @@ except ImportError:  # pragma: no cover
 
     def build_data_fixture_warning(_issues) -> str:
         return "IMPLEMENTATION-ECHO DATA-FIXTURE NOTICE"
+
+    def data_scalar_tokens(_text: str) -> set[str]:
+        return set()
+
+    def has_text_data_extension(_filepath: str) -> bool:
+        return False
 
     def scan_data_fixture_matches(_repo_root, _fixture_paths, _candidate_values):
         return {}, {}
@@ -493,12 +501,15 @@ def is_opaque_generated_literal(value: str) -> bool:
     return has_alpha and has_digit and bool(re.match(r"^[A-Za-z0-9_:/+=.-]+$", stripped))
 
 
-def extract_opaque_literals(files: dict[str, str]) -> dict[str, set[str]]:
+def extract_opaque_literals(
+    files: dict[str, str],
+    literal_extractor=string_literals,
+) -> dict[str, set[str]]:
     result: dict[str, set[str]] = {}
     for filepath, text in files.items():
         opaque = {
             value
-            for value in string_literals(text)
+            for value in literal_extractor(text)
             if is_opaque_generated_literal(value)
         }
         if opaque:
@@ -509,6 +520,7 @@ def extract_opaque_literals(files: dict[str, str]) -> dict[str, set[str]]:
 def find_shared_generated_literals(
     source_files: dict[str, str],
     test_files: dict[str, str],
+    literal_extractor=string_literals,
 ) -> list[Issue]:
     source_literals = extract_opaque_literals(source_files)
     if not source_literals:
@@ -520,7 +532,10 @@ def find_shared_generated_literals(
             literal_to_sources.setdefault(value, []).append(filepath)
 
     issues: list[Issue] = []
-    for test_path, test_values in extract_opaque_literals(test_files).items():
+    for test_path, test_values in extract_opaque_literals(
+        test_files,
+        literal_extractor,
+    ).items():
         for value in sorted(test_values):
             source_paths = literal_to_sources.get(value)
             if not source_paths:
@@ -693,15 +708,36 @@ def analyze(
     """
     source_paths = [path for path in files if is_source_file(path)]
     test_paths = [path for path in files if is_test_file(path)]
-    fixture_paths = [path for path in files if is_text_data_fixture(path)]
+    fixture_paths = [
+        path
+        for path in files
+        if is_text_data_fixture(path) and not is_test_file(path)
+    ]
     if not test_paths and not fixture_paths:
         return [], {}, [], {}
 
     source_files = {path: read_file(repo_root, path) for path in source_paths}
     test_files = {path: read_file(repo_root, path) for path in test_paths}
+    declarative_test_files = {
+        path: test_files[path]
+        for path in test_paths
+        if has_text_data_extension(path)
+    }
+    code_test_files = {
+        path: test_files[path]
+        for path in test_paths
+        if path not in declarative_test_files
+    }
 
     issues: list[Issue] = []
-    issues.extend(find_shared_generated_literals(source_files, test_files))
+    issues.extend(find_shared_generated_literals(source_files, code_test_files))
+    issues.extend(
+        find_shared_generated_literals(
+            source_files,
+            declarative_test_files,
+            data_scalar_tokens,
+        )
+    )
     issues.extend(find_mock_only_tests(test_files))
     issues.extend(
         Issue(

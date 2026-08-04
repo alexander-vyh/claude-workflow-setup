@@ -25,6 +25,64 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 HOOK = ROOT / "claude/hooks/implementation_echo_test_gate.py"
 
+EXPLICIT_DECLARATIVE_CASES = [
+    (
+        "tests/account-contract.test.json",
+        '{"expected_record_type": "{literal}"}\n',
+        "uuid",
+    ),
+    (
+        "spec/audit-events.spec.jsonl",
+        '{"expected_record_type": "{literal}"}\n',
+        "salesforce",
+    ),
+    (
+        "test/message-shape.test.ndjson",
+        '{"expected_record_type": "{literal}"}\n',
+        "hex",
+    ),
+    (
+        "__tests__/billing-rules.spec.yaml",
+        "expected_record_type: {literal}\n",
+        "uuid",
+    ),
+    (
+        "__specs__/grant-map.test.yml",
+        "expected_record_type: {literal}\n",
+        "salesforce",
+    ),
+    (
+        "tests/policy-bundle.spec.toml",
+        'expected_record_type = "{literal}"\n',
+        "hex",
+    ),
+    (
+        "spec/identity-map.test.ini",
+        "expected_record_type = {literal}\n",
+        "uuid",
+    ),
+    (
+        "test/role-contract.spec.cfg",
+        "expected_record_type = {literal}\n",
+        "salesforce",
+    ),
+    (
+        "__tests__/revenue-export.test.csv",
+        "expected_record_type\n{literal}\n",
+        "hex",
+    ),
+    (
+        "__specs__/seller-targets.spec.tsv",
+        "expected_record_type\tstatus\n{literal}\tok\n",
+        "uuid",
+    ),
+    (
+        "contracts/access-policy.test.yaml",
+        "expected_record_type: {literal}\n",
+        "salesforce",
+    ),
+]
+
 
 def _git(repo: Path, *args: str) -> None:
     subprocess.run(
@@ -252,25 +310,23 @@ def test_unquoted_text_fixture_scalar_warns_without_blocking(
 
 
 @pytest.mark.parametrize(
-    "test_path",
-    [
-        "tests/service.test.json",
-        "spec/service.spec.yaml",
-        "__tests__/service.test.csv",
-    ],
+    ("test_path", "test_template", "literal_shape"),
+    EXPLICIT_DECLARATIVE_CASES,
 )
 def test_explicit_test_shaped_data_filename_still_denies(
     tmp_path: Path,
     test_path: str,
+    test_template: str,
+    literal_shape: str,
 ) -> None:
     """Catches extension-first classification that downgrades executable tests."""
     repo = _repo(tmp_path)
-    literal = _opaque_literal(tmp_path, test_path)
+    literal = _opaque_literal(tmp_path, test_path, literal_shape)
     _write_source(repo, literal)
     test_file = repo / test_path
     test_file.parent.mkdir(parents=True)
     test_file.write_text(
-        json.dumps({"expected_record_type": literal}) + "\n",
+        test_template.replace("{literal}", literal),
         encoding="utf-8",
     )
 
@@ -278,8 +334,89 @@ def test_explicit_test_shaped_data_filename_still_denies(
 
     assert output is not None
     assert output["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "DATA-FIXTURE NOTICE" not in json.dumps(output)
     assert len(signals) == 1
     assert signals[0]["decision"] == "deny"
+    assert signals[0]["extras"]["data_fixture_issue_count"] == 0
+    assert signals[0]["extras"]["data_fixture_files"] == []
+
+
+def test_explicit_declarative_test_never_enters_fixture_scanner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Architecture contract: executable and inert paths are disjoint lanes."""
+    repo = _repo(tmp_path)
+    source_literal = _opaque_literal(tmp_path, "scanner-source")
+    fixture_literal = _opaque_literal(tmp_path, "scanner-fixture")
+    _write_source(repo, source_literal)
+    explicit_test_paths: list[str] = []
+    for test_path, test_template, _shape in EXPLICIT_DECLARATIVE_CASES:
+        explicit_test = repo / test_path
+        explicit_test.parent.mkdir(parents=True, exist_ok=True)
+        explicit_test.write_text(
+            test_template.replace("{literal}", source_literal),
+            encoding="utf-8",
+        )
+        explicit_test_paths.append(test_path)
+    fixture_path = "tests/fixtures/manifest.yaml"
+    fixture = repo / fixture_path
+    fixture.parent.mkdir(parents=True)
+    fixture.write_text(
+        f"expected_record_type: {fixture_literal}\n",
+        encoding="utf-8",
+    )
+    gate = _load_gate()
+    original_scan = gate.scan_data_fixture_matches
+    scanned_paths: list[str] = []
+
+    def observe_scan(repo_root: Path, paths: list[str], candidates: set[str]):
+        scanned_paths.extend(paths)
+        return original_scan(repo_root, paths, candidates)
+
+    monkeypatch.setattr(gate, "scan_data_fixture_matches", observe_scan)
+
+    gate.analyze(
+        repo,
+        ["src/service.py", *explicit_test_paths, fixture_path],
+    )
+
+    assert not set(explicit_test_paths) & set(scanned_paths)
+    assert scanned_paths == [fixture_path]
+
+
+@pytest.mark.parametrize(
+    ("test_path", "test_template", "literal_shape"),
+    EXPLICIT_DECLARATIVE_CASES,
+)
+def test_unrelated_explicit_declarative_test_stays_silent(
+    tmp_path: Path,
+    test_path: str,
+    test_template: str,
+    literal_shape: str,
+) -> None:
+    """Catches format-specific blanket denial without shared evidence."""
+    repo = _repo(tmp_path)
+    source_literal = _opaque_literal(tmp_path, "declarative-source", "uuid")
+    test_literal = _opaque_literal(
+        tmp_path,
+        f"unrelated-{test_path}",
+        literal_shape,
+    )
+    _write_source(repo, source_literal)
+    test_file = repo / test_path
+    test_file.parent.mkdir(parents=True)
+    test_file.write_text(
+        test_template.replace("{literal}", test_literal),
+        encoding="utf-8",
+    )
+
+    output, signals = _run_hook(repo)
+
+    assert output is None
+    assert len(signals) == 1
+    assert signals[0]["decision"] == "allow"
+    assert signals[0].get("extras", {}).get("data_fixture_files", []) == []
 
 
 def test_two_shared_literals_produce_one_decision_level_warning(

@@ -51,9 +51,14 @@ def is_text_data_fixture(filepath: str) -> bool:
     """Return whether a textual data file lives in an established test bucket."""
     path = Path(filepath)
     return (
-        path.suffix.lower() in TEXT_DATA_FIXTURE_EXTENSIONS
+        has_text_data_extension(filepath)
         and bool(set(path.parts) & TEST_DIR_SEGMENTS)
     )
+
+
+def has_text_data_extension(filepath: str) -> bool:
+    """Return whether a path uses one of the supported textual-data formats."""
+    return Path(filepath).suffix.lower() in TEXT_DATA_FIXTURE_EXTENSIONS
 
 
 def data_scalar_tokens(text: str) -> set[str]:

@@ -23,6 +23,8 @@
    - Keep the existing landing-time changed-file scope.
    - Preserve explicit executable-test filename precedence even when the file
      also has a textual data extension (for example, `service.test.json`).
+     Declarative executable tests use data-scalar extraction, including valid
+     unquoted YAML/CSV values, and must never enter fixture advisory metadata.
    - Preserve the canonical deny contract: one deny JSON document and exit 0.
    - Use the existing `_gate_signal` persistence owner and its
      `allow-with-warning` vocabulary.
@@ -64,7 +66,8 @@
    - An executable Python test repeating the same opaque production literal
      still denies.
    - An explicitly test-shaped data filename repeating the literal still
-     denies rather than being reclassified as an inert fixture.
+     denies rather than being reclassified as an inert fixture; quoted JSON
+     and unquoted YAML/CSV forms are all negative controls.
    - A textual fixture containing a different opaque literal stays silent.
 
 7. **Positive control**
@@ -109,3 +112,5 @@ The pre-implementation challenger must verify that the proposed tests reject:
    from fixture analysis.
 9. Reading a whole oversized fixture or collecting every match without
    exposing resource-budget truncation.
+10. Classifying an explicit declarative test as both executable and inert, or
+    using quote-only extraction after executable-test precedence is established.
