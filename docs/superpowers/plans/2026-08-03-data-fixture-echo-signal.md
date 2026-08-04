@@ -21,9 +21,18 @@
 3. **Solution constraints**
 
    - Keep the existing landing-time changed-file scope.
+   - Preserve explicit executable-test filename precedence even when the file
+     also has a textual data extension (for example, `service.test.json`).
    - Preserve the canonical deny contract: one deny JSON document and exit 0.
    - Use the existing `_gate_signal` persistence owner and its
      `allow-with-warning` vocabulary.
+   - Bound fixture bytes and matched-issue aggregation below the host's
+     ten-second hook deadline, and retain truncation metadata in the persistent
+     signal rather than reading arbitrarily large golden datasets into memory.
+     A decision may read at most 9,000,000 fixture bytes and retain at most 128
+     fixture issues across all changed fixtures; one additional byte may be
+     read solely to detect truncation. The public subprocess oracle must finish
+     within 7 seconds.
    - Keep executable test classification and oracle overrides unchanged.
    - Render the canonical hook into both installable plugin surfaces.
    - Do not introduce fixture attestations, sidecars, or consumer graph
@@ -40,6 +49,8 @@
      bucket.
    - Hardcoding the regression fixture's known opaque literal or recognizing
      only `tests/fixtures/` rather than the existing test-directory contract.
+   - Reading every matching fixture completely or aggregating an unbounded
+     number of advisory issues before the host deadline.
 
 5. **Fragile implementation to reject**
 
@@ -52,19 +63,23 @@
 
    - An executable Python test repeating the same opaque production literal
      still denies.
+   - An explicitly test-shaped data filename repeating the literal still
+     denies rather than being reclassified as an inert fixture.
    - A textual fixture containing a different opaque literal stays silent.
 
 7. **Positive control**
 
    A JSON/YAML/TOML/INI/CFG/CSV/TSV fixture sharing a production literal is
    allowed, emits one nonblocking message naming the fixture, and records one
-   `allow-with-warning` signal.
+   `allow-with-warning` signal. Valid unquoted scalars in YAML, INI/CFG, CSV,
+   and TSV are covered as well as quoted values.
 
 8. **Missing or unresolved handling**
 
    Unknown fixture provenance is explicitly allowed with a warning. Signal
    persistence is fail-soft as before and must never convert an advisory into
-   a denial. Binary fixture formats are explicitly unchanged: they are not
+   a denial. Resource-budget truncation also fails open, but must be explicit
+   in the persistent signal. Binary fixture formats are explicitly unchanged: they are not
    added to the textual fixture classifier or silently exempted here. A
    replayable binary-fixture false positive is the trigger for separate parser
    and policy work.
@@ -88,3 +103,9 @@ The pre-implementation challenger must verify that the proposed tests reject:
 5. One warning per matched literal or fixture instead of one decision-level
    warning.
 6. Hardcoded recognition of the regression test's literal or fixture path.
+7. Explicit `*.test.*` files being downgraded because extension checks run
+   before executable-test naming checks.
+8. Reusing the source-code quote parser so unquoted declarative scalars vanish
+   from fixture analysis.
+9. Reading a whole oversized fixture or collecting every match without
+   exposing resource-budget truncation.
