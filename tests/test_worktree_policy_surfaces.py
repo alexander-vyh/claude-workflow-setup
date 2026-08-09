@@ -152,6 +152,59 @@ def test_worktree_runtime_has_no_repository_specific_bootstrap_policy() -> None:
         assert not matches, f"repository-specific bootstrap literal in {path}: {matches}"
 
 
+def test_bootstrap_output_tail_memory_bound_is_statically_pinned() -> None:
+    for path in (
+        ROOT / "bin" / "escapement_worktree_bootstrap.py",
+        ROOT
+        / "plugins"
+        / "escapement"
+        / "bin"
+        / "escapement_worktree_bootstrap.py",
+        ROOT
+        / "plugins"
+        / "escapement-claude"
+        / "bin"
+        / "escapement_worktree_bootstrap.py",
+    ):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        bounds = [
+            node.value.value
+            for node in tree.body
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name)
+                and target.id == "BOOTSTRAP_OUTPUT_TAIL_BYTES"
+                for target in node.targets
+            )
+            and isinstance(node.value, ast.Constant)
+            and isinstance(node.value.value, int)
+        ]
+        assert len(bounds) == 1, path
+        assert 0 < bounds[0] <= 16 * 1024, (path, bounds[0])
+        calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
+        assert any(
+            isinstance(call.func, ast.Attribute)
+            and isinstance(call.func.value, ast.Name)
+            and call.func.value.id == "tempfile"
+            and call.func.attr == "TemporaryFile"
+            for call in calls
+        ), path
+        for call in calls:
+            for keyword in call.keywords:
+                assert not (
+                    keyword.arg == "capture_output"
+                    and isinstance(keyword.value, ast.Constant)
+                    and keyword.value.value is True
+                ), path
+                assert not (
+                    keyword.arg in {"stdout", "stderr"}
+                    and isinstance(keyword.value, ast.Attribute)
+                    and isinstance(keyword.value.value, ast.Name)
+                    and keyword.value.value.id == "subprocess"
+                    and keyword.value.attr == "PIPE"
+                ), path
+
+
 def test_obsolete_generated_location_guard_copies_do_not_exist() -> None:
     for path in (
         ROOT / "claude" / "hooks" / "beads_worktree_location_guard.py",

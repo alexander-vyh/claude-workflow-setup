@@ -10,12 +10,51 @@ from __future__ import annotations
 import json
 import os
 import signal
+import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
 
 from worktree_fixtures import git, make_remote_scenario, rev, run_cli
+
+
+ROOT = Path(__file__).resolve().parents[1]
+PUBLIC_WORKTREE_CLIS = (
+    pytest.param(ROOT / "bin" / "escapement-worktree", id="canonical"),
+    pytest.param(
+        ROOT / "plugins" / "escapement" / "bin" / "escapement-worktree",
+        id="codex-plugin",
+    ),
+    pytest.param(
+        ROOT / "plugins" / "escapement-claude" / "bin" / "escapement-worktree",
+        id="claude-plugin",
+    ),
+)
+
+
+@pytest.fixture(params=PUBLIC_WORKTREE_CLIS)
+def public_worktree_cli(request: pytest.FixtureRequest) -> Path:
+    cli = request.param
+    assert cli.is_file()
+    assert os.access(cli, os.X_OK)
+    return cli
+
+
+def _run_public_cli(
+    cli: Path,
+    primary: Path,
+    *args: str,
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [str(cli), *args],
+        cwd=primary,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=20,
+    )
 
 
 def _commit_contract(
@@ -628,4 +667,161 @@ def test_bootstrap_terminated_by_signal_fails_and_rolls_back(tmp_path: Path) -> 
 
     assert result.returncode != 0
     assert any(word in result.stderr.lower() for word in ("signal", "terminated", str(signal.SIGTERM)))
+    _assert_no_transaction(scenario.primary, name, branch)
+
+
+def test_timeout_kills_delayed_descendant_before_rollback(
+    tmp_path: Path, public_worktree_cli: Path
+) -> None:
+    scenario = make_remote_scenario(tmp_path)
+    name = "delayed-descendant"
+    branch = "feature/delayed-descendant"
+    target = scenario.primary / ".worktrees" / name
+    late_marker = target / "late-descendant.txt"
+    spawned_marker = tmp_path / "descendant-spawned.txt"
+    child_code = (
+        "import time; from pathlib import Path; "
+        "time.sleep(1.5); "
+        f"target=Path({str(target)!r}); target.mkdir(parents=True, exist_ok=True); "
+        f"Path({str(late_marker)!r}).write_text('late descendant survived')"
+    )
+    parent_code = (
+        "import subprocess, sys, time; from pathlib import Path; "
+        f"subprocess.Popen([{sys.executable!r}, '-c', {child_code!r}]); "
+        f"Path({str(spawned_marker)!r}).write_text('spawned'); "
+        "print('timeout stdout tail', flush=True); "
+        "print('timeout stderr tail', file=sys.stderr, flush=True); "
+        "time.sleep(10)"
+    )
+    source_sha = _commit_contract(
+        scenario.primary,
+        argv=[sys.executable, "-c", parent_code],
+        timeout_seconds=0.5,
+    )
+
+    result = _run_public_cli(
+        public_worktree_cli,
+        scenario.primary,
+        "create",
+        "--repo",
+        str(scenario.primary),
+        "--name",
+        name,
+        "--branch",
+        branch,
+        "--source",
+        source_sha,
+    )
+
+    assert result.returncode != 0
+    assert spawned_marker.read_text(encoding="utf-8") == "spawned"
+    assert "timeout stdout tail" in result.stderr
+    assert "timeout stderr tail" in result.stderr
+    immediate_target_exists = target.exists()
+    immediate_branch_exists = (
+        git(
+            scenario.primary,
+            "show-ref",
+            "--verify",
+            "--quiet",
+            f"refs/heads/{branch}",
+            check=False,
+        ).returncode
+        == 0
+    )
+    time.sleep(1.7)
+    assert not immediate_target_exists
+    assert not immediate_branch_exists
+    assert not target.exists()
+    assert not late_marker.exists()
+    _assert_no_transaction(scenario.primary, name, branch)
+
+
+def test_failed_bootstrap_preserves_valid_replacement_worktree_identity(
+    tmp_path: Path, public_worktree_cli: Path
+) -> None:
+    scenario = make_remote_scenario(tmp_path)
+    name = "registered-replacement"
+    branch = "feature/registered-replacement"
+    target = scenario.primary / ".worktrees" / name
+    marker = target / "replacement-marker.txt"
+    code = (
+        "import subprocess; from pathlib import Path; "
+        f"repo={str(scenario.primary)!r}; target={str(target)!r}; branch={branch!r}; "
+        "subprocess.run(['git','-C',repo,'worktree','remove','--force',target],check=True); "
+        f"subprocess.run(['git','-C',repo,'update-ref',f'refs/heads/{{branch}}',{scenario.stale_primary_sha!r}],check=True); "
+        "subprocess.run(['git','-C',repo,'worktree','add',target,branch],check=True); "
+        f"Path({str(marker)!r}).write_text('valid foreign replacement'); "
+        "raise SystemExit(47)"
+    )
+    source_sha = _commit_contract(
+        scenario.primary,
+        argv=[sys.executable, "-c", code],
+    )
+
+    result = _run_public_cli(
+        public_worktree_cli,
+        scenario.primary,
+        "create",
+        "--repo",
+        str(scenario.primary),
+        "--name",
+        name,
+        "--branch",
+        branch,
+        "--source",
+        source_sha,
+    )
+
+    assert result.returncode != 0
+    assert marker.read_text(encoding="utf-8") == "valid foreign replacement"
+    assert rev(target) == scenario.stale_primary_sha
+    assert rev(scenario.primary, f"refs/heads/{branch}") == scenario.stale_primary_sha
+    listing = git(scenario.primary, "worktree", "list", "--porcelain").stdout
+    assert (
+        f"worktree {target.resolve()}\n"
+        f"HEAD {scenario.stale_primary_sha}\n"
+        f"branch refs/heads/{branch}"
+    ) in listing
+
+
+def test_noisy_failure_reports_bounded_output_tails(
+    tmp_path: Path, public_worktree_cli: Path
+) -> None:
+    scenario = make_remote_scenario(tmp_path)
+    code = (
+        "import sys; "
+        "sys.stdout.write('o' * 250000 + ' useful stdout tail\\n'); "
+        "sys.stderr.write('e' * 250000 + '\\x1b[31m useful stderr tail\\n'); "
+        "raise SystemExit(53)"
+    )
+    source_sha = _commit_contract(
+        scenario.primary,
+        argv=[sys.executable, "-c", code],
+    )
+    name = "noisy-failure"
+    branch = "feature/noisy-failure"
+
+    result = _run_public_cli(
+        public_worktree_cli,
+        scenario.primary,
+        "create",
+        "--repo",
+        str(scenario.primary),
+        "--name",
+        name,
+        "--branch",
+        branch,
+        "--source",
+        source_sha,
+    )
+
+    assert result.returncode != 0
+    assert result.stdout == ""
+    assert "exit status 53" in result.stderr
+    assert "useful stdout tail" in result.stderr
+    assert "useful stderr tail" in result.stderr
+    assert "\x1b" not in result.stderr
+    assert "\\x1b" in result.stderr
+    assert len(result.stderr.encode("utf-8")) < 40_000
     _assert_no_transaction(scenario.primary, name, branch)

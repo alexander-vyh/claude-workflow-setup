@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import json
 import math
+import os
+import signal
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -17,6 +20,8 @@ from escapement_worktree_git import (
 
 REPO_CONFIG_PATH = ".escapement/repo.json"
 BOOTSTRAP_FIELDS = frozenset({"argv", "timeout_seconds"})
+BOOTSTRAP_OUTPUT_TAIL_BYTES = 8192
+BOOTSTRAP_TERMINATION_GRACE_SECONDS = 0.5
 
 
 @dataclass(frozen=True)
@@ -121,34 +126,101 @@ def resolve_bootstrap_contract(
     return BootstrapContract(argv=tuple(argv), timeout_seconds=timeout_value)
 
 
+def _output_tail(stream) -> str:
+    stream.flush()
+    size = stream.seek(0, os.SEEK_END)
+    stream.seek(max(0, size - BOOTSTRAP_OUTPUT_TAIL_BYTES))
+    raw = stream.read(BOOTSTRAP_OUTPUT_TAIL_BYTES)
+    decoded = raw.decode("utf-8", errors="replace")
+    escaped = decoded.encode("unicode_escape").decode("ascii")
+    return escaped[-BOOTSTRAP_OUTPUT_TAIL_BYTES:]
+
+
+def _output_diagnostic(stdout_stream, stderr_stream) -> str:
+    stderr_tail = _output_tail(stderr_stream)
+    stdout_tail = _output_tail(stdout_stream)
+    parts = []
+    if stderr_tail:
+        parts.append(f"stderr tail: {stderr_tail}")
+    if stdout_tail:
+        parts.append(f"stdout tail: {stdout_tail}")
+    return "; " + "; ".join(parts) if parts else ""
+
+
+def _process_group_exists(process_group: int) -> bool:
+    try:
+        os.killpg(process_group, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _terminate_process_group(process: subprocess.Popen[bytes]) -> None:
+    process_group = process.pid
+    try:
+        os.killpg(process_group, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+    try:
+        process.wait(timeout=BOOTSTRAP_TERMINATION_GRACE_SECONDS)
+    except subprocess.TimeoutExpired:
+        pass
+
+    if _process_group_exists(process_group):
+        try:
+            os.killpg(process_group, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+    if process.poll() is None:
+        try:
+            process.wait(timeout=BOOTSTRAP_TERMINATION_GRACE_SECONDS)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+
+
 def run_bootstrap(contract: BootstrapContract, target: Path) -> None:
     try:
-        result = subprocess.run(
-            list(contract.argv),
-            cwd=target,
-            text=True,
-            capture_output=True,
-            timeout=contract.timeout_seconds,
-            check=False,
-        )
+        with (
+            tempfile.TemporaryFile() as stdout_stream,
+            tempfile.TemporaryFile() as stderr_stream,
+        ):
+            process = subprocess.Popen(
+                list(contract.argv),
+                cwd=target,
+                stdout=stdout_stream,
+                stderr=stderr_stream,
+                start_new_session=True,
+            )
+            try:
+                returncode = process.wait(timeout=contract.timeout_seconds)
+            except subprocess.TimeoutExpired:
+                _terminate_process_group(process)
+                detail = _output_diagnostic(stdout_stream, stderr_stream)
+                raise WorktreeError(
+                    f"bootstrap timed out after {contract.timeout_seconds:g} seconds"
+                    f"{detail}"
+                ) from None
+
+            detail = _output_diagnostic(stdout_stream, stderr_stream)
     except FileNotFoundError as error:
         raise WorktreeError(
             f"bootstrap executable was not found: {contract.argv[0]}"
-        ) from error
-    except subprocess.TimeoutExpired as error:
-        raise WorktreeError(
-            f"bootstrap timed out after {contract.timeout_seconds:g} seconds"
         ) from error
     except ValueError as error:
         raise WorktreeError(f"bootstrap argv is invalid: {error}") from error
     except OSError as error:
         raise WorktreeError(f"bootstrap executable failed to start: {error}") from error
 
-    if result.returncode < 0:
+    if returncode < 0:
         raise WorktreeError(
-            f"bootstrap was terminated by signal {-result.returncode}"
+            f"bootstrap was terminated by signal {-returncode}{detail}"
         )
-    if result.returncode:
+    if returncode:
         raise WorktreeError(
-            f"bootstrap failed with exit status {result.returncode}"
+            f"bootstrap failed with exit status {returncode}{detail}"
         )

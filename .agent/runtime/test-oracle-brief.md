@@ -981,7 +981,13 @@ populated, and the actual affected-test hook reuses it.
 - Timeout, missing executable, signal, or non-zero exit makes the overall create
   fail and invokes the existing identity-guarded rollback. Rollback may remove
   only the exact worktree/ref created by this transaction and must preserve a
-  replaced path, moved branch, or foreign registration.
+  replaced path, moved branch, or foreign registration, including a valid
+  same-path/same-branch worktree whose HEAD differs from the source SHA.
+- Bootstrap runs in a dedicated process session. On timeout Escapement
+  terminates and reaps the whole process group before rollback, so delayed
+  descendants cannot recreate the target after the transaction returns.
+- Child output capture is memory-bounded. Failure and timeout errors expose
+  fixed-size, control-escaped stderr/stdout tails that remain useful for repair.
 - Keep policy generic and stdlib-only. Do not hard-code CAKE, `uv`, `.env`,
   pytest, testmon, or a `worktree-bootstrap` naming convention in Escapement.
 - Render the complete runtime sibling closure into both plugin distributions.
@@ -995,6 +1001,8 @@ populated, and the actual affected-test hook reuses it.
   wrong revision, through `shell=True`, or only on the first named repository.
 - Ignoring timeout/non-zero status, accepting malformed JSON types, or silently
   treating a configured missing executable as no bootstrap.
+- Killing only the bootstrap parent, retaining unbounded `PIPE` output in
+  memory, or discarding all child diagnostics.
 - Destructive rollback that deletes a target/ref/registration replaced during a
   failed or timed-out bootstrap.
 - Tests that merely assert a subprocess mock was called instead of observing a
@@ -1016,7 +1024,10 @@ would succeed, then force Beads identity validation to fail. Creation must fail
 without any sentinel, proving bootstrap did not run early. Parameterized
 malformed declarations, missing executable, timeout, and non-zero exits must
 leave no transaction-owned target/ref; race fixtures that replace or move those
-identities must remain intact after rollback.
+identities must remain intact after rollback. A delayed descendant must be dead
+before rollback and remain unable to recreate the target after its planned write
+time. A valid registered replacement at the same path and branch but a different
+HEAD must also survive intact.
 
 ## Positive control
 

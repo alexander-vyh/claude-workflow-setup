@@ -248,7 +248,7 @@ def verify_created_worktree(
 
 
 def _target_owned(
-    ctx: RepositoryContext, target: Path, branch: str
+    ctx: RepositoryContext, target: Path, branch: str, expected_sha: str
 ) -> tuple[bool, str]:
     if target.is_symlink():
         return False, "target is a symlink"
@@ -263,7 +263,13 @@ def _target_owned(
     symbolic = git(
         target, "symbolic-ref", "--quiet", "--short", "HEAD", check=False
     )
-    if top.returncode or common.returncode or symbolic.returncode:
+    head = git(target, "rev-parse", "--verify", "HEAD^{commit}", check=False)
+    if (
+        top.returncode
+        or common.returncode
+        or symbolic.returncode
+        or head.returncode
+    ):
         return False, "target is not an inspectable Git worktree"
     try:
         target_path = target.resolve(strict=True)
@@ -277,6 +283,8 @@ def _target_owned(
         return False, "target belongs to a different common directory"
     if symbolic.stdout.strip() != branch:
         return False, "target branch does not match the transaction"
+    if head.stdout.strip() != expected_sha:
+        return False, "target HEAD does not match the transaction source"
     return True, ""
 
 
@@ -289,7 +297,7 @@ def rollback_created_artifacts(
     residue: list[str] = []
     if target.exists() or target.is_symlink():
         try:
-            owned, reason = _target_owned(ctx, target, branch)
+            owned, reason = _target_owned(ctx, target, branch, expected_sha)
         except WorktreeError as error:
             owned, reason = False, str(error)
         if owned:
