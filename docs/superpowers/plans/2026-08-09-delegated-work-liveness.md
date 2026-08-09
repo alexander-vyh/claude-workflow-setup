@@ -83,7 +83,15 @@ Claude/Codex plugin surfaces, macOS launchd, Bash deployment tests.
   malformed, open, blocked, deferred, and failed `bd show` all block. Preserve
   the existing non-Beads-cwd degradation control.
 
-- [ ] **Step 3: Run RED**
+- [ ] **Step 3: Exercise the public Stop path**
+
+  Invoke `stop_hook.main()` with complete payload/runtime fixtures. Root
+  `in_progress` plus empty descendants must block both without a wake and with a
+  future wake whose supervisor health is missing or stale. Assert the
+  `_check_task_mode_queue` compatibility alias itself calls `bd show`; a correct
+  helper that is bypassed by public wiring must fail these tests.
+
+- [ ] **Step 4: Run RED**
 
   Run:
 
@@ -94,20 +102,20 @@ Claude/Codex plugin surfaces, macOS launchd, Bash deployment tests.
   Expected: the new parent-open and missing-root cases fail because the current
   code checks descendants only.
 
-- [ ] **Step 4: Extract and implement the root-aware check**
+- [ ] **Step 5: Extract and implement the root-aware check**
 
   Move the queue-query responsibility from `stop_hook.py` into
   `beads_task_state.py`. Resolve `root_id = parent_id or task_id`; require
   `status == 'closed'` before returning `queue_drained`; preserve universal
   user-release/wakeup handling outside this function.
 
-- [ ] **Step 5: Run GREEN and regression tests**
+- [ ] **Step 6: Run GREEN and regression tests**
 
   ```bash
   python -m pytest harness/tests/test_parent_outcome_gate.py harness/tests/test_task_mode_queue.py harness/tests/test_implicit_queue_scope.py harness/tests/test_worktree_stop_degradation.py -q
   ```
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
   ```bash
   git add harness/bin/beads_task_state.py harness/bin/stop_hook.py harness/tests/test_parent_outcome_gate.py harness/tests/test_task_mode_queue.py
@@ -119,8 +127,10 @@ Claude/Codex plugin surfaces, macOS launchd, Bash deployment tests.
 **Files:**
 
 - Create: `harness/bin/execution_ledger.py`
+- Create: `harness/bin/result_application.py`
 - Create: `harness/schemas/executions.schema.json`
 - Create: `harness/tests/test_execution_ledger.py`
+- Create: `harness/tests/test_result_application.py`
 - Modify: `harness/tests/test_trusted_source.py`
 
 **Interfaces:**
@@ -132,6 +142,8 @@ Claude/Codex plugin surfaces, macOS launchd, Bash deployment tests.
 - `claim_recovery(ledger: dict, execution_id: str, now: datetime,
   owner: str, ttl_seconds: int) -> dict | None`
 - `claim_result_application(...) -> dict | None`
+- `result_application.apply_verified_result(..., verify_outcome: Callable,
+  apply: Callable, idempotency_key: str, now: datetime) -> dict`
 - `load_trusted(path: Path, expected_parent: str) -> dict | None`
 - `mutate_atomic(path: Path, mutation: Callable[[dict], dict]) -> dict`
 
@@ -149,37 +161,50 @@ Claude/Codex plugin surfaces, macOS launchd, Bash deployment tests.
   live recovery claim prevents another claim, expiry advances generation, and a
   stale generation cannot claim application or mutate the active result.
 
-- [ ] **Step 3: Write storage/security controls**
+- [ ] **Step 3: Write result-application proof controls**
+
+  Exercise a public application orchestrator with an injected business-outcome
+  verifier; terminal state and result digest cannot directly supply proof. A
+  claim alone remains `unapplied`/`applying`, and missing/negative/exceptional
+  verification cannot mark it applied. After claim expiry, one fenced takeover
+  may complete after independently observing the outcome and the stale owner may
+  not. Equal result digests on distinct execution identities never deduplicate
+  application. Simulate external application succeeding and process death before
+  the ledger persists `applied`; takeover must recheck the business outcome or
+  reuse the stable idempotency key, produce exactly one external application,
+  and eventually persist fenced completion.
+
+- [ ] **Step 4: Write storage/security controls**
 
   Prove cross-session, malformed, world-writable, non-dictionary, and invalid
   enum inputs are unresolved; concurrent mutations serialize; a failed write
   leaves the previous valid JSON intact.
 
-- [ ] **Step 4: Run RED**
+- [ ] **Step 5: Run RED**
 
   ```bash
-  python -m pytest harness/tests/test_execution_ledger.py harness/tests/test_trusted_source.py -q
+  python -m pytest harness/tests/test_execution_ledger.py harness/tests/test_result_application.py harness/tests/test_trusted_source.py -q
   ```
 
   Expected: import/contract failures because the ledger module and schema do not
   exist.
 
-- [ ] **Step 5: Implement the smallest pure state machine and atomic store**
+- [ ] **Step 6: Implement the smallest pure state machine and atomic store**
 
   Use UTC ISO-8601 timestamps, `fcntl.flock`, a same-directory `NamedTemporaryFile`
   or explicit `.tmp`, `fsync`, and `os.replace`. Reject unknown event kinds and
   invalid attempt/generation identities rather than silently ignoring them.
 
-- [ ] **Step 6: Run GREEN and schema checks**
+- [ ] **Step 7: Run GREEN and schema checks**
 
   ```bash
-  python -m pytest harness/tests/test_execution_ledger.py harness/tests/test_trusted_source.py -q
+  python -m pytest harness/tests/test_execution_ledger.py harness/tests/test_result_application.py harness/tests/test_trusted_source.py -q
   ```
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
   ```bash
-  git add harness/bin/execution_ledger.py harness/schemas/executions.schema.json harness/tests/test_execution_ledger.py harness/tests/test_trusted_source.py
+  git add harness/bin/execution_ledger.py harness/bin/result_application.py harness/schemas/executions.schema.json harness/tests/test_execution_ledger.py harness/tests/test_result_application.py harness/tests/test_trusted_source.py
   git commit -m "feat: persist fenced delegated execution attempts"
   ```
 
@@ -220,27 +245,35 @@ Claude/Codex plugin surfaces, macOS launchd, Bash deployment tests.
   once; duplicate delivery is idempotent; an unparseable result leaves the
   attempt queued and therefore subject to its start deadline.
 
-- [ ] **Step 3: Write SessionStart reconciliation controls**
+- [ ] **Step 3: Reject adapter-level generation laundering**
+
+  Bind distinct native child IDs to generations one and two, then deliver the
+  literal late generation-one terminal fixture through every applicable public
+  adapter/reconciler ingress. Generation two and its application state remain
+  untouched. A payload without enough identity to determine generation is
+  unresolved; adapters must never default missing generation to current.
+
+- [ ] **Step 4: Write SessionStart reconciliation controls**
 
   An unresolved parent or due execution emits actionable continuation context.
   A closed parent with no due attempts emits nothing. Missing Beads/ledger state
   emits unresolved context. Include a Codex-specific SessionStart fixture and do
   not claim Stop support.
 
-- [ ] **Step 4: Run RED**
+- [ ] **Step 5: Run RED**
 
   ```bash
   python -m pytest harness/tests/test_delegation_hook.py harness/tests/test_execution_reconcile.py tests/test_agent_surfaces.py -q
   ```
 
-- [ ] **Step 5: Implement adapters and renderer packaging**
+- [ ] **Step 6: Implement adapters and renderer packaging**
 
   Register Claude PreToolUse/PostToolUse `Agent` hooks. Register the same
   `execution_reconcile.py` SessionStart source for Claude and Codex. Extend the
   renderer’s plugin-relative command rewriting and Codex support-file bundle so
   it never calls through `~/.claude`.
 
-- [ ] **Step 6: Render and run GREEN**
+- [ ] **Step 7: Render and run GREEN**
 
   ```bash
   python3 tools/render_agent_surfaces.py
@@ -248,7 +281,7 @@ Claude/Codex plugin surfaces, macOS launchd, Bash deployment tests.
   python3 tools/render_agent_surfaces.py --check
   ```
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
   ```bash
   git add harness/bin/delegation_hook.py harness/bin/execution_reconcile.py harness/tests/test_delegation_hook.py harness/tests/test_execution_reconcile.py agent-surfaces/manifest.json tools/render_agent_surfaces.py tests/test_agent_surfaces.py plugins/escapement plugins/escapement-claude .claude-plugin .codex AGENTS.md CLAUDE.md
@@ -285,7 +318,12 @@ Claude/Codex plugin surfaces, macOS launchd, Bash deployment tests.
   every failed pass preserves both `last_successful_reconcile_at` and
   `completed_generation`. A complete no-op pass and a complete action pass each
   advance health exactly once. This rejects health-after-enumeration as well as
-  health-before-useful-work.
+  health-before-useful-work. Also use two real thread directories: thread A
+  completes and thread B fails during load, reconciliation, or persistence.
+  In both scan orders and when scheduled-work inspection fails,
+  `reconcile_started_at` advances but seeded `last_successful_reconcile_at`,
+  `completed_generation`, installation identity, and success counts remain
+  unchanged; only a complete whole-root pass stamps authoritative health.
 
 - [ ] **Step 2: Write recovery crash-window and concurrency controls**
 
@@ -346,9 +384,12 @@ Claude/Codex plugin surfaces, macOS launchd, Bash deployment tests.
 **Files:**
 
 - Create: `harness/bin/supervisor_health.py`
+- Modify: `harness/bin/schedule_wakeup_bridge.py`
+- Modify: `harness/schemas/scheduled.schema.json`
 - Modify: `harness/bin/would_block_stop.py`
 - Modify: `harness/bin/stop_hook.py`
 - Create: `harness/tests/test_execution_stop_gate.py`
+- Modify: `harness/tests/test_schedule_wakeup_bridge.py`
 - Modify: `harness/tests/test_winddown_stop_integration.py`
 - Modify: `harness/tests/test_winddown_wakeup_backstop.py`
 
@@ -358,40 +399,56 @@ Claude/Codex plugin surfaces, macOS launchd, Bash deployment tests.
   max_age_seconds: int) -> bool`
 - `execution_stop_decision(root_status: str, ledger: dict | None,
   health: dict | None, scheduled: list, now: datetime) -> tuple[str, str]`
+- `schedule_wakeup_bridge.persist_managed_wakeup(execution: dict,
+  thread_dir: Path, trigger_at: datetime) -> dict`
 
 - [ ] **Step 1: Write the two incident replay tests**
 
   Replay (a) queue drained plus two non-terminal children and no healthy
   supervisor; (b) both child beads closed plus parent `in_progress`. Both block.
-  The positive control closes the parent and terminals all attempts.
+  The positive control closes the parent and terminals all attempts. Exercise
+  both the pure decision and complete public `stop_hook.main()` fixture so a
+  wiring bypass cannot pass.
 
 - [ ] **Step 2: Write wakeup/supervisor controls**
 
   Future wakeup plus absent, stale, pre-scan-only, wrong-installation, or malformed
   health blocks. Future wakeup plus a fresh successful generation and a running
   attempt within all deadlines permits a bounded pause. Hard-overdue work blocks
-  even if assistant chatter is recent.
+  even if assistant chatter is recent. Extend managed wake records with
+  `parent_session_id`, `watchdog_id`, `execution_id`, `attempt`, and `generation`.
+  Mismatches in any field block; an unrelated future CI wake plus fresh global
+  health cannot authorize pause. Only an exact current-generation managed wake
+  is relevant.
 
-- [ ] **Step 3: Run RED**
+- [ ] **Step 3: Prove the managed-wake producer/consumer contract**
+
+  Drive the public managed-wakeup producer from a current execution through
+  persisted schema-valid JSON, then feed that file into public `stop_hook.main()`.
+  Assert literal `parent_session_id`, `watchdog_id`, `execution_id`, `attempt`,
+  and `generation` fields and the bounded-pause decision. Omitting or corrupting
+  any producer field must fail schema validation and block Stop.
+
+- [ ] **Step 4: Run RED**
 
   ```bash
   python -m pytest harness/tests/test_execution_stop_gate.py harness/tests/test_winddown_stop_integration.py harness/tests/test_winddown_wakeup_backstop.py -q
   ```
 
-- [ ] **Step 4: Implement the pure decision and thin Stop wiring**
+- [ ] **Step 5: Implement the pure decision and thin Stop wiring**
 
   Keep payload parsing and logging in `stop_hook.py`; put freshness and execution
   decisions in sibling modules. Preserve explicit user release as the auditable
   override. Codex remains SessionStart/supervisor-only until a real Stop smoke
   succeeds.
 
-- [ ] **Step 5: Run GREEN and the whole harness suite**
+- [ ] **Step 6: Run GREEN and the whole harness suite**
 
   ```bash
   python -m pytest harness/tests -q
   ```
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
   ```bash
   git add harness/bin/supervisor_health.py harness/bin/would_block_stop.py harness/bin/stop_hook.py harness/tests/test_execution_stop_gate.py harness/tests/test_winddown_stop_integration.py harness/tests/test_winddown_wakeup_backstop.py

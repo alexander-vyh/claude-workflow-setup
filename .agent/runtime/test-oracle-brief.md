@@ -995,6 +995,11 @@ without waiting for a user message.
 - Exactly-once-spawn assumptions, unfenced retries, or stale-generation result
   application.
 - Future wakeup files accepted without fresh successful supervisor proof.
+- Public Stop wiring that bypasses otherwise-correct root/execution helpers.
+- Global health stamped after only part of a multi-thread scan succeeds.
+- Unrelated or old-generation future wakeups treated as current recovery proof.
+- Adapter events with missing generation silently relabeled as current.
+- Result-application claims treated as proof that the business result applied.
 - Missing/malformed/untrusted state treated as complete.
 
 ## Fragile implementation to reject
@@ -1009,12 +1014,18 @@ The parent-open regression plus stale/missing supervisor controls must fail it.
 - Root `in_progress`, `ready=[]`, `blocked=[]` => block
   `parent_outcome_unresolved`.
 - Root missing/malformed/unreadable => unresolved, never queue-drained.
+- Complete public Stop fixtures reject an open root with empty descendants both
+  without a wake and with a future wake plus missing/stale health.
 - Queued attempt past start deadline; running attempt past idle deadline; noisy
   attempt past hard deadline => sticky reconciliation due, not terminal.
 - Successful process start plus failed thread scan => no new successful-health
   timestamp.
 - A due attempt plus failure after planning, during its atomic claim write, or
   during spawn => neither successful-health time nor completed generation moves.
+- In a two-thread root, success for A followed by load/reconcile/persist failure
+  for B (and the reverse scan order), or scheduled inspection failure, advances
+  diagnostic `reconcile_started_at` but preserves all authoritative prior health
+  fields.
 - Two concurrent public reconciliations contend for one due attempt => one live
   current-generation claim and at most one spawn until claim expiry.
 - With `reconcile_due=None`, expired accepted activity/idle deadline, and fresh
@@ -1031,6 +1042,19 @@ The parent-open regression plus stale/missing supervisor controls must fail it.
   expiry advances generation and permits recovery.
 - Old-generation completion => incident evidence only, never current result
   application or Beads close.
+- Late generation-one completion delivered through public adapters after a
+  generation-two takeover cannot mutate generation two; missing generation is
+  unresolved, never defaulted.
+- A public application orchestrator must call an injected business verifier;
+  terminal state/digest cannot directly prove application. Missing/negative/
+  exceptional verification stays unapplied. If application succeeds and the
+  process dies before persistence, takeover rechecks the real outcome or reuses
+  a stable idempotency key so the external effect occurs once before fenced
+  completion. Equal digests on distinct executions remain distinct.
+- A future wake must exactly match parent session, watchdog, execution, attempt,
+  and generation; unrelated/mismatched wakeups do not authorize pause.
+- The public wake producer persists those literal identity fields in schema-valid
+  JSON consumed by public Stop; omitting any field fails validation and blocks.
 - HTTP 401/local-model absence => deterministic behavior unchanged.
 
 ## Positive control

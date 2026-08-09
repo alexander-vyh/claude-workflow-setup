@@ -182,12 +182,16 @@ Each tick:
 
 A Stop path may accept a scheduled pause only when both the relevant future
 wakeup/execution record exists and the supervisor health record is recent
-(within two configured tick intervals). A file written by an inactive, dry-run,
-or stale supervisor is not resumption proof.
+(within two configured tick intervals). A managed wake is relevant only when
+its `parent_session_id`, `watchdog_id`, `execution_id`, `attempt`, and
+`generation` exactly match the current execution. Unrelated scheduled checks and
+old attempts/generations cannot launder a pause. A file written by an inactive,
+dry-run, or stale supervisor is not resumption proof.
 
 The supervisor is level-triggered: restart or a missed tick re-evaluates current
 state. Supervisor process/tick liveness is not health; only a successfully
-completed useful reconciliation is health.
+completed useful reconciliation across every trusted thread and scheduled check
+is health. Partial success for one thread never advances global health.
 
 Recovery uses an expiring claim fenced by `(execution_id, attempt, generation)`.
 The claim is persisted under the same lock before spawn. A later reconciler may
@@ -210,8 +214,14 @@ retry safe.
 Late and duplicate completion events are idempotent. Old-generation completion
 is retained as incident evidence but cannot mutate the current attempt. Applying
 a current result requires an expiring result-application claim and an independent
-outcome check; `result_digest` alone is not proof that the result was applied
-once.
+outcome check through the public application orchestrator. Claiming leaves the
+result unapplied/applying; terminal status or a digest cannot directly provide
+verification. The current fenced claimant must query the business outcome and,
+when application is still required, use a stable execution-scoped idempotency
+key. If the external effect succeeds before ledger persistence and the process
+dies, takeover queries the outcome or reuses that key before acting, preventing
+duplicate mutation. Only then can it mark the result applied. Equal digests
+across distinct executions do not share application identity.
 
 ### 5. Host adapters
 
