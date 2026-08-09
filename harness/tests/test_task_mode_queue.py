@@ -55,6 +55,8 @@ def _fake_runner(responses):
     """
 
     def run_bd(args):
+        if args[:1] == ["show"]:
+            return [{"id": args[1], "status": "closed"}]
         return responses.get(args[0])
 
     return run_bd
@@ -75,7 +77,7 @@ def test_worktree_with_ready_work_blocks(tmp_path) -> None:
 def test_worktree_drained_allows(tmp_path) -> None:
     """POSITIVE CONTROL: worktree cwd, queue genuinely drained -> allow."""
     session_mode = {"repo_cwd": str(tmp_path), "parent_id": "cake-m95.4"}
-    run_bd = _fake_runner({"ready": [], "list": []})
+    run_bd = _fake_runner({"ready": [], "blocked": []})
     decision, reason = stop_hook._check_task_mode_queue(session_mode, run_bd=run_bd)
     assert (decision, reason) == ("allow", "queue_drained"), (
         f"a drained worktree queue must allow Stop; got {decision}/{reason}"
