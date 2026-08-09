@@ -1,31 +1,39 @@
 # Delegated Work Liveness Design
 
 **Date:** 2026-08-09
-**Status:** Proposed for written-spec review
+**Status:** Accepted for implementation after review and research
 **Tracked outcome:** `escapement-e3ai`
 
 ## Outcome
 
 An Escapement-managed parent may delegate work and yield without depending on a
-human prompt to restart it. Every delegated unit is durably known, bounded by
-start, activity, and hard deadlines, reconciled after process/session loss, and
-kept distinct from Beads task state. A local model may add semantic review on a
-machine that has one, but no portable correctness or liveness guarantee depends
-on that model.
+human prompt to restart it. In a Beads repository, every delegation that may
+outlive the parent turn is durable child work in Beads. Each native execution
+attempt is separately bounded by start, activity, and hard deadlines and is
+reconciled after process/session loss. A local model may add semantic review on
+a machine that has one, but no portable correctness or liveness guarantee
+depends on that model.
 
 The observed 2026-08-08 failure is the primary regression case: the parent
 reported that two agents were running, its Stop hooks allowed `queue_drained`,
 two children later stopped making observable progress inside tool calls, and no
 parent turn occurred for more than 22 hours until the user typed `well?`.
 
+The 2026-08-09 design-session failure is a second required regression case: two
+research child beads closed successfully, but the parent bead remained
+`in_progress`; the coordinator nevertheless returned a final answer saying the
+design remained unchanged. The user had to explicitly demand continuation.
+
 ## Why the Current Design Failed
 
 The current controls protect completion claims and recorded waits, but do not
 own delegated-work liveness:
 
-1. Task-mode Stop treats the scoped Beads queue as its completion boundary.
-   Beads does not record whether native child agents are queued, running, stale,
-   or terminal.
+1. Task-mode Stop treats ready/blocked descendants as its completion boundary
+   but does not require the claimed/root bead itself to be closed. An open or
+   `in_progress` parent with all children closed is therefore misclassified as
+   `queue_drained`. Beads also does not record whether a particular native child
+   attempt is queued, running, stale, or terminal.
 2. `ScheduleWakeup` is bridged into `scheduled.json`, but a future entry is
    accepted as resumption proof without establishing that an active scheduler
    will fire it.
@@ -54,33 +62,43 @@ semantics but add a service, workers, storage, authentication, and operational
 ownership that are disproportionate to a local coding-session harness. Deferred
 unless Escapement later needs cross-host distributed execution.
 
-### C. Escapement file ledger plus independently firing supervisor
+### C. Beads work graph plus Escapement attempt ledger and supervisor
 
-Persist a small per-parent delegation ledger, let host adapters contribute
-authoritative events, and make the existing waker the independent reconciliation
-authority. This reuses the continuation harness, remains inspectable, and adds no
-service dependency. **Selected.**
+Use Beads as the canonical durable work graph, persist a small per-parent native
+execution-attempt ledger, let host adapters contribute authoritative events,
+and make the existing waker the independent reconciliation authority. This
+reuses the continuation harness, remains inspectable, and adds no service
+dependency. **Selected.**
 
 ## Architecture
 
-### 1. Durable delegation ledger
+### 1. Beads work and durable execution-attempt ledger
 
-Each parent thread owns `delegations.json` beside `contract.json` and
-`scheduled.json`. The file is a versioned object, not an append-only transcript:
+In a Beads repository, a delegation that may outlive the parent turn requires a
+child bead created before dispatch. Beads is authoritative for durable work
+identity, outcome, acceptance criteria, hierarchy/dependencies, assignment,
+blocked state, and verified closure. Permanent child beads represent durable
+work; ephemeral wisps are reserved for disposable operational probes.
+
+Each parent thread owns `executions.json` beside `contract.json` and
+`scheduled.json`. The file contains native execution attempts, not a second task
+graph. It is a versioned object, not an append-only transcript:
 
 ```json
 {
   "version": 1,
   "parent_session_id": "session-id",
   "updated_at": "2026-08-09T20:00:00Z",
-  "delegations": [
+  "executions": [
     {
-      "delegation_id": "stable-random-id",
+      "bead_id": "escapement-e3ai.1",
+      "execution_id": "stable-random-id",
       "host": "claude",
+      "agent_name": "mutation-challenger",
       "native_child_id": "optional-until-bound",
-      "name": "mutation-challenger",
       "dispatch_tool_use_id": "host-tool-use-id",
       "attempt": 1,
+      "generation": 1,
       "state": "queued",
       "queued_at": "2026-08-09T20:00:00Z",
       "started_at": null,
@@ -89,17 +107,28 @@ Each parent thread owns `delegations.json` beside `contract.json` and
       "start_deadline": "2026-08-09T20:02:00Z",
       "idle_deadline": "2026-08-09T20:15:00Z",
       "hard_deadline": "2026-08-09T22:00:00Z",
+      "reconcile_due": null,
       "terminal_at": null,
       "terminal_reason": null,
+      "terminal_event_id": null,
       "result_digest": null,
       "watchdog_id": "stable-wakeup-id",
-      "recovery_count": 0
+      "recovery_count": 0,
+      "recovery_claim": null,
+      "result_application": {
+        "state": "unapplied",
+        "claim": null
+      }
     }
   ]
 }
 ```
 
-Allowed states are `queued`, `running`, `terminal`, `expired`, and `cancelled`.
+Allowed states are `queued`, `running`, `terminal`, `cancelled`, and `unknown`.
+Deadline breach is the sticky condition `reconcile_due=start|idle|hard`, not a
+claim that native execution ended. A still-running or late-terminal child can
+therefore coexist with an overdue reconciliation condition.
+
 Terminal success means native execution ended and a result is available; it does
 not mean the parent task or business outcome is verified.
 
@@ -108,8 +137,15 @@ atomic replacement. Ledger and directory ownership/permissions must pass the
 existing trusted-source checks. A malformed or untrusted ledger is unresolved,
 never empty or complete.
 
-Beads remains task state. The ledger may reference a bead for explanation, but
-Beads queue state never manufactures or closes a delegation record.
+Runtime state never duplicates Beads task titles, outcomes, acceptance criteria,
+dependencies, or task status. A worker terminal event never automatically closes
+a bead. Escapement first verifies the business outcome and only then updates the
+canonical Beads work state.
+
+Task-mode completion checks both the claimed/root bead and its relevant
+descendants. An open, `in_progress`, blocked, deferred, missing, or unreadable
+root is not `queue_drained`, even when every child is closed. Parent readiness is
+not parent completion, and Beads does not auto-close epics.
 
 ### 2. Three deadlines
 
@@ -135,23 +171,30 @@ agent tool call open indefinitely.
 first supported deployment. Its pure planner remains independently testable.
 Each tick:
 
-1. atomically writes a supervisor health record with tick time and installation
-   identity;
+1. writes a non-authoritative `reconcile_started_at` diagnostic;
 2. processes existing scheduled checks;
-3. scans trusted delegation ledgers;
+3. scans trusted execution ledgers and Beads work state;
 4. reconciles deadlines and terminal evidence;
-5. emits at most one recovery dispatch per due delegation attempt.
+5. claims and emits bounded recovery dispatches;
+6. only after the complete useful pass succeeds, atomically records
+   `last_successful_reconcile_at`, installation identity, and a monotonically
+   increasing completed generation.
 
 A Stop path may accept a scheduled pause only when both the relevant future
-wakeup/delegation record exists and the supervisor health record is recent
+wakeup/execution record exists and the supervisor health record is recent
 (within two configured tick intervals). A file written by an inactive, dry-run,
 or stale supervisor is not resumption proof.
 
 The supervisor is level-triggered: restart or a missed tick re-evaluates current
-state. Recovery dispatches are deduplicated using `(delegation_id, attempt,
-recovery_count)` and persisted before spawning. A spawn failure leaves the work
-due for retry; a successful spawn advances the recovery count. A bounded crash
-budget prevents a spawn storm and ends in a durable structured escalation.
+state. Supervisor process/tick liveness is not health; only a successfully
+completed useful reconciliation is health.
+
+Recovery uses an expiring claim fenced by `(execution_id, attempt, generation)`.
+The claim is persisted under the same lock before spawn. A later reconciler may
+take over only after claim expiry and advances the generation before dispatch.
+Exactly-once spawn is not assumed: recovery is at-least-once with generation
+fencing and idempotency. A bounded crash budget prevents a spawn storm and ends
+in a durable structured escalation.
 
 ### 4. Recovery behavior
 
@@ -164,9 +207,11 @@ cancel, retry, resume, or accept a late terminal result. External mutations may
 only be retried when an idempotency key or an independent outcome check makes the
 retry safe.
 
-Late and duplicate completion events are idempotent. They may close an expired
-native execution record, but cannot erase the incident or cause a second result
-application.
+Late and duplicate completion events are idempotent. Old-generation completion
+is retained as incident evidence but cannot mutate the current attempt. Applying
+a current result requires an expiring result-application claim and an independent
+outcome check; `result_digest` alone is not proof that the result was applied
+once.
 
 ### 5. Host adapters
 
@@ -182,20 +227,27 @@ child_cancelled
 snapshot_reconciled
 ```
 
-Each event includes host, parent session, stable delegation identity, event time,
-and native evidence. Adapter-specific payload parsing stays outside the ledger
-state machine.
+Each event includes host, parent session, Beads work identity, stable execution
+attempt/generation identity, event time, and native evidence. Adapter-specific
+payload parsing stays outside the ledger state machine.
 
 #### Claude Code
 
-- PreToolUse `Agent` registers dispatch intent before native execution.
+- Before an `Agent` call, the coordinator prepares an execution attempt with an
+  explicit child `bead_id`, host, session, and agent name through the ledger CLI.
+  This is structural state, not a Bead ID parsed from free-form prompt prose.
+- PreToolUse `Agent` requires the matching prepared attempt and atomically marks
+  dispatch intent before native execution. A missing, closed, or foreign Bead or
+  missing prepared attempt denies dispatch with a concrete repair command.
 - PostToolUse `Agent` binds the returned child identifier when the current
   payload fixture proves where it is exposed.
 - Child PostToolUse/assistant lifecycle events renew activity only after a
   completed boundary.
-- Stop reconciles authoritative `background_tasks` and `session_crons` plus
-  ledger state. A scoped Beads queue cannot release Stop while a current
-  delegation is unresolved unless a healthy watchdog owns the pause.
+- Stop reconciles authoritative `background_tasks` and `session_crons`, the
+  claimed/root bead plus relevant descendants, and execution-ledger state. It
+  cannot return `queue_drained` while the claimed/root bead remains unresolved.
+  A scoped Beads queue cannot release Stop while a current execution is
+  unresolved unless a healthy watchdog owns the pause.
 - `SubagentStop`, `TaskCompleted`, and `TeammateIdle` are used only after real
   payload fixtures prove their current shapes.
 - The eight-block host override remains an external limit, so the independent
@@ -208,7 +260,8 @@ state machine.
   support. Registration is enabled only when an installed-plugin fixture and a
   real `codex exec` smoke prove that the hook runs and its block is honored.
 - Until that proof exists, PreToolUse dispatch registration where available,
-  SessionStart reconciliation, and the independent supervisor provide recovery.
+  SessionStart reconciliation, parent-bead state, and the independent supervisor
+  provide recovery. Codex prose discipline is not treated as a mechanical gate.
 - Implementing and proving the Stop adapter subsumes the intended outcome of
   `escapement-2waa`; wakeup authoring/firing subsumes the relevant part of
   `escapement-u7aq`.
@@ -261,7 +314,7 @@ Deployment verification must distinguish:
 
 ## Error Handling and Safety
 
-- Missing/malformed/untrusted child or ledger state is unresolved and triggers
+- Missing/malformed/untrusted child, Beads, or ledger state is unresolved and triggers
   reconciliation; it is never treated as terminal.
 - Supervisor health missing or stale invalidates scheduled-pause release.
 - Model errors are advisory outages and never disable deterministic controls.
@@ -278,9 +331,10 @@ Deployment verification must distinguish:
 ### 1. Business invariant
 
 After a managed delegation, the harness either observes verified terminal child
-state or performs bounded automatic reconciliation. It cannot wait indefinitely
-for a completion callback or user prompt, and it cannot report completion merely
-because the Beads queue is drained.
+state and verified parent outcome or performs bounded automatic reconciliation.
+It cannot wait indefinitely for a completion callback or user prompt, and it
+cannot report completion merely because child beads or the descendant queue are
+drained while the parent bead remains unresolved.
 
 ### 2. Independent source of truth
 
@@ -297,7 +351,8 @@ because the Beads queue is drained.
 
 - Python standard library for the durable core; no Temporal/LangGraph service.
 - Atomic, trusted, per-session state under the continuation harness.
-- Beads remains task state only.
+- Beads is the canonical durable work graph; Escapement owns execution attempts,
+  liveness, reconciliation, outcome verification, and completion policy.
 - Host-specific payload parsing stays in adapters.
 - Local models are optional and advisory.
 - No secret material in Git, process arguments, transcripts, or incident logs.
@@ -308,6 +363,10 @@ because the Beads queue is drained.
 
 - Treating Beads queue drain, a transcript mtime, a task status string, or a
   future `scheduled.json` timestamp as sufficient completion/resumption proof.
+- Treating closed children or empty descendants as completion while the
+  claimed/root bead remains open or `in_progress`.
+- Mirroring Beads task metadata/status into `executions.json` or auto-closing a
+  bead from a worker terminal event.
 - Depending exclusively on parent process lifetime or completion notifications.
 - Renewing a lease on tool start, polling output, or local-model opinion.
 - Automatically replaying a child across an unknown mutation boundary.
@@ -318,15 +377,21 @@ because the Beads queue is drained.
 
 ### 5. Fragile implementation to reject
 
-Add only a Stop check that asks whether the team directory contains children,
-and allow Stop whenever any future wakeup file exists. This still stalls if the
-parent already ended, the waker is dry-run/uninstalled, child state disappears,
-or a completion notification is lost.
+Add only a Stop check that asks whether descendant child beads or a team
+directory contain unresolved children, and allow Stop when children are closed
+or any future wakeup exists. This passes the research-child case while the parent
+outcome remains open, and still stalls if the parent already ended, the waker is
+dry-run/uninstalled, child state disappears, or a completion notification is
+lost.
 
 ### 6. Negative controls
 
 - Exact incident replay: queue drained, two non-terminal children, no qualifying
   wake/supervisor proof must not allow an unbounded stop.
+- Exact design-session replay: both research child beads closed while parent bead
+  remains `in_progress` must block completion and trigger the next parent action.
+- Standalone claimed leaf bead `in_progress` with no descendants must not be
+  classified as `queue_drained`; the same bead closed is the positive control.
 - Child registered but never bound/started breaches the start deadline.
 - Tool-start with no result for more than 15 minutes breaches the activity
   deadline.
@@ -334,6 +399,10 @@ or a completion notification is lost.
 - Future wakeup plus stale/missing supervisor tick is rejected.
 - Missing, malformed, cross-session, or untrusted ledger remains unresolved.
 - Duplicate/late completion does not apply a result twice.
+- A healthy outer supervisor process whose useful reconciliation fails does not
+  update `last_successful_reconcile_at`.
+- Crash after recovery claim but before spawn is recovered after claim expiry;
+  stale-generation completion cannot mutate the replacement attempt.
 - Local endpoint unavailable or unauthorized does not disable the watchdog.
 - Codex hook declared but not effectively registered fails the installation
   contract.
@@ -341,7 +410,8 @@ or a completion notification is lost.
 ### 7. Positive controls
 
 - Parent with no managed children preserves ordinary verified Stop behavior.
-- All children terminal with results collected permits normal completion.
+- A claimed/root bead that is closed with all children terminal and results
+  verified permits normal completion.
 - A running child with recent accepted activity, unexpired hard deadline, and a
   healthy watchdog permits a bounded pause.
 - Legitimate scheduled external work with a healthy supervisor fires once and
@@ -360,8 +430,9 @@ specific auditable human override.
 1. Run focused ledger, adapter, Stop, supervisor, restart, security, and optional
    local-judge tests.
 2. Run a mutation challenger that plants at least these bad implementations:
-   queue-drain completion, any-mtime heartbeat, future-file-only wake proof,
-   missing-state-is-terminal, and automatic retry.
+   descendant-only queue-drain completion, child-terminal auto-close, any-mtime
+   heartbeat, health-before-reconcile, unfenced recovery spawn,
+   future-file-only wake proof, missing-state-is-terminal, and automatic retry.
 3. Run the full repository suite; rerun loopback-server tests outside a sandbox
    when local bind restrictions are the only failure.
 4. Render and check Claude/Codex plugin surfaces.
