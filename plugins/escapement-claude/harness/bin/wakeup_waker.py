@@ -129,6 +129,14 @@ def _dry_run_runner(command: str) -> Tuple[int, str]:
     return 1, "dry-run: command not executed"
 
 
+def iter_schedule_paths(threads_root: pathlib.Path) -> list[pathlib.Path]:
+    """Supported schedules: legacy parents plus one canonical actor layer."""
+    root = pathlib.Path(threads_root)
+    paths = list(root.glob("*/scheduled.json"))
+    paths.extend(root.glob("*/agents/*/scheduled.json"))
+    return sorted(paths)
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Continuation-harness waker (poll/handoff).")
     ap.add_argument("--fire", action="store_true",
@@ -140,7 +148,7 @@ def main(argv=None) -> int:
     root = pathlib.Path(args.threads_root)
     total_spawns = []
     exit_code = 0
-    for sched in root.glob("*/scheduled.json"):
+    for sched in iter_schedule_paths(root):
         # Trust boundary: a check entry's `command` is shell-executed by the
         # launchd-detached waker. Refuse any schedule another local user could
         # have rewritten (wrong owner, or group/world-writable file or dir).
