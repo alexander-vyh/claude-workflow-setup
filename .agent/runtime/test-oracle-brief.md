@@ -1013,6 +1013,20 @@ The parent-open regression plus stale/missing supervisor controls must fail it.
   attempt past hard deadline => sticky reconciliation due, not terminal.
 - Successful process start plus failed thread scan => no new successful-health
   timestamp.
+- A due attempt plus failure after planning, during its atomic claim write, or
+  during spawn => neither successful-health time nor completed generation moves.
+- Two concurrent public reconciliations contend for one due attempt => one live
+  current-generation claim and at most one spawn until claim expiry.
+- With `reconcile_due=None`, expired accepted activity/idle deadline, and fresh
+  filesystem mtime plus ledger `updated_at` from polling/tool-start, public
+  reconciliation sets idle-due and claims recovery. A paired completed-activity
+  event is the positive renewal control. Static checks reject mtime and ledger
+  `updated_at` as activity oracles.
+- Every terminal-ingress public path receives open child/root beads and a
+  recording Beads runner; none may issue closure mutation. Architecture checks
+  forbid `bd close`, closed-status updates, and closure-helper imports from the
+  ledger, hook, reconciliation, and supervisor modules. Business verification
+  owns task closure and Stop remains blocked while canonical beads are open.
 - Recovery claim persisted then process crash => no immediate duplicate; claim
   expiry advances generation and permits recovery.
 - Old-generation completion => incident evidence only, never current result
@@ -1027,6 +1041,8 @@ The parent-open regression plus stale/missing supervisor controls must fail it.
   valid future wake, and fresh post-reconcile health => bounded pause.
 - Recovery after claim expiry emits exactly one current-generation spawn in the
   controlled fixture.
+- Both a complete no-op reconciliation and a complete action reconciliation
+  advance useful-work health exactly once.
 - Authenticated local judge annotation is observable but does not change the
   deterministic decision.
 

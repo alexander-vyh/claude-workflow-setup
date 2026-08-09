@@ -278,24 +278,43 @@ Claude/Codex plugin surfaces, macOS launchd, Bash deployment tests.
   `codex exec resume <session-id> <prompt>`, Claude uses the existing resume or
   fresh handoff path.
 
-- [ ] **Step 1: Write the false-health regression**
+- [ ] **Step 1: Write the false-health regressions**
 
-  Simulate a successful process tick whose second thread scan raises. Assert no
-  new `last_successful_reconcile_at` or completed generation is written. This
-  rejects health-before-useful-work.
+  Seed prior health plus a due attempt. Parameterize injected failures after
+  planning, during the atomic recovery-claim write, and during spawn. Assert
+  every failed pass preserves both `last_successful_reconcile_at` and
+  `completed_generation`. A complete no-op pass and a complete action pass each
+  advance health exactly once. This rejects health-after-enumeration as well as
+  health-before-useful-work.
 
-- [ ] **Step 2: Write recovery crash-window controls**
+- [ ] **Step 2: Write recovery crash-window and concurrency controls**
 
   Simulate: claim persisted, crash before spawn; immediate second tick cannot
   spawn; post-expiry tick advances generation and spawns; late generation-one
   completion cannot apply. Prove spawn failure leaves a bounded retryable claim
-  and budget exhaustion creates one durable escalation.
+  and budget exhaustion creates one durable escalation. Start two independent
+  public `reconcile_all` calls against the same due attempt behind a barrier
+  immediately before claim acquisition; exactly one may persist the live claim
+  and call `spawn`. After claim expiry, exactly one takeover advances generation.
 
 - [ ] **Step 3: Write restart and host-spawn controls**
 
   A fresh process with no memory scans current level state and handles all due
   attempts. Assert exact argv lists for Claude and Codex without executing real
   CLIs. Missing/untrusted state is reported unresolved, never treated empty.
+  Begin with `reconcile_due=None`, expired `last_activity_at`/`idle_deadline`, a
+  fresh filesystem mtime, and fresh ledger `updated_at` from polling/tool-start.
+  Public `reconcile_all` must set `reconcile_due=idle` and claim recovery; only a
+  paired explicit completed-activity event at the same time may renew idle time.
+  Add a static check that the supervisor does not import `workflow_status` or
+  use stat/mtime/ledger `updated_at` as accepted activity. Feed terminal native
+  evidence through every public ingress (`delegation_hook.post_tool`,
+  `execution_reconcile`, and `execution_supervisor`) with open child/root beads
+  and a recording `run_bd`; assert zero closure mutation, result application
+  remains verification-required, and Stop remains blocked. Add an architecture
+  check over `execution_ledger.py`, `delegation_hook.py`,
+  `execution_reconcile.py`, and `execution_supervisor.py` forbidding `bd close`,
+  `bd update --status closed`, or closure-capable helper imports.
 
 - [ ] **Step 4: Run RED**
 
