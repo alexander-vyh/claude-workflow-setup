@@ -2,9 +2,9 @@
 """Hook gate for requiring a Test Oracle Brief before behavioral code changes.
 
 Claude use:
-  PreToolUse on Write/Edit/NotebookEdit/Serena edit tools. Blocks edits to
-  code/test files unless .agent/runtime/test-oracle-brief.md exists in the
-  repository and contains the required section headings.
+  PreToolUse on Write/Edit/NotebookEdit/Serena edit tools. Asks for approval
+  before edits to code/test files unless .agent/runtime/test-oracle-brief.md
+  exists in the repository and contains substantive required sections.
 
 Codex use:
   PreToolUse on Bash. Blocks landing/closure commands such as git commit,
@@ -27,8 +27,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 try:
     from _gate_signal import record as _record_signal
 except ImportError:  # pragma: no cover
-    def _record_signal(*_args, **_kwargs) -> None:
-        return None
+    _record_signal = None
 
 
 BRIEF_RELATIVE_PATH = Path(".agent/runtime/test-oracle-brief.md")
@@ -56,11 +55,16 @@ GATED_EDIT_TOOLS = frozenset(
     }
 )
 
-RELATIVE_PATH_TOOLS = frozenset(
+FILE_PATH_KEYS = ("file_path", "relative_path", "notebook_path")
+
+PLACEHOLDER_VALUES = frozenset(
     {
-        "mcp__serena__replace_symbol_body",
-        "mcp__serena__insert_after_symbol",
-        "mcp__serena__insert_before_symbol",
+        "tbd",
+        "todo",
+        "n/a",
+        "na",
+        "???",
+        "coming soon",
     }
 )
 
@@ -110,6 +114,7 @@ CODE_EXTENSIONS = frozenset(
         ".vue",
         ".svelte",
         ".astro",
+        ".ipynb",
         ".sql",
         ".sh",
         ".bash",
@@ -251,9 +256,8 @@ def deny(reason: str) -> int:
     contradictory double-block. We use the JSON path exclusively, so this
     returns 0, not 2.
 
-    Per gate-design.md Rule 1 the escape path stays first-class: the denial
-    *reason* (built by block_message) documents the agent-invokable 'proceed'
-    override, so the gate blocks without trapping the user.
+    Landing actions intentionally use the hard-deny path: the edit-time ask is
+    the escape path, while landing still requires a complete brief.
     """
     print(
         json.dumps(
@@ -273,16 +277,29 @@ def normalize_heading(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", value.lower())
 
 
-def section_present(text: str, section: str) -> bool:
-    wanted = normalize_heading(section)
-    for line in text.splitlines():
-        stripped = line.strip()
-        if not stripped:
+def section_heading(line: str) -> str | None:
+    stripped = line.strip()
+    if not stripped:
+        return None
+    stripped = re.sub(r"^#{1,6}\s*", "", stripped)
+    stripped = re.sub(r"^\d+[.)]\s*", "", stripped)
+    stripped = stripped.strip("*_ \t:-")
+    normalized = normalize_heading(stripped)
+    return next(
+        (section for section in REQUIRED_SECTIONS if normalize_heading(section) == normalized),
+        None,
+    )
+
+
+def section_has_substantive_content(lines: list[str]) -> bool:
+    for line in lines:
+        value = line.strip()
+        value = re.sub(r"^(?:[-*+]|\d+[.)])\s*", "", value)
+        value = value.strip("`*_ \t")
+        if not value:
             continue
-        stripped = re.sub(r"^#{1,6}\s*", "", stripped)
-        stripped = re.sub(r"^\d+[.)]\s*", "", stripped)
-        stripped = stripped.strip("*_ \t:-")
-        if normalize_heading(stripped) == wanted:
+        normalized = re.sub(r"\s+", " ", value).strip(" .:;").casefold()
+        if normalized not in PLACEHOLDER_VALUES:
             return True
     return False
 
@@ -292,7 +309,21 @@ def missing_brief_sections(brief_path: Path) -> list[str]:
         text = brief_path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return list(REQUIRED_SECTIONS)
-    return [section for section in REQUIRED_SECTIONS if not section_present(text, section)]
+    section_bodies: dict[str, list[str]] = {}
+    active_section: str | None = None
+    for line in text.splitlines():
+        heading = section_heading(line)
+        if heading is not None:
+            active_section = heading
+            section_bodies.setdefault(heading, [])
+        elif active_section is not None:
+            section_bodies[active_section].append(line)
+
+    return [
+        section
+        for section in REQUIRED_SECTIONS
+        if not section_has_substantive_content(section_bodies.get(section, []))
+    ]
 
 
 def find_git_root(start: str | Path) -> Path | None:
@@ -353,26 +384,76 @@ def resolve_target_path(filepath: str, cwd: str | None) -> Path:
     return Path(cwd or os.getcwd()) / path
 
 
-def brief_status(repo_root: Path) -> tuple[bool, str | None]:
+def brief_status(repo_root: Path) -> tuple[bool, str | None, str]:
     brief_path = repo_root / BRIEF_RELATIVE_PATH
     if not brief_path.exists():
-        return False, f"Missing required Test Oracle Brief: {BRIEF_RELATIVE_PATH}"
+        return (
+            False,
+            f"Missing required Test Oracle Brief: {BRIEF_RELATIVE_PATH}",
+            "missing-brief",
+        )
     missing = missing_brief_sections(brief_path)
     if missing:
         return (
             False,
-            "Test Oracle Brief is missing required section headings: "
+            "Test Oracle Brief is missing required substantive content for: "
             + ", ".join(missing),
+            "invalid-brief",
         )
-    return True, None
+    return True, None, "valid-brief"
 
 
-def block_message(reason: str, repo_root: Path, files: list[str]) -> str:
+def record_decision_signal(
+    data: dict,
+    *,
+    decision: str,
+    reason: str,
+    category: str,
+    target: str,
+    **extras,
+) -> None:
+    invocation_id = data.get("tool_use_id") or data.get("prompt_id") or data.get("session_id")
+    signal_extras = {
+        "tool": data.get("tool_name", ""),
+        "target": target,
+        "category": category,
+        **extras,
+    }
+    if isinstance(invocation_id, str) and invocation_id:
+        signal_extras["invocation_id"] = invocation_id
+
+    if _record_signal is None:
+        print(
+            "test_oracle_brief_gate: gate signal unavailable; decision preserved",
+            file=sys.stderr,
+        )
+        return
+    try:
+        _record_signal(
+            gate_name="test_oracle_brief_gate",
+            decision=decision,
+            reason=reason,
+            **signal_extras,
+        )
+    except Exception as error:  # pragma: no cover - recorder is fail-soft itself
+        print(
+            f"test_oracle_brief_gate: gate signal unavailable ({error}); decision preserved",
+            file=sys.stderr,
+        )
+
+
+def block_message(
+    reason: str,
+    repo_root: Path,
+    files: list[str],
+    *,
+    override_available: bool,
+) -> str:
     sample_files = "\n".join(f"  - {name}" for name in files[:8])
     if len(files) > 8:
         sample_files += f"\n  - ... {len(files) - 8} more"
 
-    return (
+    message = (
         f"{reason}\n\n"
         "Before editing or landing behavior-bearing code/tests, create:\n"
         f"  {repo_root / BRIEF_RELATIVE_PATH}\n\n"
@@ -381,11 +462,15 @@ def block_message(reason: str, repo_root: Path, files: list[str]) -> str:
         + "\n\n"
         "Relevant changed/target files:\n"
         + (sample_files if sample_files else "  - unknown")
-        + "\n\nIf this work is genuinely exempt (one-off fix, scripts/, "
-        "spike/, no real behavior change), say 'proceed' to skip the "
-        "brief for this change. The override is captured; if it gets "
-        "used often, the gate's heuristic needs tuning."
     )
+    if override_available:
+        message += (
+            "\n\nIf this work is genuinely exempt (one-off fix, scripts/, "
+            "spike/, no real behavior change), say 'proceed' to skip the "
+            "brief for this change. The override is captured; if it gets "
+            "used often, the gate's heuristic needs tuning."
+        )
+    return message
 
 
 def handle_edit_gate(data: dict) -> int:
@@ -398,8 +483,14 @@ def handle_edit_gate(data: dict) -> int:
     if not isinstance(tool_input, dict):
         return allow()
 
-    path_key = "relative_path" if tool_name in RELATIVE_PATH_TOOLS else "file_path"
-    raw_path = tool_input.get(path_key) or tool_input.get("file_path") or tool_input.get("relative_path")
+    raw_path = next(
+        (
+            tool_input.get(path_key)
+            for path_key in FILE_PATH_KEYS
+            if isinstance(tool_input.get(path_key), str) and tool_input.get(path_key).strip()
+        ),
+        None,
+    )
     if not isinstance(raw_path, str) or not raw_path.strip():
         return allow()
 
@@ -417,22 +508,32 @@ def handle_edit_gate(data: dict) -> int:
     if not is_relevant_file(rel_target):
         return allow()
 
-    ok, reason = brief_status(repo_root)
+    ok, reason, category = brief_status(repo_root)
     if ok:
-        _record_signal(
-            gate_name="test_oracle_brief_gate",
+        record_decision_signal(
+            data,
             decision="allow",
             reason="oracle brief present and valid",
+            category=category,
             target=rel_target,
         )
         return allow()
-    _record_signal(
-        gate_name="test_oracle_brief_gate",
-        decision="deny",
+    reason = reason or "Test Oracle Brief is missing required content."
+    record_decision_signal(
+        data,
+        decision="ask",
         reason=reason or "Invalid Test Oracle Brief.",
+        category=category,
         target=rel_target,
     )
-    return deny(block_message(reason or "Invalid Test Oracle Brief.", repo_root, [rel_target]))
+    return ask(
+        block_message(
+            reason,
+            repo_root,
+            [rel_target],
+            override_available=True,
+        )
+    )
 
 
 def command_from(data: dict) -> str:
@@ -692,24 +793,37 @@ def handle_bash_landing_gate(data: dict) -> int:
     if not relevant:
         return allow()
 
-    ok, reason = brief_status(repo_root)
+    ok, reason, category = brief_status(repo_root)
+    target = relevant[0]
     if ok:
-        _record_signal(
-            gate_name="test_oracle_brief_gate",
+        record_decision_signal(
+            data,
             decision="allow",
             reason="oracle brief present and valid",
-            surface="finishing-command",
+            category=category,
+            target=target,
+            surface="landing-command",
             file_count=len(relevant),
         )
         return allow()
-    _record_signal(
-        gate_name="test_oracle_brief_gate",
+    reason = reason or "Test Oracle Brief is missing required content."
+    record_decision_signal(
+        data,
         decision="deny",
-        reason=reason or "Invalid Test Oracle Brief.",
-        surface="finishing-command",
+        reason=reason,
+        category=category,
+        target=target,
+        surface="landing-command",
         file_count=len(relevant),
     )
-    return deny(block_message(reason or "Invalid Test Oracle Brief.", repo_root, relevant))
+    return deny(
+        block_message(
+            reason,
+            repo_root,
+            relevant,
+            override_available=False,
+        )
+    )
 
 
 def main() -> int:
