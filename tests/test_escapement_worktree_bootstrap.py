@@ -166,6 +166,40 @@ def test_malformed_bootstrap_contract_fails_before_git_creation(
 
 
 @pytest.mark.parametrize(
+    "argv",
+    [
+        ["bad\0executable"],
+        [sys.executable, "bad\0argument"],
+    ],
+    ids=["executable", "later-argument"],
+)
+def test_embedded_nul_fails_before_git_creation_without_traceback(
+    tmp_path: Path, argv: list[str]
+) -> None:
+    scenario = make_remote_scenario(tmp_path)
+    source_sha = _commit_contract(scenario.primary, argv=argv)
+    name = "nul-argv"
+    branch = "feature/nul-argv"
+
+    result = run_cli(
+        scenario.primary,
+        "create",
+        "--repo",
+        str(scenario.primary),
+        "--name",
+        name,
+        "--branch",
+        branch,
+        "--source",
+        source_sha,
+    )
+
+    assert result.returncode != 0
+    assert "traceback" not in result.stderr.lower()
+    _assert_no_transaction(scenario.primary, name, branch)
+
+
+@pytest.mark.parametrize(
     ("argv_builder", "timeout", "expected_fragment"),
     [
         (lambda _marker: ["definitely-not-a-real-bootstrap-executable"], 5, "executable"),

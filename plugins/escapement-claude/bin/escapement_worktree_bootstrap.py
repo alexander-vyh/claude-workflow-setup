@@ -93,10 +93,16 @@ def resolve_bootstrap_contract(
     if (
         not isinstance(argv, list)
         or not argv
-        or any(not isinstance(argument, str) or not argument for argument in argv)
+        or any(
+            not isinstance(argument, str)
+            or not argument
+            or "\0" in argument
+            for argument in argv
+        )
     ):
         raise WorktreeError(
-            "worktree.bootstrap.argv must be a non-empty array of non-empty strings"
+            "worktree.bootstrap.argv must be a non-empty array of non-empty, "
+            "NUL-free strings"
         )
     timeout = bootstrap["timeout_seconds"]
     try:
@@ -133,6 +139,8 @@ def run_bootstrap(contract: BootstrapContract, target: Path) -> None:
         raise WorktreeError(
             f"bootstrap timed out after {contract.timeout_seconds:g} seconds"
         ) from error
+    except ValueError as error:
+        raise WorktreeError(f"bootstrap argv is invalid: {error}") from error
     except OSError as error:
         raise WorktreeError(f"bootstrap executable failed to start: {error}") from error
 

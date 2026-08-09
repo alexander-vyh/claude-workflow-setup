@@ -970,8 +970,9 @@ populated, and the actual affected-test hook reuses it.
 ## Solution constraints
 
 - The optional contract lives in `.escapement/repo.json` as
-  `worktree.bootstrap.argv` (a non-empty JSON array of non-empty strings) and an
-  explicit positive `timeout_seconds`; execute argv directly with no shell.
+  `worktree.bootstrap.argv` (a non-empty JSON array of non-empty, NUL-free
+  strings) and an explicit positive `timeout_seconds`; execute argv directly
+  with no shell.
 - Absence means provisioning is not applicable and preserves existing behavior.
   Any malformed declaration fails closed before Git creates a worktree.
 - Execute only after Git identity and Beads identity validation, inside the
@@ -1028,9 +1029,10 @@ declaration must still create successfully without executing anything extra.
 
 Missing `worktree.bootstrap` is explicitly allowed. Once the key is present,
 missing/empty argv, non-string items, unknown fields that make the contract
-ambiguous, booleans/non-numeric/non-positive timeout values, launch errors,
-timeouts, and non-zero exits fail closed. Rollback uncertainty fails safe by
-preserving ambiguous residue and reporting it rather than deleting user state.
+ambiguous, embedded NUL bytes, booleans/non-numeric/non-positive timeout values,
+launch errors, timeouts, and non-zero exits fail closed. Rollback uncertainty
+fails safe by preserving ambiguous residue and reporting it rather than deleting
+user state.
 
 ## Final outcome verification
 
