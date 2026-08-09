@@ -84,16 +84,13 @@ def test_worktree_drained_allows(tmp_path) -> None:
     )
 
 
-def test_worktree_blocked_deps_allows(tmp_path) -> None:
-    """ready empty but open tasks remain blocked on deps -> ALLOW. Blocked/deferred
-    tasks are parked, not actionable now, so they must not gate stopping (this is
-    what forced a literal 'stop' on conversational turns). NEGATIVE control is
-    test_worktree_with_ready_work_blocks: actually-ready work still blocks."""
+def test_worktree_blocked_deps_blocks(tmp_path) -> None:
+    """A real scoped blocked result is not a clean drain without a wakeup."""
     session_mode = {"repo_cwd": str(tmp_path), "parent_id": "cake-m95.4"}
-    run_bd = _fake_runner({"ready": [], "list": [{"id": "cake-m95.4.9"}]})
+    run_bd = _fake_runner({"ready": [], "blocked": [{"id": "cake-m95.4.9"}]})
     decision, reason = stop_hook._check_task_mode_queue(session_mode, run_bd=run_bd)
-    assert (decision, reason) == ("allow", "queue_drained"), (
-        f"empty ready queue must allow stop even with blocked tasks open; got {decision}/{reason}"
+    assert (decision, reason) == ("block", "blocked_tasks_no_wakeup"), (
+        f"scoped blocked work must not look drained; got {decision}/{reason}"
     )
 
 

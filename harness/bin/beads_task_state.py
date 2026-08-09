@@ -88,10 +88,6 @@ def check_task_root_outcome(session_mode: dict, run_bd: BdRunner | None = None) 
     root = (run_bd or _default_runner(repo_cwd))(["show", root_id])
     if _closed_root(root_id, root):
         return ("allow", "parent_outcome_closed")
-    if root is None and not (
-        (pathlib.Path(repo_cwd) / ".beads").exists() or _main_repo_has_beads(repo_cwd)
-    ):
-        return ("allow", "task_mode_bd_unavailable")
     return ("block", "parent_outcome_unresolved")
 
 
@@ -132,9 +128,7 @@ def check_task_scope(session_mode: dict, run_bd: BdRunner | None = None) -> tupl
     # more actionable denial when it is already present.  This also keeps the
     # capability-probe degradation for a genuinely non-Beads cwd intact.
     root = runner(["show", root_id])
-    if root is not None and not _closed_root(root_id, root):
-        return ("block", "parent_outcome_unresolved")
-    if root is None and has_beads_dir:
+    if not _closed_root(root_id, root):
         return ("block", "parent_outcome_unresolved")
 
     blocked = runner(["blocked", *scope])

@@ -94,6 +94,15 @@ def test_closed_foreign_root_does_not_complete_requested_root():
     )
 
 
+def test_ready_capability_then_failed_root_show_blocks_without_beads_dir(tmp_path):
+    """A successful ready query proves Beads capability despite no literal directory."""
+    responses = _responses(None)
+    assert _check_task_scope(_mode(ROOT, str(tmp_path)), _runner(responses)) == (
+        "block",
+        "parent_outcome_unresolved",
+    )
+
+
 @pytest.mark.parametrize(
     "root_response",
     [
@@ -132,17 +141,25 @@ def test_compatibility_alias_queries_root_before_allowing_drain(tmp_path):
     assert ["show", ROOT] in calls
 
 
-def _write_fake_bd(tmp_path: pathlib.Path, root_status: str) -> pathlib.Path:
+def _write_fake_bd(
+    tmp_path: pathlib.Path, root_status: str, *, fail_root_show: bool = False
+) -> pathlib.Path:
     """Create a real executable boundary for stop_hook.main()'s subprocess path."""
     fakebin = tmp_path / "bin"
     fakebin.mkdir()
     script = fakebin / "bd"
+    root_response = (
+        "    raise SystemExit(1)\n"
+        if fail_root_show
+        else f"    print(json.dumps([{{'id': args[1], 'status': {root_status!r}}}]))\n"
+    )
     script.write_text(
         "#!/usr/bin/env python3\n"
         "import json, sys\n"
         "args = tuple(arg for arg in sys.argv[1:] if arg != '--json')\n"
         "if args[:1] == ('show',):\n"
-        f"    print(json.dumps([{{'id': args[1], 'status': {root_status!r}}}]))\n"
+        + root_response
+        +
         "elif args[:1] in (('ready',), ('blocked',)):\n"
         "    print('[]')\n"
         "else:\n"
@@ -160,19 +177,22 @@ def _run_stop(
     *,
     scheduled: list[dict],
     root_status: str = "in_progress",
+    has_beads_dir: bool = True,
+    fail_root_show: bool = False,
 ) -> str:
     session_id = "parent-outcome-session"
     root = tmp_path / "harness"
     repo_cwd = tmp_path / "repo"
     repo_cwd.mkdir()
-    (repo_cwd / ".beads").mkdir()
+    if has_beads_dir:
+        (repo_cwd / ".beads").mkdir()
     thread_dir = root / "threads" / session_id
     thread_dir.mkdir(parents=True)
     (thread_dir / "session_mode.json").write_text(
         json.dumps(_mode(ROOT, str(repo_cwd))), encoding="utf-8"
     )
     (thread_dir / "scheduled.json").write_text(json.dumps(scheduled), encoding="utf-8")
-    fakebin = _write_fake_bd(tmp_path, root_status)
+    fakebin = _write_fake_bd(tmp_path, root_status, fail_root_show=fail_root_show)
     monkeypatch.setattr(stop_hook, "HARNESS_ROOT", root)
     monkeypatch.setattr(stop_hook.session_isolation, "write_checkout", lambda *args: None)
     monkeypatch.setenv("PATH", f"{fakebin}{os.pathsep}{os.environ.get('PATH', '')}")
@@ -214,3 +234,19 @@ def test_public_stop_allows_closed_root_with_empty_descendants(monkeypatch, caps
         root_status="closed",
     )
     assert output == ""
+
+
+def test_public_wakeup_blocks_failed_root_show_after_ready_capability(
+    monkeypatch, capsys, tmp_path
+):
+    """A future wake cannot bypass a failed canonical root lookup."""
+    output = _run_stop(
+        monkeypatch,
+        capsys,
+        tmp_path,
+        scheduled=[{"wake_at": (dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=1)).isoformat()}],
+        root_status="closed",
+        has_beads_dir=False,
+        fail_root_show=True,
+    )
+    assert "parent_outcome_unresolved" in output
