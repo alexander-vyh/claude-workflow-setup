@@ -14,6 +14,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from escapement_worktree_bootstrap import (
+    resolve_bootstrap_contract,
+    run_bootstrap,
+)
 from escapement_worktree_git import (
     RepositoryContext,
     ResolvedSource,
@@ -365,6 +369,7 @@ def create_worktree(request: WorktreeRequest) -> CreationResult:
             if request.source is not None
             else resolve_default_source(ctx)
         )
+        bootstrap = resolve_bootstrap_contract(ctx, source)
         root_beads = beads_context(ctx.primary)
         branch_created = False
         try:
@@ -386,6 +391,11 @@ def create_worktree(request: WorktreeRequest) -> CreationResult:
             beads_verified = verify_created_worktree(
                 ctx, request, target, source, root_beads
             )
+            if bootstrap is not None:
+                run_bootstrap(bootstrap, target)
+                beads_verified = verify_created_worktree(
+                    ctx, request, target, source, root_beads
+                )
         except (WorktreeError, OSError) as error:
             failure = (
                 error

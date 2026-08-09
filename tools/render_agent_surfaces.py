@@ -34,6 +34,7 @@ SHARED_HOOK_SUPPORT = {
 SHARED_RUNTIME_SUPPORT = {
     "bin/escapement-worktree",
     "bin/escapement_worktree.py",
+    "bin/escapement_worktree_bootstrap.py",
     "bin/escapement_worktree_git.py",
 }
 CODEX_HOOK_SUPPORT = {

@@ -945,3 +945,99 @@ than risk blocking an unrelated command.
 Run `python3 -m pytest claude/hooks/tests/test_beads_worktree_guard.py -q`,
 render and check generated surfaces, then commit and push from the
 Beads-created worktree. Confirm the remote branch points to the new commit.
+
+---
+
+# Test Oracle Brief — repository-declared worktree bootstrap (`escapement-dbhb`)
+
+## Business invariant
+
+`escapement-worktree create` returns success only when the newly verified
+worktree has also completed the target repository's declared bootstrap. In CAKE,
+that means a fresh Escapement worktree can import `duckdb`, resolves `.env` to
+the primary checkout's file when present, and owns a populated testmon database
+that lets the affected-test pre-push path select from a warm dependency graph.
+
+## Independent source of truth
+
+The generic transaction is judged by an arbitrary repository-owned executable
+whose sentinel records its real cwd, source revision, and ordering relative to
+Beads validation. CAKE is judged by the existing `just worktree-bootstrap`
+authority plus user-visible artifacts in a disposable real CAKE worktree:
+Python imports `duckdb`, `.env` has the intended target, `.testmondata` is
+populated, and the actual affected-test hook reuses it.
+
+## Solution constraints
+
+- The optional contract lives in `.escapement/repo.json` as
+  `worktree.bootstrap.argv` (a non-empty JSON array of non-empty strings) and an
+  explicit positive `timeout_seconds`; execute argv directly with no shell.
+- Absence means provisioning is not applicable and preserves existing behavior.
+  Any malformed declaration fails closed before Git creates a worktree.
+- Execute only after Git identity and Beads identity validation, inside the
+  verified target, at the exact resolved source revision. Re-verify transaction
+  identity after bootstrap before reporting success.
+- Timeout, missing executable, signal, or non-zero exit makes the overall create
+  fail and invokes the existing identity-guarded rollback. Rollback may remove
+  only the exact worktree/ref created by this transaction and must preserve a
+  replaced path, moved branch, or foreign registration.
+- Keep policy generic and stdlib-only. Do not hard-code CAKE, `uv`, `.env`,
+  pytest, testmon, or a `worktree-bootstrap` naming convention in Escapement.
+- Render the complete runtime sibling closure into both plugin distributions.
+
+## Invalid solution classes
+
+- Delegating to `bd worktree create`, copying a stale `.venv` or `.testmondata`,
+  or assuming Beads owns repository provisioning.
+- Hard-coding `uv sync --all-extras`, CAKE paths, or `just` in Escapement.
+- Running bootstrap before Beads validation, from the primary checkout, at the
+  wrong revision, through `shell=True`, or only on the first named repository.
+- Ignoring timeout/non-zero status, accepting malformed JSON types, or silently
+  treating a configured missing executable as no bootstrap.
+- Destructive rollback that deletes a target/ref/registration replaced during a
+  failed or timed-out bootstrap.
+- Tests that merely assert a subprocess mock was called instead of observing a
+  sentinel and the real final worktree artifacts.
+
+## Fragile implementation to reject
+
+The tempting shortcut copies the primary checkout's current `.testmondata` and
+runs a bare environment sync. Testmon's database is path/revision sensitive and
+the copied cache may be empty or stale; this also omits CAKE's authoritative
+broad warm-up. A CAKE disposable-worktree oracle must therefore inspect a cache
+created in the target and exercise the real affected-test hook, not only check
+that a file named `.testmondata` exists.
+
+## Negative control
+
+Configure an arbitrary bootstrap script that writes an external sentinel and
+would succeed, then force Beads identity validation to fail. Creation must fail
+without any sentinel, proving bootstrap did not run early. Parameterized
+malformed declarations, missing executable, timeout, and non-zero exits must
+leave no transaction-owned target/ref; race fixtures that replace or move those
+identities must remain intact after rollback.
+
+## Positive control
+
+An unrelated temporary repository configures a non-CAKE argv command. The
+sentinel must show the target cwd and expected source SHA, and successful
+creation must retain the verified worktree. A repository with no bootstrap
+declaration must still create successfully without executing anything extra.
+
+## Missing/unresolved handling
+
+Missing `worktree.bootstrap` is explicitly allowed. Once the key is present,
+missing/empty argv, non-string items, unknown fields that make the contract
+ambiguous, booleans/non-numeric/non-positive timeout values, launch errors,
+timeouts, and non-zero exits fail closed. Rollback uncertainty fails safe by
+preserving ambiguous residue and reporting it rather than deleting user state.
+
+## Final outcome verification
+
+Run the boundary suite and renderer/parity checks, then land both coordinated
+repository PRs. From merged Escapement and merged CAKE defaults, invoke the
+installed `escapement-worktree create` against a disposable CAKE branch. Inside
+that real target, import `duckdb`, verify `.env` resolution, verify a populated
+target-owned testmon DB, and execute the actual affected-test pre-push command
+to prove warm selection. Finally remove only that explicitly disposable
+worktree/branch and verify both repositories remain clean.
