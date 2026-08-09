@@ -178,10 +178,11 @@ def main(argv=None) -> int:
                         print(f"spawn failed for {sched}: {exc}", file=sys.stderr)
                     else:
                         spawned.append(_public_spawn(s))
-                tmp = sched.with_suffix(".json.tmp")
-                with tmp.open("w") as f:
-                    json.dump(kept, f)
-                os.replace(tmp, sched)
+                if kept != entries or spawned:
+                    tmp = sched.with_suffix(".json.tmp")
+                    with tmp.open("w") as f:
+                        json.dump(kept, f)
+                    os.replace(tmp, sched)
                 total_spawns += spawned
             else:
                 total_spawns += [_public_spawn(s) for s in spawns]

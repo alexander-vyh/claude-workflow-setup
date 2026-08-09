@@ -33,6 +33,7 @@ Test Oracle Brief
 from __future__ import annotations
 
 import datetime as dt
+import importlib.util
 import json
 import os
 import pathlib
@@ -53,6 +54,21 @@ from would_block_stop import thread_dir_for_session  # noqa: E402
 SESSION = "shared-session-42"
 AGENT_A = "oracle.alpha"
 AGENT_B = "oracle-alpha"
+
+
+def _load_rendered_waker():
+    path = REPO / "plugins" / "escapement-claude" / "harness" / "bin" / "wakeup_waker.py"
+    spec = importlib.util.spec_from_file_location("rendered_wakeup_waker", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+WAKER_SURFACES = (
+    pytest.param(wakeup_waker, id="canonical"),
+    pytest.param(_load_rendered_waker(), id="rendered-claude"),
+)
 
 
 def _env(root: pathlib.Path, agent: str | None, *, seed: str = "17") -> dict[str, str]:
@@ -350,33 +366,45 @@ def test_nested_actor_checkouts_participate_in_collision_detection(tmp_path) -> 
     assert [r["worktree_root"] for r in records] == ["/repo"]
 
 
+@pytest.mark.parametrize("waker", WAKER_SURFACES)
 def test_waker_fires_only_due_actor_schedule_and_ignores_arbitrary_depth(
-    tmp_path, monkeypatch,
+    tmp_path, monkeypatch, waker,
 ) -> None:
     root = tmp_path / "threads"
     parent = root / "parent" / "scheduled.json"
-    actor = root / SESSION / "agents" / "actor-key" / "scheduled.json"
+    actor_a = root / SESSION / "agents" / "actor-a" / "scheduled.json"
+    actor_b = root / SESSION / "agents" / "actor-b" / "scheduled.json"
     unrelated = root / "x" / "arbitrary" / "depth" / "scheduled.json"
-    for path in (parent, actor, unrelated):
+    for path in (parent, actor_a, actor_b, unrelated):
         path.parent.mkdir(parents=True, exist_ok=True)
     parent_entry = {
         "wake_at": "2999-01-01T00:00:00+00:00", "kind": "resume",
         "prompt": "parent", "thread_id": "parent", "created_by": "x", "crash_count": 0,
     }
-    actor_entry = {
-        "wake_at": "2000-01-01T00:00:00+00:00", "kind": "resume",
-        "prompt": "actor", "thread_id": SESSION, "created_by": "x", "crash_count": 0,
+    actor_a_entry = {
+        "wake_at": "2999-01-01T00:00:00+00:00", "kind": "resume",
+        "prompt": "actor-a", "thread_id": SESSION, "created_by": "x", "crash_count": 0,
     }
-    parent.write_text(json.dumps([parent_entry]))
-    actor.write_text(json.dumps([actor_entry]))
-    unrelated.write_text(json.dumps([actor_entry]))
+    actor_b_entry = {
+        "wake_at": "2000-01-01T00:00:00+00:00", "kind": "resume",
+        "prompt": "actor-b", "thread_id": SESSION, "created_by": "x", "crash_count": 0,
+    }
+    # Deliberately preserve distinct serializations. A semantic JSON equality
+    # assertion misses sibling rewrites that perturb bytes/watchers/racing writers.
+    parent.write_text(json.dumps([parent_entry], indent=2) + "\n")
+    actor_a.write_text(json.dumps([actor_a_entry], separators=(",", ":")) + "\n")
+    actor_b.write_text(json.dumps([actor_b_entry]))
+    unrelated.write_text(json.dumps([actor_b_entry]))
+    parent_before = parent.read_bytes()
+    actor_a_before = actor_a.read_bytes()
     spawned: list[list[str]] = []
-    monkeypatch.setattr(wakeup_waker.ts, "is_trusted_file", lambda _path: True)
-    monkeypatch.setattr(wakeup_waker.subprocess, "Popen", lambda argv: spawned.append(argv))
+    monkeypatch.setattr(waker.ts, "is_trusted_file", lambda _path: True)
+    monkeypatch.setattr(waker.subprocess, "Popen", lambda argv: spawned.append(argv))
 
-    assert wakeup_waker.main(["--fire", "--threads-root", str(root)]) == 0
+    assert waker.main(["--fire", "--threads-root", str(root)]) == 0
 
-    assert json.loads(parent.read_text()) == [parent_entry]
-    assert json.loads(actor.read_text()) == []
-    assert json.loads(unrelated.read_text()) == [actor_entry]
-    assert len(spawned) == 1 and "actor" in spawned[0]
+    assert parent.read_bytes() == parent_before
+    assert actor_a.read_bytes() == actor_a_before
+    assert json.loads(actor_b.read_text()) == []
+    assert json.loads(unrelated.read_text()) == [actor_b_entry]
+    assert len(spawned) == 1 and "actor-b" in spawned[0]
