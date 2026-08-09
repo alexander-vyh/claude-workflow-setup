@@ -55,7 +55,7 @@ def _extract_task_id(command: str) -> Optional[str]:
     return task_id if _is_issue_id(task_id) else None
 
 
-_MAX_PARENT_HOPS = 20  # cycle / runaway-chain backstop so the hook never hangs
+_MAX_PARENT_LOOKUPS = 20  # cycle / runaway-chain backstop so the hook never hangs
 
 
 class _ParentWalkError(Exception):
@@ -97,7 +97,7 @@ def _decode_parent(data: dict, expected_issue_id: str) -> Optional[str]:
 
     parent_fields = [data[key] for key in ("parent_id", "parent") if key in data]
     if not parent_fields:
-        raise _ParentWalkError(f"malformed parent for {issue_id}: field missing")
+        return None
     for parent in parent_fields:
         if parent is not None and not _is_issue_id(parent):
             raise _ParentWalkError(f"malformed parent for {issue_id}")
@@ -125,7 +125,7 @@ def _lookup_parent_id(task_id: str, run_show=None) -> Optional[str]:
     covers the whole molecule.
 
     `run_show(id) -> dict|None` is injectable for tests; production runs
-    `bd show <id> --json`. Capped at _MAX_PARENT_HOPS lookups with a seen-set so
+    `bd show <id> --json`. Capped at _MAX_PARENT_LOOKUPS with a seen-set so
     a parent cycle terminates instead of hanging the Stop hook. A malformed or
     failed lookup falls back to the last issue that was actually decoded, never
     an unverified parent ID. Beads exposes one parent field here; a multi-parent
@@ -138,7 +138,7 @@ def _lookup_parent_id(task_id: str, run_show=None) -> Optional[str]:
     # The parsed claim ID is the initial safe scope if the first lookup fails.
     last_decoded = task_id
     seen: set[str] = set()
-    for lookup_index in range(_MAX_PARENT_HOPS):
+    for lookup_index in range(_MAX_PARENT_LOOKUPS):
         try:
             data = run_show(current)
             if not isinstance(data, dict):
@@ -158,9 +158,9 @@ def _lookup_parent_id(task_id: str, run_show=None) -> Optional[str]:
                 f"cycle detected at {parent_id}", last_decoded
             )
             return last_decoded
-        if lookup_index == _MAX_PARENT_HOPS - 1:
+        if lookup_index == _MAX_PARENT_LOOKUPS - 1:
             _diagnose_parent_walk(
-                f"capped at {_MAX_PARENT_HOPS} lookups", last_decoded
+                f"capped at {_MAX_PARENT_LOOKUPS} lookups", last_decoded
             )
             return last_decoded
         current = parent_id

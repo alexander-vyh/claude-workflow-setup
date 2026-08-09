@@ -4,7 +4,8 @@
 The fake ``bd`` executable is the independent source of truth. Tests invoke the
 real task_mode_entry.py and stop_hook.py scripts, then assert the persisted root
 and final Stop decision. This rejects a helper-only fix and the original
-one-parent implementation.
+one-parent implementation. Actual ``bd show --json`` root records may omit both
+parent fields; omission and explicit null are valid terminal root shapes.
 """
 
 from __future__ import annotations
@@ -154,7 +155,7 @@ def _deep_graph() -> dict[str, Any]:
         "shows": {
             "leaf": {"parent": "branch-a"},
             "branch-a": {"parent": "root"},
-            "root": {"parent": None},
+            "root": {"omit_parent": True},
         }
     }
 
@@ -165,7 +166,8 @@ def test_deep_ready_sibling_under_other_branch_blocks_stop(tmp_path: pathlib.Pat
         "shows": {
             "mol.1.1": {"parent": "mol.1"},
             "mol.1": {"parent": "mol"},
-            "mol": {"parent": None},
+            # Mirror live bd output: root records omit the parent key entirely.
+            "mol": {"omit_parent": True},
         }
     }
     fixture["ready_by_parent"] = {
@@ -218,12 +220,31 @@ def test_standalone_claim_retains_task_scope(tmp_path: pathlib.Path) -> None:
     assert output is not None and output["decision"] == "block"
 
 
+@pytest.mark.parametrize("root_spec", [{"omit_parent": True}, {"parent": None}])
+def test_absent_or_null_parent_is_a_valid_root_terminal(
+    tmp_path: pathlib.Path,
+    root_spec: dict[str, Any],
+) -> None:
+    fixture = {
+        "shows": {"leaf": {"parent": "root"}, "root": root_spec},
+        "ready_by_parent": {"root": [{"id": "root-scope-ready"}]},
+    }
+
+    entry, state, repo, thread_dir, env, _ = _run_entry(tmp_path, fixture)
+    stop, output = _run_stop(repo, thread_dir, env)
+
+    assert entry.returncode == 0
+    assert entry.stderr == ""
+    assert state["parent_id"] == "root"
+    assert stop.returncode == 0
+    assert output is not None and output["decision"] == "block"
+
+
 @pytest.mark.parametrize(
     ("shows", "expected_scope", "diagnostic_fragment"),
     [
         ({"leaf": {"kind": "invalid_json"}}, "leaf", "invalid json"),
         ({"leaf": {"omit_id": True, "parent": None}}, "leaf", "issue id"),
-        ({"leaf": {"omit_parent": True}}, "leaf", "parent"),
         ({"leaf": {"parent": {"id": "root"}}}, "leaf", "parent"),
         ({"leaf": {"parent": ["root"]}}, "leaf", "parent"),
         ({"leaf": {"parent": 17}}, "leaf", "parent"),
@@ -235,6 +256,9 @@ def test_standalone_claim_retains_task_scope(tmp_path: pathlib.Path) -> None:
         ({"leaf": {"kind": "exit_error"}}, "leaf", "lookup failed"),
         ({"leaf": {"kind": "raw_json", "value": []}}, "leaf", "issue record"),
         ({"leaf": {"id": "different", "parent": None}}, "leaf", "issue id"),
+        ({"leaf": {"kind": "raw_json", "value": [
+            {"id": "leaf", "parent": "root-a", "parent_id": "root-b"}
+        ]}}, "leaf", "parent"),
         (
             {"leaf": {"parent": "parent"}, "parent": {"kind": "invalid_json"}},
             "leaf",
