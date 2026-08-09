@@ -4,8 +4,11 @@
 from __future__ import annotations
 
 import datetime as dt
+import pathlib
 from collections.abc import Callable
 from typing import Any
+
+from execution_store import load_trusted, mutate_atomic
 
 
 def _iso(now: dt.datetime) -> str:
@@ -81,9 +84,10 @@ def _verify(verify_outcome: Callable[[dict], Any], execution: dict) -> tuple[str
 
 
 def apply_verified_result(
-    ledger: dict,
-    execution_id: str,
+    path: pathlib.Path,
     *,
+    expected_parent: str,
+    execution_id: str,
     attempt: int,
     generation: int,
     owner: str,
@@ -91,16 +95,21 @@ def apply_verified_result(
     verify_outcome: Callable[[dict], Any],
     apply: Callable[[str], Any],
     idempotency_key: str,
-    now: dt.datetime,
+    clock: Callable[[], dt.datetime],
 ) -> dict:
-    """Apply only through a live fenced claim and independently observed outcome.
+    """Apply through a freshly loaded live claim and durable completion fence.
 
     `verify_outcome` is the business oracle.  A terminal state or result digest
     is never substituted for it.  When mutation is needed, `apply` receives the
     execution-scoped stable idempotency key; the outcome is checked again before
-    durable completion.
+    durable completion. External callbacks run without the ledger lock; the
+    completion mutation reloads and fences the durable claimant under that lock.
     """
-    timestamp = _iso(now)
+    now = clock()
+    _iso(now)
+    ledger = load_trusted(path, expected_parent)
+    if ledger is None:
+        return {"status": "unresolved_ledger"}
     execution = _execution(ledger, execution_id)
     if not _current_claim(
         execution,
@@ -134,21 +143,37 @@ def apply_verified_result(
                 return {"status": "verification_unresolved"}
             return {"status": "outcome_not_observed"}
 
-    # External callbacks are allowed to take time or touch durable state.  Fence
-    # again before persisting completion so an expired/stolen claim cannot win.
-    execution = _execution(ledger, execution_id)
-    if not _current_claim(
-        execution,
-        attempt=attempt,
-        generation=generation,
-        owner=owner,
-        claim_generation=claim_generation,
-        now=now,
-    ):
-        return {"status": "stale_claim"}
-    application = execution["result_application"]
-    application["state"] = "applied"
-    application["applied_at"] = timestamp
-    application["claim"] = None
-    ledger["updated_at"] = timestamp
-    return {"status": "applied", "idempotency_key": idempotency_key}
+    completion: dict[str, dict] = {}
+
+    def complete(current: dict) -> dict:
+        completion_now = clock()
+        timestamp = _iso(completion_now)
+        current_execution = _execution(current, execution_id)
+        if not _current_claim(
+            current_execution,
+            attempt=attempt,
+            generation=generation,
+            owner=owner,
+            claim_generation=claim_generation,
+            now=completion_now,
+        ):
+            completion["result"] = {"status": "stale_claim"}
+            return current
+        application = current_execution["result_application"]
+        if application.get("idempotency_key") != idempotency_key:
+            raise ValueError("idempotency_key does not match the execution generation")
+        application["state"] = "applied"
+        application["applied_at"] = timestamp
+        application["claim"] = None
+        current["updated_at"] = timestamp
+        completion["result"] = {
+            "status": "applied",
+            "idempotency_key": idempotency_key,
+        }
+        return current
+
+    try:
+        mutate_atomic(path, complete)
+    except ValueError:
+        return {"status": "unresolved_ledger"}
+    return completion["result"]

@@ -24,6 +24,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 BIN = pathlib.Path(__file__).resolve().parent.parent / "bin"
+sys.path.insert(0, str(BIN))
 
 
 def _load_trusted_source():
@@ -39,6 +40,8 @@ def _load_trusted_source():
 
 
 ts = _load_trusted_source()
+
+import execution_store  # noqa: E402
 
 
 def _load_execution_ledger():
@@ -391,29 +394,29 @@ def test_cross_process_mutations_serialize_without_lost_updates(tmp_path):
 def test_atomic_mutation_takes_an_exclusive_flock(tmp_path, monkeypatch):
     path = tmp_path / "executions.json"
     _write_ledger(path, _ledger())
-    real_flock = execution_ledger.fcntl.flock
+    real_flock = execution_store.fcntl.flock
     operations: list[int] = []
 
     def recording_flock(file_descriptor, operation):
         operations.append(operation)
         return real_flock(file_descriptor, operation)
 
-    monkeypatch.setattr(execution_ledger.fcntl, "flock", recording_flock)
+    monkeypatch.setattr(execution_store.fcntl, "flock", recording_flock)
     execution_ledger.mutate_atomic(path, lambda current: current)
-    assert execution_ledger.fcntl.LOCK_EX in operations
+    assert execution_store.fcntl.LOCK_EX in operations
 
 
 def test_atomic_mutation_replaces_from_same_directory(tmp_path, monkeypatch):
     path = tmp_path / "executions.json"
     _write_ledger(path, _ledger())
-    real_replace = execution_ledger.os.replace
+    real_replace = execution_store.os.replace
     replacements: list[tuple[pathlib.Path, pathlib.Path]] = []
 
     def recording_replace(source, destination):
         replacements.append((pathlib.Path(source), pathlib.Path(destination)))
         return real_replace(source, destination)
 
-    monkeypatch.setattr(execution_ledger.os, "replace", recording_replace)
+    monkeypatch.setattr(execution_store.os, "replace", recording_replace)
     execution_ledger.mutate_atomic(path, lambda current: current)
     assert len(replacements) == 1
     source, destination = replacements[0]
@@ -425,8 +428,8 @@ def test_atomic_mutation_replaces_from_same_directory(tmp_path, monkeypatch):
 def test_atomic_mutation_fsyncs_temporary_file_before_replace(tmp_path, monkeypatch):
     path = tmp_path / "executions.json"
     _write_ledger(path, _ledger())
-    real_fsync = execution_ledger.os.fsync
-    real_replace = execution_ledger.os.replace
+    real_fsync = execution_store.os.fsync
+    real_replace = execution_store.os.replace
     events: list[str] = []
     fsynced_identities: list[tuple[int, int]] = []
     replacement_source_identity: list[tuple[int, int]] = []
@@ -434,20 +437,20 @@ def test_atomic_mutation_fsyncs_temporary_file_before_replace(tmp_path, monkeypa
 
     def recording_fsync(file_descriptor):
         events.append("fsync")
-        stat_result = execution_ledger.os.fstat(file_descriptor)
+        stat_result = execution_store.os.fstat(file_descriptor)
         fsynced_identities.append((stat_result.st_dev, stat_result.st_ino))
         return real_fsync(file_descriptor)
 
     def recording_replace(source, destination):
         events.append("replace")
-        stat_result = execution_ledger.os.stat(source)
+        stat_result = execution_store.os.stat(source)
         source_identity = (stat_result.st_dev, stat_result.st_ino)
         replacement_source_identity.append(source_identity)
         source_was_fsynced_at_replace.append(source_identity in fsynced_identities)
         return real_replace(source, destination)
 
-    monkeypatch.setattr(execution_ledger.os, "fsync", recording_fsync)
-    monkeypatch.setattr(execution_ledger.os, "replace", recording_replace)
+    monkeypatch.setattr(execution_store.os, "fsync", recording_fsync)
+    monkeypatch.setattr(execution_store.os, "replace", recording_replace)
     execution_ledger.mutate_atomic(path, lambda current: current)
     assert "replace" in events
     assert "fsync" in events[: events.index("replace")]
@@ -463,7 +466,7 @@ def test_failed_atomic_replace_preserves_previous_valid_json(tmp_path, monkeypat
     def fail_replace(_source, _destination):
         raise OSError("simulated replace failure")
 
-    monkeypatch.setattr(execution_ledger.os, "replace", fail_replace)
+    monkeypatch.setattr(execution_store.os, "replace", fail_replace)
     with pytest.raises(OSError, match="simulated replace failure"):
         execution_ledger.mutate_atomic(
             path,

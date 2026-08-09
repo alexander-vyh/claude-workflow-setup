@@ -156,6 +156,138 @@ def test_completed_activity_renews_idle_but_never_hard_deadline() -> None:
     assert item["hard_deadline"] == "2026-08-09T22:00:00Z"
 
 
+def test_completed_activity_requires_explicit_bound_native_identity() -> None:
+    ledger = started()
+    before = copy.deepcopy(ledger)
+    with pytest.raises(ValueError, match="native child"):
+        ledger_api.apply_event(
+            ledger,
+            {
+                "kind": "activity_completed",
+                "parent_session_id": "parent-7",
+                "execution_id": "exec-alpha",
+                "attempt": 1,
+                "generation": 1,
+                "activity_kind": "tool_completed",
+            },
+            at("2026-08-09T20:01:00Z"),
+        )
+    assert ledger == before
+
+
+def test_completed_activity_rejects_unbound_or_mismatched_native_identity() -> None:
+    unbound = registered()
+    unbound_item = execution(unbound)
+    unbound_item["state"] = "running"
+    unbound_item["started_at"] = "2026-08-09T20:00:20Z"
+    unbound_item["last_activity_at"] = "2026-08-09T20:00:20Z"
+    unbound_item["last_activity_kind"] = "child_started"
+    before_unbound = copy.deepcopy(unbound)
+    with pytest.raises(ValueError, match="native child"):
+        ledger_api.apply_event(
+            unbound,
+            {
+                "kind": "activity_completed",
+                "parent_session_id": "parent-7",
+                "execution_id": "exec-alpha",
+                "attempt": 1,
+                "generation": 1,
+                "native_child_id": "unbound-child",
+                "activity_kind": "tool_completed",
+            },
+            at("2026-08-09T20:01:00Z"),
+        )
+    assert unbound == before_unbound
+
+    bound = started()
+    before_bound = copy.deepcopy(bound)
+    with pytest.raises(ValueError, match="native child"):
+        ledger_api.apply_event(
+            bound,
+            {
+                "kind": "activity_completed",
+                "parent_session_id": "parent-7",
+                "execution_id": "exec-alpha",
+                "attempt": 1,
+                "generation": 1,
+                "native_child_id": "different-native-child",
+                "activity_kind": "tool_completed",
+            },
+            at("2026-08-09T20:01:00Z"),
+        )
+    assert bound == before_bound
+
+
+@pytest.mark.parametrize("event_child", [None, "unbound-child"])
+def test_terminal_evidence_cannot_create_result_without_prior_native_binding(
+    event_child: str | None,
+) -> None:
+    ledger = registered()
+    event = {
+        "kind": "child_terminal",
+        "parent_session_id": "parent-7",
+        "execution_id": "exec-alpha",
+        "attempt": 1,
+        "generation": 1,
+        "terminal_event_id": "terminal-unbound",
+        "terminal_reason": "completed",
+        "result_digest": "sha256:must-not-apply",
+    }
+    if event_child is not None:
+        event["native_child_id"] = event_child
+    before = copy.deepcopy(ledger)
+    with pytest.raises(ValueError, match="native child"):
+        ledger_api.apply_event(ledger, event, at("2026-08-09T20:05:00Z"))
+    assert ledger == before
+    assert (
+        ledger_api.claim_result_application(
+            ledger,
+            "exec-alpha",
+            at("2026-08-09T20:06:00Z"),
+            "applier",
+            30,
+            attempt=1,
+            generation=1,
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize("event_child", [None, "different-native-child"])
+def test_terminal_evidence_requires_exact_bound_native_identity(
+    event_child: str | None,
+) -> None:
+    ledger = registered()
+    ledger_api.apply_event(
+        ledger,
+        {
+            "kind": "child_bound",
+            "parent_session_id": "parent-7",
+            "execution_id": "exec-alpha",
+            "attempt": 1,
+            "generation": 1,
+            "native_child_id": "child-native-1",
+        },
+        at("2026-08-09T20:00:10Z"),
+    )
+    event = {
+        "kind": "child_terminal",
+        "parent_session_id": "parent-7",
+        "execution_id": "exec-alpha",
+        "attempt": 1,
+        "generation": 1,
+        "terminal_event_id": "terminal-wrong-child",
+        "terminal_reason": "completed",
+        "result_digest": "sha256:must-not-apply",
+    }
+    if event_child is not None:
+        event["native_child_id"] = event_child
+    before = copy.deepcopy(ledger)
+    with pytest.raises(ValueError, match="native child"):
+        ledger_api.apply_event(ledger, event, at("2026-08-09T20:05:00Z"))
+    assert ledger == before
+
+
 @pytest.mark.parametrize(
     "kind", ["tool_started", "status_polled", "semantic_annotation"]
 )

@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import copy
 import datetime as dt
+import json
+import multiprocessing
 import pathlib
 import sys
 
@@ -44,17 +46,43 @@ def terminal_ledger(
     ledger_api.apply_event(
         ledger,
         {
+            "kind": "child_bound",
+            "parent_session_id": "parent-7",
+            "execution_id": execution_id,
+            "attempt": 1,
+            "generation": 1,
+            "native_child_id": f"native-{execution_id}",
+        },
+        at("2026-08-09T20:00:10Z"),
+    )
+    ledger_api.apply_event(
+        ledger,
+        {
             "kind": "child_terminal",
             "parent_session_id": "parent-7",
             "execution_id": execution_id,
             "attempt": 1,
             "generation": 1,
+            "native_child_id": f"native-{execution_id}",
             "terminal_event_id": f"terminal-{execution_id}",
             "terminal_reason": "completed",
             "result_digest": digest,
         },
         at("2026-08-09T20:05:00Z"),
     )
+    return ledger
+
+
+def persist(tmp_path: pathlib.Path, ledger: dict) -> pathlib.Path:
+    path = tmp_path / "executions.json"
+    path.write_text(json.dumps(ledger))
+    path.chmod(0o600)
+    return path
+
+
+def loaded(path: pathlib.Path) -> dict:
+    ledger = ledger_api.load_trusted(path, "parent-7")
+    assert ledger is not None
     return ledger
 
 
@@ -65,43 +93,76 @@ def item(ledger: dict, execution_id: str = "exec-alpha") -> dict:
 
 
 def claim(
-    ledger: dict, owner: str = "applier-a", when: str = "2026-08-09T20:06:00Z"
+    path: pathlib.Path,
+    owner: str = "applier-a",
+    when: str = "2026-08-09T20:06:00Z",
+    execution_id: str = "exec-alpha",
 ) -> dict:
-    claimed = ledger_api.claim_result_application(
-        ledger,
-        "exec-alpha",
-        at(when),
-        owner,
-        30,
-        attempt=1,
-        generation=1,
-    )
+    captured: dict = {}
+
+    def mutation(ledger: dict) -> dict:
+        claimed = ledger_api.claim_result_application(
+            ledger,
+            execution_id,
+            at(when),
+            owner,
+            30,
+            attempt=1,
+            generation=1,
+        )
+        assert claimed is not None
+        captured.update(claimed)
+        return ledger
+
+    ledger_api.mutate_atomic(path, mutation)
+    claimed = captured
     assert claimed is not None
     return claimed
 
 
 def apply_claim(
-    ledger: dict,
+    path: pathlib.Path,
     claimed: dict,
     verify_outcome,
     apply,
     when: str = "2026-08-09T20:06:01Z",
+    execution_id: str = "exec-alpha",
+    clock=None,
 ) -> dict:
     return result_application.apply_verified_result(
-        ledger,
-        "exec-alpha",
+        path,
+        expected_parent="parent-7",
+        execution_id=execution_id,
         attempt=1,
         generation=1,
         owner=claimed["owner"],
         claim_generation=claimed["claim_generation"],
         verify_outcome=verify_outcome,
         apply=apply,
-        idempotency_key="execution:exec-alpha:attempt:1:generation:1",
-        now=at(when),
+        idempotency_key=f"execution:{execution_id}:attempt:1:generation:1",
+        clock=clock or (lambda: at(when)),
     )
 
 
-def test_terminal_and_digest_do_not_directly_prove_application() -> None:
+def _take_over_in_process(path: pathlib.Path) -> None:
+    def mutation(ledger: dict) -> dict:
+        claimed = ledger_api.claim_result_application(
+            ledger,
+            "exec-alpha",
+            at("2026-08-09T20:06:30Z"),
+            "applier-b",
+            30,
+            attempt=1,
+            generation=1,
+        )
+        if claimed is None:
+            raise RuntimeError("durable takeover was not acquired")
+        return ledger
+
+    ledger_api.mutate_atomic(path, mutation)
+
+
+def test_terminal_and_digest_do_not_directly_prove_application(tmp_path) -> None:
     ledger = terminal_ledger()
     assert item(ledger)["state"] == "terminal"
     assert item(ledger)["result_digest"] == "sha256:same"
@@ -114,48 +175,50 @@ def test_terminal_and_digest_do_not_directly_prove_application() -> None:
     }
 
 
-def test_claim_alone_is_applying_not_applied() -> None:
-    ledger = terminal_ledger()
-    claimed = claim(ledger)
+def test_claim_alone_is_applying_not_applied(tmp_path) -> None:
+    path = persist(tmp_path, terminal_ledger())
+    claimed = claim(path)
+    ledger = loaded(path)
     assert claimed["claim_generation"] == 1
     assert item(ledger)["result_application"]["state"] == "applying"
     assert item(ledger)["result_application"]["applied_at"] is None
 
 
-def test_missing_outcome_proof_does_not_apply_or_mutate_business_state() -> None:
-    ledger = terminal_ledger()
-    claimed = claim(ledger)
+def test_missing_outcome_proof_does_not_apply_or_mutate_business_state(
+    tmp_path,
+) -> None:
+    path = persist(tmp_path, terminal_ledger())
+    claimed = claim(path)
     external_calls: list[str] = []
-    result = apply_claim(
-        ledger, claimed, lambda _execution: None, external_calls.append
-    )
+    result = apply_claim(path, claimed, lambda _execution: None, external_calls.append)
+    ledger = loaded(path)
     assert result == {"status": "verification_unresolved"}
     assert external_calls == []
     assert item(ledger)["result_application"]["state"] == "applying"
     assert item(ledger)["result_application"]["applied_at"] is None
 
 
-def test_negative_post_apply_verification_cannot_mark_applied() -> None:
-    ledger = terminal_ledger()
-    claimed = claim(ledger)
+def test_negative_post_apply_verification_cannot_mark_applied(tmp_path) -> None:
+    path = persist(tmp_path, terminal_ledger())
+    claimed = claim(path)
     external_calls: list[str] = []
-    result = apply_claim(
-        ledger, claimed, lambda _execution: False, external_calls.append
-    )
+    result = apply_claim(path, claimed, lambda _execution: False, external_calls.append)
+    ledger = loaded(path)
     assert result == {"status": "outcome_not_observed"}
     assert external_calls == ["execution:exec-alpha:attempt:1:generation:1"]
     assert item(ledger)["result_application"]["state"] == "applying"
 
 
-def test_verifier_exception_fails_closed_before_external_application() -> None:
-    ledger = terminal_ledger()
-    claimed = claim(ledger)
+def test_verifier_exception_fails_closed_before_external_application(tmp_path) -> None:
+    path = persist(tmp_path, terminal_ledger())
+    claimed = claim(path)
     external_calls: list[str] = []
 
     def broken_verifier(_execution: dict) -> bool:
         raise RuntimeError("outcome service unavailable")
 
-    result = apply_claim(ledger, claimed, broken_verifier, external_calls.append)
+    result = apply_claim(path, claimed, broken_verifier, external_calls.append)
+    ledger = loaded(path)
     assert result == {
         "status": "verification_error",
         "error": "outcome service unavailable",
@@ -164,9 +227,11 @@ def test_verifier_exception_fails_closed_before_external_application() -> None:
     assert item(ledger)["result_application"]["state"] == "applying"
 
 
-def test_current_claim_applies_once_then_requires_positive_business_proof() -> None:
-    ledger = terminal_ledger()
-    claimed = claim(ledger)
+def test_current_claim_applies_once_then_requires_positive_business_proof(
+    tmp_path,
+) -> None:
+    path = persist(tmp_path, terminal_ledger())
+    claimed = claim(path)
     externally_applied: set[str] = set()
 
     def verify(_execution: dict) -> bool:
@@ -175,7 +240,8 @@ def test_current_claim_applies_once_then_requires_positive_business_proof() -> N
     def apply(key: str) -> None:
         externally_applied.add(key)
 
-    result = apply_claim(ledger, claimed, verify, apply)
+    result = apply_claim(path, claimed, verify, apply)
+    ledger = loaded(path)
     assert result == {
         "status": "applied",
         "idempotency_key": "execution:exec-alpha:attempt:1:generation:1",
@@ -185,15 +251,160 @@ def test_current_claim_applies_once_then_requires_positive_business_proof() -> N
     assert item(ledger)["result_application"]["applied_at"] == "2026-08-09T20:06:01Z"
 
 
-def test_expired_claim_takeover_fences_stale_owner() -> None:
-    ledger = terminal_ledger()
-    stale = claim(ledger)
-    current = claim(ledger, "applier-b", "2026-08-09T20:06:30Z")
+def test_completion_rechecks_fresh_time_after_verifier_crosses_claim_expiry(
+    tmp_path,
+) -> None:
+    path = persist(tmp_path, terminal_ledger())
+    claimed = claim(path)
+    current_time = [at("2026-08-09T20:06:01Z")]
+
+    def verify(_execution: dict) -> bool:
+        current_time[0] = at("2026-08-09T20:06:31Z")
+        return True
+
+    result = apply_claim(
+        path,
+        claimed,
+        verify,
+        lambda _key: pytest.fail("already-observed outcome must not be applied"),
+        clock=lambda: current_time[0],
+    )
+
+    assert result == {"status": "stale_claim"}
+    application = item(loaded(path))["result_application"]
+    assert application["state"] == "applying"
+    assert application["claim"]["owner"] == "applier-a"
+    assert application["applied_at"] is None
+
+
+def test_completion_rechecks_fresh_time_after_apply_crosses_claim_expiry(
+    tmp_path,
+) -> None:
+    path = persist(tmp_path, terminal_ledger())
+    claimed = claim(path)
+    current_time = [at("2026-08-09T20:06:01Z")]
+    effects: list[str] = []
+
+    def verify(_execution: dict) -> bool:
+        return bool(effects)
+
+    def apply(key: str) -> None:
+        effects.append(key)
+        current_time[0] = at("2026-08-09T20:06:31Z")
+
+    result = apply_claim(path, claimed, verify, apply, clock=lambda: current_time[0])
+
+    assert effects == ["execution:exec-alpha:attempt:1:generation:1"]
+    assert result == {"status": "stale_claim"}
+    application = item(loaded(path))["result_application"]
+    assert application["state"] == "applying"
+    assert application["claim"]["owner"] == "applier-a"
+    assert application["applied_at"] is None
+
+
+def test_completion_reloads_durable_takeover_after_external_callback(tmp_path) -> None:
+    path = persist(tmp_path, terminal_ledger())
+    claimed = claim(path)
+    process_exit_codes: list[int | None] = []
+    current_time = [at("2026-08-09T20:06:01Z")]
+
+    def verify(_execution: dict) -> bool:
+        process = multiprocessing.get_context("fork").Process(
+            target=_take_over_in_process,
+            args=(path,),
+        )
+        process.start()
+        process.join(3)
+        process_exit_codes.append(process.exitcode)
+        current_time[0] = at("2026-08-09T20:06:31Z")
+        return True
+
+    result = apply_claim(
+        path,
+        claimed,
+        verify,
+        lambda _key: pytest.fail("already-observed outcome must not be applied"),
+        clock=lambda: current_time[0],
+    )
+
+    assert process_exit_codes == [0], "callbacks must run outside the ledger flock"
+    assert result == {"status": "stale_claim"}
+    application = item(loaded(path))["result_application"]
+    assert application["state"] == "applying"
+    assert application["claim"]["owner"] == "applier-b"
+    assert application["claim_generation"] == 2
+    assert application["applied_at"] is None
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "applying_on_running",
+        "applying_without_result",
+        "terminal_without_native_child",
+        "terminal_without_terminal_time",
+        "running_with_terminal_evidence",
+        "applied_without_result",
+    ],
+)
+def test_invalid_durable_cross_state_fails_before_external_callbacks(
+    tmp_path, mutation
+) -> None:
+    path = persist(tmp_path, terminal_ledger())
+    claimed = claim(path)
+    invalid = loaded(path)
+    execution = item(invalid)
+    if mutation == "applying_on_running":
+        execution["state"] = "running"
+        execution["terminal_at"] = None
+        execution["terminal_reason"] = None
+        execution["terminal_event_id"] = None
+    elif mutation == "applying_without_result":
+        execution["result_digest"] = None
+    elif mutation == "terminal_without_native_child":
+        execution["native_child_id"] = None
+    elif mutation == "terminal_without_terminal_time":
+        execution["terminal_at"] = None
+    elif mutation == "running_with_terminal_evidence":
+        execution["state"] = "running"
+        execution["result_application"] = {
+            "state": "unapplied",
+            "claim": None,
+            "claim_generation": 0,
+            "idempotency_key": "execution:exec-alpha:attempt:1:generation:1",
+            "applied_at": None,
+        }
+    elif mutation == "applied_without_result":
+        execution["result_digest"] = None
+        execution["result_application"]["state"] = "applied"
+        execution["result_application"]["claim"] = None
+        execution["result_application"]["applied_at"] = "2026-08-09T20:07:00Z"
+    path.write_text(json.dumps(invalid))
+    path.chmod(0o600)
+    before = json.loads(path.read_text())
+    callback_calls: list[str] = []
+
+    result = apply_claim(
+        path,
+        claimed,
+        lambda _execution: callback_calls.append("verify") or True,
+        lambda _key: callback_calls.append("apply"),
+    )
+
+    assert result == {"status": "unresolved_ledger"}
+    assert callback_calls == []
+    assert json.loads(path.read_text()) == before
+
+
+def test_expired_claim_takeover_fences_stale_owner(tmp_path) -> None:
+    path = persist(tmp_path, terminal_ledger())
+    stale = claim(path)
+    current = claim(path, "applier-b", "2026-08-09T20:06:30Z")
     assert current["claim_generation"] == 2
     verifier_calls: list[str] = []
-    before_stale_call = copy.deepcopy(ledger)
+    before_stale_call = copy.deepcopy(loaded(path))
     stale_result = apply_claim(
-        ledger,
+        path,
         stale,
         lambda _execution: verifier_calls.append("stale") or True,
         lambda _key: None,
@@ -201,11 +412,11 @@ def test_expired_claim_takeover_fences_stale_owner() -> None:
     )
     assert stale_result == {"status": "stale_claim"}
     assert verifier_calls == []
-    assert ledger == before_stale_call
+    assert loaded(path) == before_stale_call
 
     current_verifier_calls: list[str] = []
     current_result = apply_claim(
-        ledger,
+        path,
         current,
         lambda _execution: current_verifier_calls.append("current") or True,
         lambda _key: pytest.fail("already-observed outcome must not be applied again"),
@@ -215,14 +426,14 @@ def test_expired_claim_takeover_fences_stale_owner() -> None:
     assert current_verifier_calls == ["current"]
 
 
-def test_expired_claim_takeover_cannot_launder_missing_business_proof() -> None:
-    ledger = terminal_ledger()
-    claim(ledger, "applier-a", "2026-08-09T20:06:00Z")
-    takeover = claim(ledger, "applier-b", "2026-08-09T20:06:30Z")
+def test_expired_claim_takeover_cannot_launder_missing_business_proof(tmp_path) -> None:
+    path = persist(tmp_path, terminal_ledger())
+    claim(path, "applier-a", "2026-08-09T20:06:00Z")
+    takeover = claim(path, "applier-b", "2026-08-09T20:06:30Z")
     apply_calls: list[str] = []
 
     result = apply_claim(
-        ledger,
+        path,
         takeover,
         lambda _execution: None,
         apply_calls.append,
@@ -231,34 +442,49 @@ def test_expired_claim_takeover_cannot_launder_missing_business_proof() -> None:
 
     assert result == {"status": "verification_unresolved"}
     assert apply_calls == []
-    application = item(ledger)["result_application"]
+    application = item(loaded(path))["result_application"]
     assert application["state"] == "applying"
     assert application["claim"]["owner"] == "applier-b"
     assert application["claim_generation"] == 2
     assert application["applied_at"] is None
 
 
-def test_crash_after_external_effect_recovers_without_duplicate_application() -> None:
+def test_crash_after_external_effect_recovers_without_duplicate_application(
+    tmp_path,
+) -> None:
     class SimulatedProcessDeath(BaseException):
         pass
 
-    ledger = terminal_ledger()
-    first = claim(ledger)
-    external_applications: list[str] = []
+    path = persist(tmp_path, terminal_ledger())
+    first = claim(path)
+    outcome_path = tmp_path / "business-outcome.txt"
 
     def verify(_execution: dict) -> bool:
-        return bool(external_applications)
+        return outcome_path.exists()
 
     def apply_then_die(key: str) -> None:
-        external_applications.append(key)
+        with outcome_path.open("a") as effect_log:
+            effect_log.write(f"{key}\n")
         raise SimulatedProcessDeath()
 
     with pytest.raises(SimulatedProcessDeath):
-        apply_claim(ledger, first, verify, apply_then_die)
-    assert external_applications == ["execution:exec-alpha:attempt:1:generation:1"]
-    assert item(ledger)["result_application"]["state"] == "applying"
+        apply_claim(path, first, verify, apply_then_die)
+    assert outcome_path.read_text().splitlines() == [
+        "execution:exec-alpha:attempt:1:generation:1"
+    ]
+    stale_snapshot = loaded(path)
+    assert item(stale_snapshot)["result_application"]["state"] == "applying"
 
-    takeover = claim(ledger, "applier-b", "2026-08-09T20:06:30Z")
+    takeover = claim(path, "applier-b", "2026-08-09T20:06:30Z")
+    stale_result = apply_claim(
+        path,
+        first,
+        lambda _execution: True,
+        lambda _key: pytest.fail("stale snapshot must not apply"),
+        "2026-08-09T20:06:31Z",
+    )
+    assert stale_result == {"status": "stale_claim"}
+    assert item(loaded(path))["result_application"]["claim"]["owner"] == "applier-b"
     takeover_verifications: list[str] = []
 
     def verify_takeover(execution: dict) -> bool:
@@ -266,7 +492,7 @@ def test_crash_after_external_effect_recovers_without_duplicate_application() ->
         return verify(execution)
 
     result = apply_claim(
-        ledger,
+        path,
         takeover,
         verify_takeover,
         lambda _key: pytest.fail(
@@ -276,35 +502,32 @@ def test_crash_after_external_effect_recovers_without_duplicate_application() ->
     )
     assert result["status"] == "applied"
     assert takeover_verifications == ["exec-alpha"]
-    assert external_applications == ["execution:exec-alpha:attempt:1:generation:1"]
+    assert outcome_path.read_text().splitlines() == [
+        "execution:exec-alpha:attempt:1:generation:1"
+    ]
+    assert item(loaded(path))["result_application"]["state"] == "applied"
 
 
-def test_equal_digests_on_distinct_executions_have_distinct_application_identity() -> (
-    None
-):
+def test_equal_digests_on_distinct_executions_have_distinct_application_identity(
+    tmp_path,
+) -> None:
     ledger = terminal_ledger("exec-alpha", "sha256:identical")
     second = terminal_ledger("exec-beta", "sha256:identical")["executions"][0]
     ledger["executions"].append(second)
+    path = persist(tmp_path, ledger)
     keys: list[str] = []
 
     for execution_id, owner, expected_key in [
         ("exec-alpha", "a", "execution:exec-alpha:attempt:1:generation:1"),
         ("exec-beta", "b", "execution:exec-beta:attempt:1:generation:1"),
     ]:
-        claimed = ledger_api.claim_result_application(
-            ledger,
-            execution_id,
-            at("2026-08-09T20:06:00Z"),
-            owner,
-            30,
-            attempt=1,
-            generation=1,
-        )
+        claimed = claim(path, owner, execution_id=execution_id)
         assert claimed is not None
         observed: set[str] = set()
         result_application.apply_verified_result(
-            ledger,
-            execution_id,
+            path,
+            expected_parent="parent-7",
+            execution_id=execution_id,
             attempt=1,
             generation=1,
             owner=owner,
@@ -312,7 +535,7 @@ def test_equal_digests_on_distinct_executions_have_distinct_application_identity
             verify_outcome=lambda _execution, seen=observed: bool(seen),
             apply=lambda key, seen=observed: (keys.append(key), seen.add(key)),
             idempotency_key=expected_key,
-            now=at("2026-08-09T20:06:01Z"),
+            clock=lambda: at("2026-08-09T20:06:01Z"),
         )
     assert keys == [
         "execution:exec-alpha:attempt:1:generation:1",

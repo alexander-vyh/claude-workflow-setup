@@ -10,25 +10,15 @@ from __future__ import annotations
 
 import copy
 import datetime as dt
-import fcntl
-import json
-import os
-import pathlib
-import stat
-import tempfile
-from collections.abc import Callable
-from typing import Any
 
-from trusted_source import is_trusted_file
+from execution_store import load_trusted as load_trusted
+from execution_store import mutate_atomic as mutate_atomic
 
 UTC = dt.timezone.utc
 START_SECONDS = 2 * 60
 IDLE_SECONDS = 15 * 60
 HARD_SECONDS = 2 * 60 * 60
 
-EXECUTION_STATES = {"queued", "running", "terminal", "cancelled", "unknown"}
-RECONCILE_STATES = {None, "start", "idle", "hard"}
-APPLICATION_STATES = {"unapplied", "applying", "applied"}
 EVENT_KINDS = {
     "child_bound",
     "child_started",
@@ -45,48 +35,6 @@ ACTIVITY_KINDS = {
     "assistant_nonempty",
     "checkpoint",
     "terminal_event",
-}
-
-_TOP_LEVEL_KEYS = {
-    "version",
-    "parent_session_id",
-    "updated_at",
-    "executions",
-    "incidents",
-}
-_EXECUTION_KEYS = {
-    "bead_id",
-    "execution_id",
-    "host",
-    "agent_name",
-    "native_child_id",
-    "dispatch_tool_use_id",
-    "attempt",
-    "generation",
-    "state",
-    "queued_at",
-    "started_at",
-    "last_activity_at",
-    "last_activity_kind",
-    "start_deadline",
-    "idle_deadline",
-    "hard_deadline",
-    "reconcile_due",
-    "terminal_at",
-    "terminal_reason",
-    "terminal_event_id",
-    "result_digest",
-    "watchdog_id",
-    "recovery_count",
-    "recovery_claim",
-    "result_application",
-}
-_APPLICATION_KEYS = {
-    "state",
-    "claim",
-    "claim_generation",
-    "idempotency_key",
-    "applied_at",
 }
 
 
@@ -281,6 +229,10 @@ def apply_event(ledger: dict, event: dict, now: dt.datetime) -> dict:
         and event_child != item["native_child_id"]
     ):
         raise ValueError("native child identity does not match active execution")
+    if kind in {"activity_completed", "child_terminal"} and (
+        item["native_child_id"] is None or event_child != item["native_child_id"]
+    ):
+        raise ValueError(f"{kind} requires the bound native child identity")
 
     if kind == "child_bound":
         child_id = _required_text(event, "native_child_id")
@@ -479,231 +431,3 @@ def claim_result_application(
     application["claim"] = claim
     ledger["updated_at"] = timestamp
     return copy.deepcopy(claim)
-
-
-def _valid_timestamp(value: Any, *, nullable: bool = False) -> bool:
-    if value is None:
-        return nullable
-    try:
-        _parse(value)
-    except (TypeError, ValueError):
-        return False
-    return True
-
-
-def _valid_claim(claim: Any, required: set[str]) -> bool:
-    if claim is None:
-        return True
-    if not isinstance(claim, dict) or set(claim) != required:
-        return False
-    if not all(
-        isinstance(claim.get(key), str) and claim[key]
-        for key in ("owner", "execution_id")
-    ):
-        return False
-    if not all(
-        isinstance(claim.get(key), int) and claim[key] >= 1
-        for key in required & {"attempt", "generation", "claim_generation"}
-    ):
-        return False
-    return _valid_timestamp(claim.get("claimed_at")) and _valid_timestamp(
-        claim.get("expires_at")
-    )
-
-
-def _valid_execution(item: Any) -> bool:
-    if not isinstance(item, dict) or set(item) != _EXECUTION_KEYS:
-        return False
-    required_text = (
-        "bead_id",
-        "execution_id",
-        "host",
-        "agent_name",
-        "dispatch_tool_use_id",
-        "watchdog_id",
-    )
-    if not all(isinstance(item.get(key), str) and item[key] for key in required_text):
-        return False
-    if item["native_child_id"] is not None and not isinstance(
-        item["native_child_id"], str
-    ):
-        return False
-    if not all(
-        isinstance(item.get(key), int) and item[key] >= 1
-        for key in ("attempt", "generation")
-    ):
-        return False
-    if not isinstance(item.get("recovery_count"), int) or item["recovery_count"] < 0:
-        return False
-    if (
-        item.get("state") not in EXECUTION_STATES
-        or item.get("reconcile_due") not in RECONCILE_STATES
-    ):
-        return False
-    for key in ("queued_at", "start_deadline", "idle_deadline", "hard_deadline"):
-        if not _valid_timestamp(item.get(key)):
-            return False
-    for key in ("started_at", "last_activity_at", "terminal_at"):
-        if not _valid_timestamp(item.get(key), nullable=True):
-            return False
-    for key in (
-        "last_activity_kind",
-        "terminal_reason",
-        "terminal_event_id",
-        "result_digest",
-    ):
-        if item[key] is not None and not isinstance(item[key], str):
-            return False
-    recovery_keys = {
-        "owner",
-        "execution_id",
-        "attempt",
-        "generation",
-        "claimed_at",
-        "expires_at",
-    }
-    if not _valid_claim(item.get("recovery_claim"), recovery_keys):
-        return False
-    recovery_claim = item["recovery_claim"]
-    if recovery_claim is not None and (
-        recovery_claim["execution_id"] != item["execution_id"]
-        or recovery_claim["attempt"] != item["attempt"]
-        or recovery_claim["generation"] != item["generation"]
-    ):
-        return False
-    application = item.get("result_application")
-    if not isinstance(application, dict) or set(application) != _APPLICATION_KEYS:
-        return False
-    if application.get("state") not in APPLICATION_STATES:
-        return False
-    if (
-        not isinstance(application.get("claim_generation"), int)
-        or application["claim_generation"] < 0
-    ):
-        return False
-    if (
-        not isinstance(application.get("idempotency_key"), str)
-        or not application["idempotency_key"]
-    ):
-        return False
-    if application["idempotency_key"] != _application_key(
-        item["execution_id"], item["attempt"], item["generation"]
-    ):
-        return False
-    if not _valid_timestamp(application.get("applied_at"), nullable=True):
-        return False
-    application_claim_keys = recovery_keys | {"claim_generation"}
-    application_claim = application.get("claim")
-    if not _valid_claim(application_claim, application_claim_keys):
-        return False
-    if application_claim is not None and (
-        application_claim["execution_id"] != item["execution_id"]
-        or application_claim["attempt"] != item["attempt"]
-        or application_claim["generation"] != item["generation"]
-        or application_claim["claim_generation"] != application["claim_generation"]
-    ):
-        return False
-    if application["state"] == "applying" and application_claim is None:
-        return False
-    if application["state"] != "applying" and application_claim is not None:
-        return False
-    if (application["state"] == "applied") != (application["applied_at"] is not None):
-        return False
-    return True
-
-
-def _valid_ledger(value: Any) -> bool:
-    if not isinstance(value, dict) or set(value) != _TOP_LEVEL_KEYS:
-        return False
-    if value.get("version") != 1:
-        return False
-    if (
-        not isinstance(value.get("parent_session_id"), str)
-        or not value["parent_session_id"]
-    ):
-        return False
-    if not _valid_timestamp(value.get("updated_at"), nullable=True):
-        return False
-    executions = value.get("executions")
-    incidents = value.get("incidents")
-    if not isinstance(executions, list) or not all(
-        _valid_execution(item) for item in executions
-    ):
-        return False
-    if len({item["execution_id"] for item in executions}) != len(executions):
-        return False
-    return isinstance(incidents, list) and all(
-        isinstance(item, dict) for item in incidents
-    )
-
-
-def load_trusted(path: pathlib.Path, expected_parent: str) -> dict | None:
-    """Load a trusted, schema-valid ledger for exactly one parent session."""
-    path = pathlib.Path(path)
-    if not is_trusted_file(path):
-        return None
-    try:
-        value = json.loads(path.read_text())
-    except (OSError, UnicodeError, json.JSONDecodeError):
-        return None
-    if not _valid_ledger(value) or value["parent_session_id"] != expected_parent:
-        return None
-    return value
-
-
-def mutate_atomic(path: pathlib.Path, mutation: Callable[[dict], dict]) -> dict:
-    """Serialize and durably replace one trusted ledger under a stable lock."""
-    path = pathlib.Path(path)
-    lock_path = path.with_name(f".{path.name}.lock")
-    lock_fd = os.open(
-        lock_path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600
-    )
-    try:
-        lock_stat = os.fstat(lock_fd)
-        if not stat.S_ISREG(lock_stat.st_mode):
-            raise ValueError("ledger lock is not a regular file")
-        os.chmod(lock_path, 0o600)
-        with os.fdopen(lock_fd, "r+") as lock_file:
-            lock_fd = -1
-            fcntl.flock(lock_file, fcntl.LOCK_EX)
-            if not is_trusted_file(path):
-                raise ValueError("ledger is not a trusted source")
-            try:
-                current = json.loads(path.read_text())
-            except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-                raise ValueError("ledger JSON is malformed") from exc
-            if not _valid_ledger(current):
-                raise ValueError("ledger does not match the execution schema")
-            updated = mutation(copy.deepcopy(current))
-            if not _valid_ledger(updated):
-                raise ValueError("mutation produced an invalid execution ledger")
-
-            temporary_name: str | None = None
-            try:
-                with tempfile.NamedTemporaryFile(
-                    mode="w",
-                    encoding="utf-8",
-                    dir=path.parent,
-                    prefix=f".{path.name}.",
-                    suffix=".tmp",
-                    delete=False,
-                ) as temporary:
-                    temporary_name = temporary.name
-                    json.dump(updated, temporary, sort_keys=True, separators=(",", ":"))
-                    temporary.write("\n")
-                    temporary.flush()
-                    os.fsync(temporary.fileno())
-                os.replace(temporary_name, path)
-                temporary_name = None
-                directory_fd = os.open(path.parent, os.O_RDONLY)
-                try:
-                    os.fsync(directory_fd)
-                finally:
-                    os.close(directory_fd)
-            finally:
-                if temporary_name is not None:
-                    pathlib.Path(temporary_name).unlink(missing_ok=True)
-            return updated
-    finally:
-        if lock_fd >= 0:
-            os.close(lock_fd)
