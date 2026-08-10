@@ -27,10 +27,12 @@ sys.path.insert(0, str(Path(__file__).parent))
 try:
     from _gate_signal import record as _record_signal
 except ImportError:  # pragma: no cover
+
     def _record_signal(*_args, **_kwargs) -> None:
         return None
 
-from git_change_scope import remote_default_ref
+
+from git_change_scope import remote_default_target
 
 try:
     from data_fixture_echo import (
@@ -41,6 +43,7 @@ try:
         scan_data_fixture_matches,
     )
 except ImportError:  # pragma: no cover
+
     def is_text_data_fixture(_filepath: str) -> bool:
         return False
 
@@ -56,6 +59,7 @@ except ImportError:  # pragma: no cover
     def scan_data_fixture_matches(_repo_root, _fixture_paths, _candidate_values):
         return {}, {}
 
+
 # Substance bar for the `# oracle:` override (gate-design.md Rule 3). Fail-open:
 # if the validator module is unavailable, keep the prior presence-only behavior
 # rather than letting an import error block a commit.
@@ -66,6 +70,7 @@ try:
         validate_oracle_reason,
     )
 except ImportError:  # pragma: no cover
+
     def asserted_tokens(_literals):
         return set()
 
@@ -76,10 +81,12 @@ except ImportError:  # pragma: no cover
         # Fail-open: honor every non-empty override as before.
         return set(overrides), {}
 
+
 # Magic-number / business-constant echo detector (bead escapement-2o7).
 try:
     from magic_number_echo import find_magic_number_echoes
 except ImportError:  # pragma: no cover
+
     def find_magic_number_echoes(_source_files, _test_files):
         return []
 
@@ -197,8 +204,12 @@ STRING_LITERAL_RE = re.compile(
     re.VERBOSE | re.DOTALL,
 )
 
-SALESFORCE_ID_RE = re.compile(r"^(?:001|003|005|006|00Q|012|500|701)[A-Za-z0-9]{12}(?:[A-Za-z0-9]{3})?$")
-UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+SALESFORCE_ID_RE = re.compile(
+    r"^(?:001|003|005|006|00Q|012|500|701)[A-Za-z0-9]{12}(?:[A-Za-z0-9]{3})?$"
+)
+UUID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
 HEX_TOKEN_RE = re.compile(r"^[0-9a-fA-F]{24,}$")
 
 PY_TEST_DEF_RE = re.compile(r"^(\s*)(?:async\s+)?def\s+(test_\w+)\s*\(")
@@ -354,7 +365,11 @@ def git_files(repo_root: Path, args: list[str]) -> list[str]:
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
-def committed_change_files(repo_root: Path, landing_ref: str) -> tuple[list[str] | None, str | None]:
+def committed_change_files(
+    repo_root: Path,
+    landing_oid: str,
+    landing_ref: str,
+) -> tuple[list[str] | None, str | None]:
     """Return the strict three-dot committed scope or a repairable failure.
 
     Unlike the working-tree probes, this result decides whether a known landing
@@ -363,7 +378,7 @@ def committed_change_files(repo_root: Path, landing_ref: str) -> tuple[list[str]
     """
     try:
         result = subprocess.run(
-            ["git", "diff", "--name-only", f"{landing_ref}...HEAD"],
+            ["git", "diff", "--name-only", f"{landing_oid}...HEAD"],
             cwd=str(repo_root),
             capture_output=True,
             text=True,
@@ -394,9 +409,13 @@ def change_scope(repo_root: Path) -> tuple[list[str], str | None]:
     files.update(git_files(repo_root, ["diff", "--cached", "--name-only"]))
     files.update(git_files(repo_root, ["ls-files", "--others", "--exclude-standard"]))
 
-    landing_ref = remote_default_ref(repo_root)
-    if landing_ref:
-        committed_files, scope_error = committed_change_files(repo_root, landing_ref)
+    landing_target = remote_default_target(repo_root)
+    if landing_target:
+        committed_files, scope_error = committed_change_files(
+            repo_root,
+            landing_target.oid,
+            landing_target.ref,
+        )
         if scope_error:
             return sorted(files), scope_error
         assert committed_files is not None
@@ -455,11 +474,17 @@ def is_opaque_generated_literal(value: str) -> bool:
         return False
     if stripped.startswith(("http://", "https://", "file://")):
         return False
-    if SALESFORCE_ID_RE.match(stripped) or UUID_RE.match(stripped) or HEX_TOKEN_RE.match(stripped):
+    if (
+        SALESFORCE_ID_RE.match(stripped)
+        or UUID_RE.match(stripped)
+        or HEX_TOKEN_RE.match(stripped)
+    ):
         return True
     has_alpha = any(ch.isalpha() for ch in stripped)
     has_digit = any(ch.isdigit() for ch in stripped)
-    return has_alpha and has_digit and bool(re.match(r"^[A-Za-z0-9_:/+=.-]+$", stripped))
+    return (
+        has_alpha and has_digit and bool(re.match(r"^[A-Za-z0-9_:/+=.-]+$", stripped))
+    )
 
 
 def extract_opaque_literals(
@@ -529,6 +554,7 @@ def blank_string_literals(text: str) -> str:
     passes cannot re-match their now-blank interiors. Length is preserved, so
     indentation-based logic downstream is unaffected.
     """
+
     def _blank(m: "re.Match[str]") -> str:
         return "".join("\n" if c == "\n" else " " for c in m.group(0))
 
@@ -555,7 +581,11 @@ def extract_python_test_functions(text: str) -> list[tuple[str, str]]:
             continue
 
         if current_name is not None:
-            if line.strip() and len(line) - len(line.lstrip()) <= current_indent and not line.lstrip().startswith(("@", "#")):
+            if (
+                line.strip()
+                and len(line) - len(line.lstrip()) <= current_indent
+                and not line.lstrip().startswith(("@", "#"))
+            ):
                 functions.append((current_name, "\n".join(current_lines)))
                 current_name = None
                 current_lines = []
@@ -595,7 +625,9 @@ def extract_js_test_blocks(text: str) -> list[tuple[str, str]]:
             continue
 
         name_match = re.search(r"(?:test|it)\s*\(\s*['\"]([^'\"]+)['\"]", line)
-        name = name_match.group(1) if name_match else f"test block near line {index + 1}"
+        name = (
+            name_match.group(1) if name_match else f"test block near line {index + 1}"
+        )
         block_lines = [line]
         depth = line.count("{") + line.count("(") - line.count("}") - line.count(")")
         index += 1
@@ -678,9 +710,7 @@ def analyze(
     source_paths = [path for path in files if is_source_file(path)]
     test_paths = [path for path in files if is_test_file(path)]
     fixture_paths = [
-        path
-        for path in files
-        if is_text_data_fixture(path) and not is_test_file(path)
+        path for path in files if is_text_data_fixture(path) and not is_test_file(path)
     ]
     if not test_paths and not fixture_paths:
         return [], {}, [], {}
@@ -688,9 +718,7 @@ def analyze(
     source_files = {path: read_file(repo_root, path) for path in source_paths}
     test_files = {path: read_file(repo_root, path) for path in test_paths}
     declarative_test_files = {
-        path: test_files[path]
-        for path in test_paths
-        if has_text_data_extension(path)
+        path: test_files[path] for path in test_paths if has_text_data_extension(path)
     }
     code_test_files = {
         path: test_files[path]
@@ -731,9 +759,7 @@ def analyze(
     for fixture_path, values in fixture_matches.items():
         for value in sorted(values):
             source_paths = [
-                path
-                for path, literals in source_literals.items()
-                if value in literals
+                path for path, literals in source_literals.items() if value in literals
             ]
             display = value if len(value) <= 40 else value[:37] + "..."
             fixture_issues.append(
@@ -771,8 +797,10 @@ def build_message(
         for filepath, fails in list(rejected_overrides.items())[:12]:
             for reason, category in fails:
                 hint = _REJECTION_HINT.get(category, "did not clear the substance bar")
-                rows.append(f'  - {filepath}: rejected ({category}) — the reason {hint}.\n'
-                            f'      reason was: "{reason.strip()[:160]}"')
+                rows.append(
+                    f"  - {filepath}: rejected ({category}) — the reason {hint}.\n"
+                    f'      reason was: "{reason.strip()[:160]}"'
+                )
         rejected_block = (
             "\nYour `# oracle:` override(s) were REJECTED (gate-design.md Rule 3 — "
             "the reason must name a source of truth INDEPENDENT of the test's own "
@@ -852,9 +880,7 @@ def main() -> int:
             decision="deny",
             reason=scope_error,
         )
-        return deny(
-            "IMPLEMENTATION-ECHO TEST GATE: " + scope_error
-        )
+        return deny("IMPLEMENTATION-ECHO TEST GATE: " + scope_error)
 
     issues, test_files, fixture_issues, fixture_scan = analyze(repo_root, files)
     if not issues:
@@ -874,12 +900,12 @@ def main() -> int:
     # too-short reason does NOT exempt the file.
     overrides = find_oracle_overrides(test_files)
     asserted_by_file = {
-        fp: asserted_tokens(
-            asserted_literal_values(fp, test_files.get(fp, ""))
-        )
+        fp: asserted_tokens(asserted_literal_values(fp, test_files.get(fp, "")))
         for fp in overrides
     }
-    files_overridden, rejected_overrides = partition_overrides(overrides, asserted_by_file)
+    files_overridden, rejected_overrides = partition_overrides(
+        overrides, asserted_by_file
+    )
 
     remaining_issues = [i for i in issues if i.filepath not in files_overridden]
     skipped_count = len(issues) - len(remaining_issues)

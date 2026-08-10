@@ -59,17 +59,17 @@ def _build_message(findings: list[tuple[str, list[str]]]) -> str:
 
 
 def _collect_findings(repo_root: Path) -> list[tuple[str, list[str]]]:
-    from git_change_scope import net_tree_scope, revision_file, worktree_file
+    from git_change_scope import change_sources, net_tree_scope
     from oracle_downgrade_warning_gate import is_test_file
     import oracle_strength_diff as osd
 
     findings: list[tuple[str, list[str]]] = []
     scope = net_tree_scope(repo_root)
-    for rel in scope.files:
+    for change in scope.changes:
+        rel = change.filepath
         if not is_test_file(rel):
             continue
-        old_src = revision_file(repo_root, scope.baseline, rel)
-        new_src = worktree_file(repo_root, rel)
+        old_src, new_src = change_sources(repo_root, scope, change)
         if not old_src and not new_src:
             continue
         try:

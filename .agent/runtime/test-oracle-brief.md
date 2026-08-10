@@ -1033,3 +1033,171 @@ weakening, verify Stop emits the advisory and landing emits exactly one `ask`;
 for a committed strengthening and baseline-only change, verify both are silent.
 Then run the portable strength corpus, focused hook suites, generated-surface
 parity, renderer check, and Ruff.
+
+### Hostile-verification addendum — Git path and object semantics
+
+#### Business invariant
+
+The five public oracle-downgrade entrypoints must evaluate the semantic test
+change from the immutable feature-branch base to the final candidate tree for
+every Git-valid path. A byte-identical rename must stay silent; a weakening
+must still surface when its path contains control characters or quotes, when
+its final entry is a symlink, and when local changes are split across staged,
+unstaged, and untracked states.
+
+#### Independent source of truth
+
+Disposable repositories provide the oracle: Git's raw NUL-delimited
+name-status records, immutable commit OIDs and tree-entry modes/content. The
+tests construct real commits, renames, unusual filenames, symlinks, index
+states, and a deterministic `origin/HEAD` movement, then assert only the public
+hook output. The expected decision comes from the hand-labeled semantic old
+and final contents, not from the production parser.
+
+#### Solution constraints
+
+- Git filename parsing must be NUL-delimited end to end; newline/tab/quote and
+  non-UTF-8 bytes are filename data, never record syntax, a Unicode crash, or
+  human C-quoted output.
+- The non-UTF-8 oracle is constructed with byte-mode `hash-object`, `mktree -z`,
+  `commit-tree`, and a skip-worktree index entry. Its positive fixture control
+  first proves Git's raw NUL record contains the exact path bytes; macOS is
+  never asked to check out an illegal filename.
+- Rename identity must be preserved as `(old_path, new_path)` so the baseline
+  source and candidate source are compared as one change.
+- Rename identity and NUL-safe byte identity compose: paired inexact raw-byte
+  renames whose `0xfe` / `0xff` paths collide under replacement decoding must
+  remain distinct and report only their destination paths.
+- Candidate reads must not follow absolute or relative symlinks outside the
+  repository. Git entry type/mode and the symlink blob/link target are
+  evidence; external target contents are not. A changed symlink is not itself
+  a downgrade: absolute and relative new symlinks or weak-baseline-to-symlink
+  changes stay silent in committed, staged, and unstaged states, as do staged
+  symlinks followed by strong final regular-file worktree candidates.
+- External ancestry is subject to the same boundary: a regular leaf reached
+  through an absolute or relative symlinked parent directory cannot borrow
+  external oracle strength. A stronger regular file beneath an ordinary
+  in-repo directory remains valid.
+- Resolve and verify `origin/HEAD` once to an immutable commit OID. Merge-base
+  and range operations must use that OID even if its selected remote-tracking
+  target ref later moves.
+- The deterministic ref-move wrapper triggers after any successful Git command
+  whose stdout contains the exact original landing OID as a token, then moves
+  the selected target ref. It does not inspect argv or pin one `rev-parse`
+  shape, so direct verification and symbolic-ref plus broad `for-each-ref`
+  exact-row immutable-resolution commands remain allowed.
+- Preserve repository-neutral configuration, net-tree evaluation,
+  advisory-only decisions, missing/dangling-ref local fallback, and the
+  adjudicated strength corpus.
+
+#### Invalid solution classes and fragile implementations to reject
+
+- `--no-renames` followed by independent deletion/addition evaluation: falsely
+  warns on a pure move.
+- Parsing rename records but skipping every `R` status: misses a real weakening
+  performed during an inexact rename.
+- `splitlines()` or C-quoted `--name-only` parsing: drops or corrupts valid Git
+  paths containing newline, tab, or quote.
+- UTF-8 replacement decoding: collapses distinct raw paths such as `0xfe` and
+  `0xff` onto the same replacement-character key and loses an advisory.
+- Handling raw paths and rename records in separate parsers: corrupts the two
+  paths in an `Rnnn\0old\0new\0` record or reports the removed source name.
+- `Path.read_text()` on a symlink: follows untrusted external content and lets
+  it impersonate the candidate oracle.
+- Absolute-target-only symlink guards and warn-on-every-test-symlink shortcuts:
+  miss relative escapes or create false advisories without a removed oracle.
+- Final-component-only symlink checks: follow a regular leaf through an
+  external symlinked ancestor and let outside assertions launder the loss.
+- Resolving a ref name, verifying it, then using the mutable name later: a ref
+  move changes the selected baseline after validation.
+- Unioning intermediate diffs or evaluating the same path once per Git state:
+  duplicates warnings and can miss a final net restore.
+- Fixing only the canonical hook while rendered Codex/Claude entrypoints retain
+  the bug.
+
+#### Negative controls
+
+- Commit a byte-identical `git mv` between two test paths while repository
+  config disables rename detection and constrains `diff.renameLimit`: all five
+  public entrypoints remain silent with exit 0, proving the hook requests its
+  own rename semantics.
+- Commit three edited (non-exact) test renames with inherited
+  `diff.renames=false` and `diff.renameLimit=1`: a fixture proves ordinary
+  `--find-renames -l1` finds zero while unlimited detection finds all three;
+  all five hooks remain silent.
+- Commit an inexact rename with retained context and a strong-to-weak edit: a
+  fixture proves Git emits `R095`, and all five hooks emit exactly one advisory
+  naming the destination path. Together with the silent byte-identical and
+  edited-still-strong rename controls, this requires semantic old-to-new
+  evaluation rather than treating every rename as safe or as delete-plus-add.
+- Genuine strengthening, pre-branch weakening, landing-tip-only changes, and a
+  committed weakening restored in the worktree remain silent.
+- Absolute/relative new symlinks and weak-baseline-to-symlink changes remain
+  silent in committed, staged, and unstaged states. A staged symlink replaced
+  by either the exact strong baseline or a non-byte-identical stronger regular
+  file in the unstaged worktree is evaluated as one final candidate and stays
+  silent, rejecting intermediate-union and exact-byte-only suppression.
+- With a valid landing ref, a staged deletion followed by a same-path untracked
+  nonidentical stronger replacement remains silent. Raw cached and untracked
+  NUL records both contain the path, proving the final overlay wins over the
+  intermediate deletion rather than being evaluated as two changes.
+- A stronger local candidate beneath a normal in-repo directory remains silent,
+  rejecting blanket failure for every ancestor traversal.
+- Missing and dangling `origin/HEAD` each continue scanning independently observable
+  local staged, unstaged, and untracked changes without guessing a branch.
+  Staged and unstaged strong-to-weak edits, plus staged deletion followed by an
+  untracked weak replacement, at a real newline-containing path first prove
+  their respective raw `--name-only -z` / `ls-files -z` records contain the
+  exact path bytes, then require all five hooks to name that path once. This
+  prevents any fallback collector from retaining a line-based parser after the
+  committed range becomes NUL-safe.
+
+#### Positive controls
+
+- Commit a strong-to-weak change at filenames containing newline, tab, quote,
+  and a raw-plumbing-only non-UTF-8 byte: all five public entrypoints surface
+  that exact path.
+- Weaken two distinct raw paths whose invalid bytes collide under replacement
+  decoding: Git's NUL records contain both byte keys and every public message
+  reports both independently exactly once.
+- Inexactly rename paired strong `0xfe` / `0xff` raw paths to weakened raw
+  destinations: Git emits exact `Rnnn`, old, and new byte fields, and every
+  public message reports each surrogateescaped destination exactly once without
+  reporting either source.
+- Change a raw-path Git object from strong to still-strong while its index entry
+  remains skip-worktree and absent from the filesystem: all five hooks remain
+  silent, proving absent checkout is not misclassified as deletion.
+- Rename a raw-byte strong oracle inexactly to a still-strong destination: all
+  five hooks remain silent while the NUL fixture proves a real `Rnnn` record.
+- Replace a strong test with absolute and relative external symlinks whose
+  target file contains strong-looking assertions, independently as committed,
+  staged, and unstaged final entries. Fixture controls prove the baseline blob
+  is strong, the candidate mode/link target contains no oracle, and only the
+  followed external file is strong; all five entrypoints surface the lost
+  repository-owned oracle exactly once in every state.
+- Replace the tracked `tests/` directory with absolute and relative external
+  directory symlinks whose regular leaf contains strong-looking assertions:
+  all five entrypoints surface the lost tracked oracle exactly once even though
+  the leaf itself is not a symlink.
+- With a valid landing ref, staged-only weakening, committed-delete plus
+  untracked weak replacement, and a mixed staged/unstaged/untracked candidate
+  all surface every weakened path exactly once.
+- Move the remote-tracking target selected by `origin/HEAD` immediately after
+  its OID is resolved: all five entrypoints still evaluate against the
+  originally selected immutable base.
+
+#### Missing and unresolved handling
+
+An absent or unverifiable landing target retains the prior HEAD-to-local
+fail-open fallback. Unreadable entries, unsupported modes, parse failures, and
+malformed Git output never hard-deny; they may conservatively emit the existing
+advisory when repository-owned oracle evidence was removed. External symlink
+target contents are always unresolved and never counted as candidate proof.
+
+#### Final outcome verification
+
+Run the full five-surface subprocess matrix over rename, unusual paths,
+symlink, index-state union, and ref-move fixtures. Then rerun all committed-
+scope and oracle-downgrade suites, the adjudicated private corpus, the
+implementation-echo change-scope suite, full hook tests, renderer/parity,
+Ruff/format, and `git diff --check` from the clean fix commit.

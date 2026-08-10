@@ -7,109 +7,30 @@ tests invoke hook scripts as subprocesses rather than echoing a change collector
 from __future__ import annotations
 
 import json
-import subprocess
-import sys
+import os
+import shutil
 from pathlib import Path
 
 import pytest
 
-
-ROOT = Path(__file__).resolve().parents[3]
-LANDING_HOOKS = (
-    ROOT / "claude" / "hooks" / "oracle_downgrade_warning_gate.py",
-    ROOT
-    / "plugins"
-    / "escapement"
-    / "claude"
-    / "hooks"
-    / "oracle_downgrade_warning_gate.py",
-    ROOT
-    / "plugins"
-    / "escapement-claude"
-    / "hooks"
-    / "oracle_downgrade_warning_gate.py",
+from oracle_downgrade_git_fixtures import (
+    DUPLICATE_STRONG,
+    LANDING_HOOKS,
+    PUBLIC_HOOKS,
+    SINGLE_STRONG,
+    STOP_HOOKS,
+    STRONG,
+    WEAK,
+    advisory_message,
+    commit,
+    feature_repo,
+    git,
+    git_bytes,
+    landing_repo,
+    raw_non_utf8_repo,
+    run_hook,
+    write,
 )
-STOP_HOOKS = (
-    ROOT / "claude" / "hooks" / "oracle_downgrade_stop.py",
-    ROOT / "plugins" / "escapement-claude" / "hooks" / "oracle_downgrade_stop.py",
-)
-
-STRONG = (
-    "def test_total():\n    assert compute() == 42\n    assert category() == 'active'\n"
-)
-WEAK = "def test_total():\n    assert compute()\n"
-DUPLICATE_STRONG = (
-    "def test_total():\n    assert compute() == 42\n    assert compute() == 42\n"
-)
-SINGLE_STRONG = "def test_total():\n    assert compute() == 42\n"
-
-
-def git(repo: Path, *args: str) -> str:
-    result = subprocess.run(
-        ["git", *args],
-        cwd=repo,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return result.stdout.strip()
-
-
-def write(repo: Path, relative: str, content: str) -> None:
-    path = repo / relative
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
-
-
-def commit(repo: Path, message: str) -> None:
-    git(repo, "add", "--all")
-    git(repo, "commit", "-m", message)
-
-
-def landing_repo(tmp_path: Path, baseline_test: str) -> Path:
-    origin = tmp_path / "origin.git"
-    repo = tmp_path / "repo"
-    subprocess.run(
-        ["git", "init", "--bare", str(origin)], check=True, capture_output=True
-    )
-    subprocess.run(
-        ["git", "clone", str(origin), str(repo)], check=True, capture_output=True
-    )
-    git(repo, "config", "user.email", "oracle@example.test")
-    git(repo, "config", "user.name", "Oracle Test")
-    git(repo, "checkout", "-b", "trunk")
-    write(repo, "tests/test_total.py", baseline_test)
-    write(repo, "README.md", "baseline\n")
-    commit(repo, "landing baseline")
-    git(repo, "push", "-u", "origin", "trunk")
-    git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/trunk")
-    return repo
-
-
-def feature_repo(tmp_path: Path, baseline_test: str) -> Path:
-    repo = landing_repo(tmp_path, baseline_test)
-    git(repo, "checkout", "-b", "feature/oracle-change")
-    return repo
-
-
-def run_hook(hook: Path, repo: Path, event: str) -> subprocess.CompletedProcess[str]:
-    if event == "Stop":
-        payload = {"hook_event_name": "Stop", "cwd": str(repo)}
-    else:
-        payload = {
-            "hook_event_name": "PreToolUse",
-            "tool_name": "Bash",
-            "cwd": str(repo),
-            "tool_input": {"command": "gh pr create --title oracle-change"},
-        }
-    return subprocess.run(
-        [sys.executable, str(hook)],
-        cwd=repo,
-        input=json.dumps(payload),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
 
 
 @pytest.mark.parametrize("hook", LANDING_HOOKS)
@@ -300,3 +221,248 @@ def test_resolved_landing_ref_keeps_uncommitted_weakening_at_stop(
     assert result.returncode == 0, result.stderr
     output = json.loads(result.stdout)
     assert "tests/test_total.py" in output["systemMessage"]
+
+
+@pytest.mark.parametrize(("hook", "event"), PUBLIC_HOOKS)
+def test_committed_byte_identical_rename_is_silent(
+    tmp_path: Path, hook: Path, event: str
+) -> None:
+    repo = feature_repo(tmp_path, STRONG)
+    old_path = "tests/test_total.py"
+    new_path = "tests/test_renamed.py"
+    git(repo, "mv", old_path, new_path)
+    commit(repo, "rename test without changing oracle")
+    git(repo, "config", "diff.renames", "false")
+    git(repo, "config", "diff.renameLimit", "1")
+
+    result = run_hook(hook, repo, event)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == ""
+
+
+@pytest.mark.parametrize(
+    "filename",
+    (
+        "tests/test_newline\ncase.py",
+        "tests/test_tab\tcase.py",
+        'tests/test_"quoted"_case.py',
+    ),
+)
+@pytest.mark.parametrize(("hook", "event"), PUBLIC_HOOKS)
+def test_committed_weakening_at_git_valid_unusual_path_warns(
+    tmp_path: Path,
+    hook: Path,
+    event: str,
+    filename: str,
+) -> None:
+    repo = landing_repo(tmp_path, STRONG)
+    git(repo, "mv", "tests/test_total.py", filename)
+    commit(repo, "move baseline to unusual path")
+    git(repo, "push", "origin", "trunk")
+    git(repo, "checkout", "-b", "feature/oracle-change")
+    write(repo, filename, WEAK)
+    commit(repo, "weaken unusual-path oracle")
+
+    message = advisory_message(run_hook(hook, repo, event), event)
+
+    assert filename in message
+
+
+@pytest.mark.parametrize(("hook", "event"), PUBLIC_HOOKS)
+def test_raw_non_utf8_committed_weakening_warns_from_nul_git_record(
+    tmp_path: Path, hook: Path, event: str
+) -> None:
+    repo, raw_path, baseline = raw_non_utf8_repo(tmp_path)
+    records = git_bytes(
+        repo,
+        "diff",
+        "--name-status",
+        "-z",
+        "--find-renames",
+        baseline,
+        "HEAD",
+    )
+    assert raw_path in records.split(b"\0")
+
+    message = advisory_message(run_hook(hook, repo, event), event)
+
+    assert os.fsdecode(raw_path) in message
+
+
+@pytest.mark.parametrize(("hook", "event"), PUBLIC_HOOKS)
+def test_resolved_landing_ref_keeps_staged_only_weakening(
+    tmp_path: Path, hook: Path, event: str
+) -> None:
+    repo = feature_repo(tmp_path, STRONG)
+    write(repo, "tests/test_total.py", WEAK)
+    git(repo, "add", "tests/test_total.py")
+    assert git(repo, "diff", "--name-only") == ""
+
+    message = advisory_message(run_hook(hook, repo, event), event)
+
+    assert message.count("tests/test_total.py") == 1
+
+
+@pytest.mark.parametrize("landing_state", ("missing", "dangling"))
+@pytest.mark.parametrize(("hook", "event"), PUBLIC_HOOKS)
+def test_unresolved_landing_ref_retains_local_weakening(
+    tmp_path: Path,
+    hook: Path,
+    event: str,
+    landing_state: str,
+) -> None:
+    repo = feature_repo(tmp_path, STRONG)
+    if landing_state == "missing":
+        git(repo, "symbolic-ref", "--delete", "refs/remotes/origin/HEAD")
+    else:
+        git(
+            repo,
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/dangling",
+        )
+    write(repo, "tests/test_total.py", WEAK)
+
+    message = advisory_message(run_hook(hook, repo, event), event)
+
+    assert message.count("tests/test_total.py") == 1
+
+
+@pytest.mark.parametrize(("hook", "event"), PUBLIC_HOOKS)
+def test_resolved_landing_ref_keeps_untracked_only_weak_replacement(
+    tmp_path: Path, hook: Path, event: str
+) -> None:
+    repo = feature_repo(tmp_path, STRONG)
+    git(repo, "rm", "tests/test_total.py")
+    commit(repo, "remove baseline test")
+    write(repo, "tests/test_total.py", WEAK)
+    assert git(repo, "ls-files", "--others", "--exclude-standard") == (
+        "tests/test_total.py"
+    )
+
+    message = advisory_message(run_hook(hook, repo, event), event)
+
+    assert message.count("tests/test_total.py") == 1
+
+
+@pytest.mark.parametrize(("hook", "event"), PUBLIC_HOOKS)
+def test_staged_deletion_with_untracked_stronger_replacement_is_net_silent(
+    tmp_path: Path, hook: Path, event: str
+) -> None:
+    repo = feature_repo(tmp_path, STRONG)
+    path = "tests/test_total.py"
+    raw_path = path.encode()
+    git(repo, "rm", path)
+    stronger = STRONG + "    assert replacement_extra() == 11\n"
+    write(repo, path, stronger)
+    cached = git_bytes(repo, "diff", "--cached", "--name-only", "-z")
+    untracked = git_bytes(repo, "ls-files", "--others", "--exclude-standard", "-z")
+    assert raw_path in cached.split(b"\0")
+    assert raw_path in untracked.split(b"\0")
+    assert stronger != STRONG
+
+    result = run_hook(hook, repo, event)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == ""
+
+
+@pytest.mark.parametrize(("hook", "event"), PUBLIC_HOOKS)
+def test_mixed_candidate_states_warn_once_per_net_path(
+    tmp_path: Path, hook: Path, event: str
+) -> None:
+    repo = landing_repo(tmp_path, STRONG)
+    paths = (
+        "tests/test_total.py",
+        "tests/test_unstaged.py",
+        "tests/test_untracked.py",
+    )
+    write(repo, paths[1], STRONG)
+    write(repo, paths[2], STRONG)
+    commit(repo, "add mixed-state baselines")
+    git(repo, "push", "origin", "trunk")
+    git(repo, "checkout", "-b", "feature/oracle-change")
+    git(repo, "rm", paths[2])
+    commit(repo, "remove future untracked replacement")
+    write(repo, paths[2], WEAK)
+    write(repo, paths[0], WEAK)
+    git(repo, "add", paths[0])
+    write(repo, paths[1], WEAK)
+
+    message = advisory_message(run_hook(hook, repo, event), event)
+
+    for path in paths:
+        assert message.count(path) == 1
+
+
+def ref_moving_git_environment(
+    tmp_path: Path,
+    landing_oid: str,
+) -> dict[str, str]:
+    real_git = shutil.which("git")
+    assert real_git is not None
+    wrapper_dir = tmp_path / "git-wrapper"
+    wrapper_dir.mkdir()
+    wrapper = wrapper_dir / "git"
+    wrapper.write_text(
+        """#!/usr/bin/env python3
+import os
+import subprocess
+import sys
+
+args = sys.argv[1:]
+result = subprocess.run([os.environ["REAL_GIT"], *args], capture_output=True)
+resolved_tokens = result.stdout.replace(b"\\0", b" ").split()
+if (
+    result.returncode == 0
+    and os.environ["LANDING_OID"].encode() in resolved_tokens
+    and not os.path.exists(os.environ["REF_MOVE_MARKER"])
+):
+    subprocess.run(
+        [
+            os.environ["REAL_GIT"],
+            "update-ref",
+            "refs/remotes/origin/trunk",
+            "refs/remotes/origin/alternate",
+        ],
+        check=True,
+    )
+    with open(os.environ["REF_MOVE_MARKER"], "wb") as marker:
+        marker.write(b"moved after immutable target resolution\\n")
+sys.stdout.buffer.write(result.stdout)
+sys.stderr.buffer.write(result.stderr)
+raise SystemExit(result.returncode)
+""",
+        encoding="utf-8",
+    )
+    wrapper.chmod(0o755)
+    env = os.environ.copy()
+    env["REAL_GIT"] = real_git
+    env["LANDING_OID"] = landing_oid
+    env["REF_MOVE_MARKER"] = str(tmp_path / "ref-moved.marker")
+    env["PATH"] = f"{wrapper_dir}{os.pathsep}{env['PATH']}"
+    return env
+
+
+@pytest.mark.parametrize(("hook", "event"), PUBLIC_HOOKS)
+def test_resolved_landing_oid_survives_later_target_ref_move(
+    tmp_path: Path, hook: Path, event: str
+) -> None:
+    repo = feature_repo(tmp_path, STRONG)
+    landing_oid = git(repo, "rev-parse", "refs/remotes/origin/trunk")
+    write(repo, "tests/test_total.py", WEAK)
+    commit(repo, "weaken oracle")
+    git(repo, "update-ref", "refs/remotes/origin/alternate", "HEAD")
+    env = ref_moving_git_environment(tmp_path, landing_oid)
+
+    result = run_hook(hook, repo, event, env=env)
+    assert Path(env["REF_MOVE_MARKER"]).read_text() == (
+        "moved after immutable target resolution\n"
+    )
+    assert git(repo, "rev-parse", "refs/remotes/origin/trunk") == git(
+        repo, "rev-parse", "refs/remotes/origin/alternate"
+    ), "race fixture must move the verified target ref before scope evaluation"
+    message = advisory_message(result, event)
+
+    assert "tests/test_total.py" in message

@@ -32,7 +32,7 @@ except ImportError:  # pragma: no cover
         return None
 
 
-from git_change_scope import net_tree_scope, revision_file, worktree_file
+from git_change_scope import change_sources, net_tree_scope
 
 
 # Test Oracle Brief location (matches test_oracle_brief_gate.py BRIEF_RELATIVE_PATH).
@@ -253,8 +253,13 @@ def _source_diff_lines(
 
 def diff_for_file(repo_root: Path, filepath: str) -> tuple[list[str], list[str]]:
     scope = net_tree_scope(repo_root)
-    old_src = revision_file(repo_root, scope.baseline, filepath)
-    new_src = worktree_file(repo_root, filepath)
+    change = next(
+        (candidate for candidate in scope.changes if candidate.filepath == filepath),
+        None,
+    )
+    if change is None:
+        return [], []
+    old_src, new_src = change_sources(repo_root, scope, change)
     return _source_diff_lines(old_src, new_src, filepath)
 
 
@@ -355,11 +360,11 @@ def analyze_file(filepath: str, added: list[str], deleted: list[str]) -> list[Is
 def analyze(repo_root: Path) -> list[Issue]:
     issues: list[Issue] = []
     scope = net_tree_scope(repo_root)
-    for filepath in scope.files:
+    for change in scope.changes:
+        filepath = change.filepath
         if not is_test_file(filepath):
             continue
-        old_src = revision_file(repo_root, scope.baseline, filepath)
-        new_src = worktree_file(repo_root, filepath)
+        old_src, new_src = change_sources(repo_root, scope, change)
         added, deleted = _source_diff_lines(old_src, new_src, filepath)
         if not added and not deleted:
             continue
