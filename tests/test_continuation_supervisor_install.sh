@@ -260,7 +260,7 @@ else
   echo "FAIL: see above"
   exit 1
 fi
-if rg -n '/opt/|/usr/local/|\b(brew|jq|plutil|pip3?|npm|node|ruby|perl)\b' \
+if grep -En '/opt/|/usr/local/|(^|[^[:alnum:]_])(brew|jq|plutil|pip3?|npm|node|ruby|perl)([^[:alnum:]_]|$)' \
   "$INSTALLER" >/dev/null 2>&1
 then
   bad "supervisor installer introduces a non-Bash/non-stdlib runtime dependency"
@@ -398,9 +398,9 @@ fi
   && ok "launchd load actually invokes the stable waker with --fire" \
   || bad "launchd load did not execute one stable --fire invocation"
 
-if ! rg -F 'env-secret-must-not-leak' \
+if ! grep -F 'env-secret-must-not-leak' \
   "$PLIST" "$LAUNCHCTL_LOG" "$WAKER_LOG" "$ROOT/install.out" "$ROOT/install.err" >/dev/null 2>&1 \
-  && ! rg -F 'file-secret-must-not-leak' \
+  && ! grep -F 'file-secret-must-not-leak' \
   "$PLIST" "$LAUNCHCTL_LOG" "$WAKER_LOG" "$ROOT/install.out" "$ROOT/install.err" >/dev/null 2>&1
 then
   ok "judge secrets are absent from plist, process argv records, installer output, and supervisor logs"
@@ -417,7 +417,7 @@ else
   bad "idempotent reinstall/reload failed"
 fi
 
-[ "$(rg -c '^bootstrap ' "$LAUNCHCTL_LOG" 2>/dev/null || echo 0)" -eq 2 ] \
+[ "$(awk '/^bootstrap / {count++} END {print count+0}' "$LAUNCHCTL_LOG" 2>/dev/null)" -eq 2 ] \
   && [ "$(wc -l < "$WAKER_LOG" 2>/dev/null || echo 0)" -eq 2 ] \
   && ok "each install converges to one loaded job and one RunAtLoad fire" \
   || bad "reinstall duplicated, skipped, or failed to reload the job"
@@ -468,7 +468,7 @@ else
 fi
 if [ ! -s "$LOAD_FAIL_HOME/launchctl.loaded" ] \
   && [ ! -e "$LOAD_FAIL_HOME/waker.argv" ] \
-  && ! rg -qi '^installed\b|^==> (installed|OK)\b|successfully installed' \
+  && ! grep -Eqi '^installed([^[:alnum:]_]|$)|^==> (installed|OK)([^[:alnum:]_]|$)|successfully installed' \
     "$ROOT/bootstrap-failure.out" "$ROOT/bootstrap-failure.err"
 then
   ok "failed launch never runs the waker or claims installed success"
@@ -588,7 +588,7 @@ fi
 
 if [ "$(wc -l < "$HAZARD_HOME/waker.argv" 2>/dev/null || echo 0)" -eq 1 ] \
   && [ "$(sed -n '1p' "$HAZARD_HOME/waker.argv" 2>/dev/null)" = "--fire" ] \
-  && [ "$(rg -c '^bootstrap ' "$HAZARD_LOG" 2>/dev/null || echo 0)" -eq 1 ] \
+  && [ "$(awk '/^bootstrap / {count++} END {print count+0}' "$HAZARD_LOG" 2>/dev/null)" -eq 1 ] \
   && [ "$(sed -n '1p' "$HAZARD_HOME/launchctl.loaded" 2>/dev/null)" = "com.escapement.continuation-supervisor" ] \
   && [ "$(wc -l < "$HAZARD_HOME/launchctl.loaded" 2>/dev/null || echo 0)" -eq 1 ] \
   && [ ! -e "$HAZARD_HOME/unsafe-load-attempted" ] \
@@ -670,7 +670,7 @@ cp -f "$STABLE_BIN/wakeup_waker.py" "$UNSUPPORTED_HOME/.claude/harness/bin/wakeu
 if HOME="$UNSUPPORTED_HOME" PATH="$TEST_PATH" LAUNCHCTL_LOG="$UNSUPPORTED_LOG" \
   FAKE_UNAME=Linux bash "$INSTALLER" > "$ROOT/unsupported.out" 2> "$ROOT/unsupported.err"
 then
-  if rg -qi 'unsupported|not supported|no-op' "$ROOT/unsupported.out" "$ROOT/unsupported.err"; then
+  if grep -Eqi 'unsupported|not supported|no-op' "$ROOT/unsupported.out" "$ROOT/unsupported.err"; then
     ok "unsupported host reports an explicit non-installed result"
   else
     bad "unsupported host exited successfully without an explicit unsupported result"
@@ -714,8 +714,8 @@ if cmp -s "$ROOT/dry.before" "$ROOT/dry.after"; then
 else
   bad "plugin deployment dry-run mutated the isolated HOME tree"
 fi
-if rg -q 'com\.escapement\.continuation-supervisor' "$ROOT/dry.out" \
-  && rg -q 'wakeup_waker\.py.*--fire|--fire.*wakeup_waker\.py' "$ROOT/dry.out"; then
+if grep -Eq 'com\.escapement\.continuation-supervisor' "$ROOT/dry.out" \
+  && grep -Eq 'wakeup_waker\.py.*--fire|--fire.*wakeup_waker\.py' "$ROOT/dry.out"; then
   ok "plugin deployment dry-run reports the supervisor execution plan"
 else
   bad "plugin deployment dry-run did not report the supervisor --fire plan"

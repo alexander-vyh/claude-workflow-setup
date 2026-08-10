@@ -294,7 +294,7 @@ model="$(python3 -c "import json;print(json.load(open('$CLAUDE_DIR/settings.json
 [ "$(readlink "$CLAUDE_DIR/harness/schemas" 2>/dev/null)" = "$CACHE/harness/schemas" ] \
   && ok "harness/schemas converged to registry-selected plugin" \
   || bad "harness/schemas did not converge to $CACHE/harness/schemas"
-rg -q '^bootstrap ' "$HOME_DIR/launchctl.log" 2>/dev/null \
+grep -q '^bootstrap ' "$HOME_DIR/launchctl.log" 2>/dev/null \
   && ok "complete updater fixture reaches the supervisor load boundary" \
   || bad "complete updater fixture never loaded the supervisor"
 

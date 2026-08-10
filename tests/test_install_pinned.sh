@@ -229,7 +229,7 @@ then
 else
   bad "default deployment did not install a stable --fire supervisor job"
 fi
-rg -q '^bootstrap ' "$T1/launchctl.log" 2>/dev/null \
+grep -q '^bootstrap ' "$T1/launchctl.log" 2>/dev/null \
   && ok "default deployment loads the supervisor after wrapper convergence" \
   || bad "default deployment never loaded the supervisor"
 
