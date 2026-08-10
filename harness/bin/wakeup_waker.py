@@ -34,6 +34,7 @@ import wakeup_dispatch as wd  # noqa: E402
 import execution_supervisor as es  # noqa: E402
 import schedule_store  # noqa: E402
 import trusted_source as ts  # noqa: E402
+from thread_identity import is_actor_state_dir, iter_state_dirs  # noqa: E402
 
 HARNESS_ROOT = pathlib.Path(
     os.environ.get(
@@ -151,6 +152,26 @@ def _write_schedule_durable(path: pathlib.Path, entries: list) -> None:
     schedule_store.write_durable(path, entries)
 
 
+def iter_schedule_paths(threads_root: pathlib.Path) -> list[pathlib.Path]:
+    """Supported schedules: legacy parents plus one canonical actor layer."""
+    return sorted(
+        schedule
+        for state_dir in iter_state_dirs(pathlib.Path(threads_root))
+        if os.path.lexists(schedule := state_dir / "scheduled.json")
+    )
+
+
+def _one_session_id(entries: list) -> str:
+    session_ids = {
+        entry.get("thread_id")
+        for entry in entries
+        if isinstance(entry, dict)
+        and isinstance(entry.get("thread_id"), str)
+        and entry.get("thread_id")
+    }
+    return next(iter(session_ids)) if len(session_ids) == 1 else ""
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         description="Continuation-harness waker (poll/handoff)."
@@ -168,7 +189,7 @@ def main(argv=None) -> int:
     total_spawns = []
     exit_code = 0
     scheduled_ok = True
-    for sched in root.glob("*/scheduled.json"):
+    for sched in iter_schedule_paths(root):
         # Trust boundary: a check entry's `command` is shell-executed by the
         # launchd-detached waker. Refuse any schedule another local user could
         # have rewritten (wrong owner, or group/world-writable file or dir).
@@ -191,17 +212,57 @@ def main(argv=None) -> int:
             if not isinstance(entries, list):
                 scheduled_ok = False
                 continue
+            session_id = _one_session_id(entries)
+            repo_cwd = (
+                es.session_repo_cwd(sched.parent, session_id) if session_id else None
+            )
+            actor_state = is_actor_state_dir(sched.parent)
+            canonical_session = (
+                es.session_id_for_state_dir(sched.parent) if actor_state else None
+            )
+            runner_failed = False
+            context_failed = False
+
+            def run_check(command: str) -> Tuple[int, str]:
+                nonlocal context_failed, runner_failed
+                if actor_state and (
+                    canonical_session != session_id or repo_cwd is None
+                ):
+                    context_failed = True
+                    raise RuntimeError("actor schedule context is unresolved")
+                try:
+                    return wd._default_runner(command, cwd=repo_cwd)
+                except Exception:
+                    runner_failed = True
+                    raise
+
             kept, spawns = plan(
-                entries, now, run_cmd=None if args.fire else _dry_run_runner
+                entries, now, run_cmd=run_check if args.fire else _dry_run_runner
             )
             if args.fire:
-                repo_cwd = None
+                schedule_writable = True
+                if context_failed:
+                    scheduled_ok = False
+                    exit_code = 1
+                    schedule_writable = False
+                    print(
+                        f"actor schedule lacks trusted repository context: {sched}",
+                        file=sys.stderr,
+                    )
+                if runner_failed:
+                    scheduled_ok = False
+                    exit_code = 1
+                    print(
+                        f"scheduled check runner failed: {sched}",
+                        file=sys.stderr,
+                    )
                 if spawns:
-                    repo_cwd = es.session_repo_cwd(sched.parent, sched.parent.name)
-                    if repo_cwd is None:
+                    if repo_cwd is None or (
+                        actor_state and canonical_session != session_id
+                    ):
                         scheduled_ok = False
                         exit_code = 1
-                        kept.extend(spawn["_entry"] for spawn in spawns)
+                        schedule_writable = False
                         spawns = []
                         print(
                             f"scheduled spawn lacks trusted repository context: {sched}",
@@ -218,7 +279,8 @@ def main(argv=None) -> int:
                         print(f"spawn failed for {sched}: {exc}", file=sys.stderr)
                     else:
                         spawned.append(_public_spawn(s))
-                _write_schedule_durable(sched, kept)
+                if schedule_writable and kept != entries:
+                    _write_schedule_durable(sched, kept)
                 total_spawns += spawned
             else:
                 total_spawns += [_public_spawn(s) for s in spawns]

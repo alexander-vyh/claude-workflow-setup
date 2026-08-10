@@ -12,6 +12,7 @@ import sys
 
 from execution_ledger import apply_event, reconcile_deadlines
 from execution_store import load_trusted, mutate_atomic
+from thread_identity import InvalidActorIdentity, resolve_thread_dir
 
 
 def _harness_root() -> pathlib.Path:
@@ -26,7 +27,7 @@ def _harness_root() -> pathlib.Path:
 
 
 def _ledger_path(session_id: str) -> pathlib.Path:
-    return _harness_root() / "threads" / session_id / "executions.json"
+    return resolve_thread_dir(session_id, _harness_root()) / "executions.json"
 
 
 def _one_exact(records: object, expected_id: str) -> dict | None:
@@ -220,12 +221,27 @@ def main() -> int:
         payload = json.load(sys.stdin)
     except (json.JSONDecodeError, ValueError):
         return 0
+    session_id = payload.get("session_id", "") if isinstance(payload, dict) else ""
+    try:
+        ledger_path = _ledger_path(session_id)
+    except InvalidActorIdentity as exc:
+        print(
+            json.dumps(
+                {
+                    "hookSpecificOutput": {
+                        "hookEventName": "SessionStart",
+                        "additionalContext": f"invalid actor identity: {exc}",
+                    }
+                }
+            )
+        )
+        return 0
     result = reconcile_session(
         payload,
         _default_run_bd(payload.get("cwd", "")),
-        lambda expected: load_trusted(_ledger_path(expected), expected),
+        lambda expected: load_trusted(ledger_path, expected),
         dt.datetime.now(dt.timezone.utc),
-        lambda expected, mutation: mutate_atomic(_ledger_path(expected), mutation),
+        lambda _expected, mutation: mutate_atomic(ledger_path, mutation),
     )
     if result["additional_context"]:
         print(

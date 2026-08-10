@@ -55,6 +55,7 @@ from typing import Optional
 # Sibling import — works in the repo tree and when installed to ~/.claude/harness/bin.
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from would_block_stop import (  # noqa: E402
+    InvalidActorIdentity,
     thread_dir_for_session,
     sanitize_session_id,
     harness_home,
@@ -63,6 +64,7 @@ from would_block_stop import (  # noqa: E402
 import execution_store  # noqa: E402
 import schedule_store  # noqa: E402
 import supervisor_health  # noqa: E402
+from thread_identity import canonical_harness_root, supervisor_health_path  # noqa: E402
 
 CREATED_BY = "ScheduleWakeup"
 MANAGED_CREATED_BY = "execution-supervisor"
@@ -166,10 +168,10 @@ def _persist_managed_wakeups(
     trigger_at: _dt.datetime,
     *,
     prompt: str,
+    harness_root: pathlib.Path | None = None,
 ) -> list[dict] | None:
-    health = supervisor_health.load_trusted(
-        pathlib.Path(thread_dir).parent.parent / "supervisor-health.json"
-    )
+    root = pathlib.Path(harness_root) if harness_root is not None else harness_home()
+    health = supervisor_health.load_trusted(supervisor_health_path(root))
     if health is None or health["completed_generation"] < 1:
         return None
     if not executions:
@@ -210,11 +212,13 @@ def persist_managed_wakeup(
     trigger_at: _dt.datetime,
 ) -> dict | None:
     """Persist one exact execution proof against the current health generation."""
+    root = canonical_harness_root(thread_dir) or harness_home()
     entries = _persist_managed_wakeups(
         [execution],
         pathlib.Path(thread_dir),
         trigger_at,
         prompt="reconcile delegated execution",
+        harness_root=root,
     )
     return entries[0] if entries else None
 
@@ -289,6 +293,7 @@ def parse_and_register(
                 thread_dir,
                 now + _dt.timedelta(seconds=delay),
                 prompt=str(prompt),
+                harness_root=harness_root,
             )
             is not None
         ):
@@ -326,9 +331,7 @@ def prune_thread(
         return [
             entry
             for entry in entries
-            if not (
-                isinstance(entry, dict) and entry.get("created_by") in creators
-            )
+            if not (isinstance(entry, dict) and entry.get("created_by") in creators)
         ]
 
     try:
@@ -353,6 +356,9 @@ def main(argv: Optional[list] = None) -> int:
         return 0  # fail-open
     try:
         parse_and_register(payload)
+    except InvalidActorIdentity as exc:
+        print(f"schedule wakeup denied: invalid actor identity: {exc}", file=sys.stderr)
+        return 2
     except Exception:
         return 0  # never break the agent's tool flow
     return 0

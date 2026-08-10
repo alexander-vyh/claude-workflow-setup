@@ -12,6 +12,7 @@ from beads_task_state import task_root_status
 import execution_store
 import schedule_store
 import supervisor_health
+from thread_identity import supervisor_health_path
 from trusted_source import is_trusted_file
 from would_block_stop import execution_stop_decision
 
@@ -47,6 +48,8 @@ def decide_task_mode(
     session_id: str,
     thread_dir: pathlib.Path,
     now: dt.datetime,
+    *,
+    harness_root: pathlib.Path,
 ) -> tuple[dict | None, tuple[str, str] | None]:
     """Load task context and decide managed execution state when it exists."""
     thread_dir = pathlib.Path(thread_dir)
@@ -65,9 +68,7 @@ def decide_task_mode(
         return session_mode, ("block", "delegated_execution_unresolved")
 
     scheduled = schedule_store.load(pathlib.Path(thread_dir) / "scheduled.json")
-    health = supervisor_health.load_trusted(
-        pathlib.Path(thread_dir).parent.parent / "supervisor-health.json"
-    )
+    health = supervisor_health.load_trusted(supervisor_health_path(harness_root))
     return session_mode, execution_stop_decision(
         task_root_status(session_mode), ledger, health, scheduled, now
     )

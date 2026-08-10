@@ -19,6 +19,7 @@ import uuid
 
 from execution_ledger import new_ledger, register_execution
 from execution_store import initialize_or_mutate_atomic, load_trusted, mutate_atomic
+from thread_identity import InvalidActorIdentity, resolve_thread_dir
 
 
 UTC = dt.timezone.utc
@@ -53,7 +54,7 @@ def _harness_root() -> pathlib.Path:
 
 
 def _ledger_path(session_id: str) -> pathlib.Path:
-    return _harness_root() / "threads" / session_id / "executions.json"
+    return resolve_thread_dir(session_id, _harness_root()) / "executions.json"
 
 
 def _repair_command(session_id: str, agent_name: str) -> str:
@@ -245,13 +246,33 @@ def _hook_main() -> int:
     except (json.JSONDecodeError, ValueError):
         return 0
     session_id = payload.get("session_id", "") if isinstance(payload, dict) else ""
+    try:
+        ledger_path = _ledger_path(session_id)
+    except InvalidActorIdentity as exc:
+        agent_name = "<agent-name>"
+        tool_input = payload.get("tool_input") if isinstance(payload, dict) else None
+        if isinstance(tool_input, dict) and isinstance(tool_input.get("name"), str):
+            agent_name = tool_input["name"]
+        result = _deny("invalid_actor_identity", session_id, agent_name)
+        print(
+            json.dumps(
+                {
+                    "hookSpecificOutput": {
+                        "hookEventName": payload.get("hook_event_name", "PreToolUse"),
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": f"{result['reason']}: {exc}",
+                    }
+                }
+            )
+        )
+        return 0
     if payload.get("hook_event_name") == "PostToolUse":
-        post_tool(payload, _ledger_path(session_id))
+        post_tool(payload, ledger_path)
         return 0
     result = pre_tool(
         payload,
         _default_run_bd(payload.get("cwd", "")),
-        _ledger_path(session_id),
+        ledger_path,
     )
     reason = result["reason"]
     if result["decision"] == "deny":
@@ -287,7 +308,12 @@ def main(argv: list[str] | None = None) -> int:
         return _hook_main()
     args.execution_id = args.execution_id or uuid.uuid4().hex
     args.watchdog_id = args.watchdog_id or uuid.uuid4().hex
-    print(json.dumps(_prepare(args), sort_keys=True))
+    try:
+        prepared = _prepare(args)
+    except InvalidActorIdentity as exc:
+        print(f"invalid actor identity: {exc}", file=sys.stderr)
+        return 2
+    print(json.dumps(prepared, sort_keys=True))
     return 0
 
 

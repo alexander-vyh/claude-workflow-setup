@@ -15,6 +15,7 @@ from collections.abc import Callable
 from execution_ledger import apply_event, claim_recovery, reconcile_deadlines
 from execution_store import load_trusted, mutate_atomic
 from trusted_source import is_trusted_file
+from thread_identity import is_actor_state_dir, iter_state_dirs, sanitize_session_id
 import supervisor_health
 
 UTC = dt.timezone.utc
@@ -45,7 +46,7 @@ def _one_exact(records: object, expected_id: str) -> dict | None:
 def session_repo_cwd(thread_dir: pathlib.Path, session_id: str) -> pathlib.Path | None:
     """Resolve the existing task-mode repository binding for daemon Beads calls."""
     mode_path = pathlib.Path(thread_dir) / "session_mode.json"
-    if not is_trusted_file(mode_path):
+    if mode_path.is_symlink() or not is_trusted_file(mode_path):
         return None
     try:
         mode = json.loads(mode_path.read_text())
@@ -64,6 +65,28 @@ def session_repo_cwd(thread_dir: pathlib.Path, session_id: str) -> pathlib.Path 
     return repo_cwd.resolve()
 
 
+def session_id_for_state_dir(thread_dir: pathlib.Path) -> str | None:
+    """Resolve the parent session bound to one legacy or actor state directory."""
+    state_dir = pathlib.Path(thread_dir)
+    is_actor = is_actor_state_dir(state_dir)
+    path_session = state_dir.parent.parent.name if is_actor else state_dir.name
+    mode_path = state_dir / "session_mode.json"
+    if not mode_path.is_symlink() and is_trusted_file(mode_path):
+        try:
+            mode = json.loads(mode_path.read_text())
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            mode = None
+        if isinstance(mode, dict):
+            session_id = mode.get("session_id")
+            if (
+                isinstance(session_id, str)
+                and session_id
+                and (sanitize_session_id(session_id) or "current") == path_session
+            ):
+                return session_id
+    return None if is_actor else path_session
+
+
 def _claim_expired(claim: dict | None, now: dt.datetime) -> bool:
     return claim is not None and now.astimezone(UTC) >= _parse(claim["expires_at"])
 
@@ -79,7 +102,13 @@ def plan_thread(
     """Read one trusted ledger and resolve external status without mutating it."""
     del now
     path = pathlib.Path(thread_dir) / "executions.json"
-    session_id = pathlib.Path(thread_dir).name
+    session_id = session_id_for_state_dir(thread_dir)
+    if session_id is None:
+        return {
+            "status": "unresolved",
+            "thread": str(pathlib.Path(thread_dir)),
+            "ledger_path": path,
+        }
     ledger = load_trusted(path, session_id)
     if ledger is None:
         return {"status": "unresolved", "thread": session_id, "ledger_path": path}
@@ -229,7 +258,7 @@ def reconcile_all(
     plans: list[dict] = []
     recoveries = 0
 
-    for thread_dir in sorted(path for path in root.glob("*") if path.is_dir()):
+    for thread_dir in iter_state_dirs(root):
         ledger_path = thread_dir / "executions.json"
         if not os.path.lexists(ledger_path):
             continue

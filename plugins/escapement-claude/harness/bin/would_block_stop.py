@@ -20,12 +20,16 @@ import datetime as _dt
 import json
 import os
 import pathlib
-import re
 import sys
 from typing import Optional, Tuple
 
 from execution_validation import is_valid_ledger
 import supervisor_health
+from thread_identity import (  # noqa: E402
+    InvalidActorIdentity as InvalidActorIdentity,
+    resolve_thread_dir,
+    sanitize_session_id as sanitize_session_id,
+)
 
 try:
     from verify_integrity import is_suppressed_verification
@@ -361,43 +365,28 @@ def would_block_stop(thread_state: dict) -> Tuple[str, str]:
     return ("block", "no_completion_or_resumption_proof")
 
 
-def sanitize_session_id(session_id: Optional[str]) -> str:
-    """Reduce a session id to a safe single path component.
-
-    Keeps only alphanumerics, dash, underscore; caps length. A malformed or
-    malicious session id can never escape the threads/ directory because the
-    result contains no '/', '..', or other path metacharacters.
-    """
-    if not session_id or not isinstance(session_id, str):
-        return ""
-    return re.sub(r"[^A-Za-z0-9_-]", "", session_id)[:128]
-
-
 def thread_dir_for_session(
     session_id: Optional[str],
     harness_root: Optional[pathlib.Path] = None,
 ) -> pathlib.Path:
     """Resolve the per-session thread directory.
 
-    Pure function of (HARNESS_THREAD_DIR override, session_id, HARNESS_ROOT).
-    Keyed by session_id so concurrent sessions / named subagents working the
-    same repo do not collide on a shared contract. Resolution priority:
+    Canonical function of the explicit override, session id, harness root, and
+    the optional CLAUDE_AGENT_ID environment identity. Resolution priority:
 
       1. HARNESS_THREAD_DIR env override (explicit; for tests / special cases)
-      2. sanitized session_id  -> {harness_root}/threads/{session_id}
-      3. fallback              -> {harness_root}/threads/current
+      2. actor + session        -> threads/{session_id}/agents/{actor-key}
+      3. parent session         -> threads/{session_id}
+      4. no session             -> threads/current
+
+    A present invalid actor identity raises InvalidActorIdentity instead of
+    falling back to the parent's state.
     """
-    override = os.environ.get("HARNESS_THREAD_DIR")
-    if override:
-        return pathlib.Path(override)
     if harness_root is None:
         harness_root = pathlib.Path(
             os.environ.get("HARNESS_ROOT", DEFAULT_HARNESS_ROOT)
         )
-    sid = sanitize_session_id(session_id)
-    if sid:
-        return harness_root / "threads" / sid
-    return harness_root / "threads" / "current"
+    return resolve_thread_dir(session_id, harness_root)
 
 
 def load_thread_state(

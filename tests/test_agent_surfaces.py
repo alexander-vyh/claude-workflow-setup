@@ -1258,6 +1258,7 @@ def test_codex_plugin_bundles_reconciliation_import_closure():
         "execution_ledger.py",
         "execution_store.py",
         "execution_validation.py",
+        "thread_identity.py",
         "trusted_source.py",
     )
     for name in required:
