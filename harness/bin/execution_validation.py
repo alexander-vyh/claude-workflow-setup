@@ -10,6 +10,13 @@ UTC = dt.timezone.utc
 EXECUTION_STATES = {"queued", "running", "terminal", "cancelled", "unknown"}
 RECONCILE_STATES = {None, "start", "idle", "hard"}
 APPLICATION_STATES = {"unapplied", "applying", "applied"}
+RUNNING_ACTIVITY_KINDS = {
+    "child_started",
+    "tool_completed",
+    "assistant_nonempty",
+    "checkpoint",
+    "terminal_event",
+}
 
 _EXECUTION_KEYS = {
     "bead_id",
@@ -161,6 +168,25 @@ def _valid_terminal_state(item: dict) -> bool:
     return all(item[key] is None for key in (*terminal_fields, "result_digest"))
 
 
+def _valid_running_state(item: dict) -> bool:
+    if item["state"] != "running":
+        return True
+    if (
+        not _nonempty_text(item["native_child_id"])
+        or not _valid_timestamp(item["started_at"])
+        or not _valid_timestamp(item["last_activity_at"])
+        or item["last_activity_kind"] not in RUNNING_ACTIVITY_KINDS
+    ):
+        return False
+    started_at = _parse(item["started_at"])
+    last_activity_at = _parse(item["last_activity_at"])
+    idle_deadline = _parse(item["idle_deadline"])
+    return (
+        started_at <= last_activity_at
+        and idle_deadline == last_activity_at + dt.timedelta(minutes=15)
+    )
+
+
 def _valid_execution(item: Any) -> bool:
     if not isinstance(item, dict) or set(item) != _EXECUTION_KEYS:
         return False
@@ -213,6 +239,8 @@ def _valid_execution(item: Any) -> bool:
     if recovery_claim is not None and not _claim_matches_execution(
         recovery_claim, item
     ):
+        return False
+    if not _valid_running_state(item):
         return False
     if not _valid_terminal_state(item):
         return False

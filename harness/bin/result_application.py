@@ -131,6 +131,24 @@ def apply_verified_result(
         return {"status": "verification_unresolved"}
 
     if verification_status != "observed":
+        ledger = load_trusted(path, expected_parent)
+        if ledger is None:
+            return {"status": "unresolved_ledger"}
+        pre_application_now = clock()
+        _iso(pre_application_now)
+        execution = _execution(ledger, execution_id)
+        if not _current_claim(
+            execution,
+            attempt=attempt,
+            generation=generation,
+            owner=owner,
+            claim_generation=claim_generation,
+            now=pre_application_now,
+        ):
+            return {"status": "stale_claim"}
+        application = execution["result_application"]
+        if application.get("idempotency_key") != idempotency_key:
+            raise ValueError("idempotency_key does not match the execution generation")
         try:
             apply(idempotency_key)
         except Exception as exc:  # BaseException models process death and must escape

@@ -93,6 +93,87 @@ def write(path: pathlib.Path, ledger: dict) -> None:
     path.chmod(0o600)
 
 
+def test_complete_running_execution_is_trusted_positive_control(tmp_path) -> None:
+    ledger = valid_ledger()
+    path = tmp_path / "executions.json"
+    write(path, ledger)
+
+    assert ledger_api.load_trusted(path, "parent-7") == ledger
+
+
+@pytest.mark.parametrize(
+    (
+        "activity_kind",
+        "started_at",
+        "last_activity_at",
+        "idle_deadline",
+        "updated_at",
+    ),
+    [
+        (
+            "child_started",
+            "2026-08-09T20:00:20Z",
+            "2026-08-09T20:00:20Z",
+            "2026-08-09T20:15:20Z",
+            "2026-08-09T20:00:20Z",
+        ),
+        (
+            "checkpoint",
+            "2026-08-09T20:00:20Z",
+            "2026-08-09T20:04:00Z",
+            "2026-08-09T20:19:00Z",
+            "2026-08-09T20:04:00Z",
+        ),
+    ],
+)
+def test_each_valid_running_activity_variant_is_trusted(
+    tmp_path,
+    activity_kind,
+    started_at,
+    last_activity_at,
+    idle_deadline,
+    updated_at,
+) -> None:
+    ledger = valid_ledger()
+    item = ledger["executions"][0]
+    item["started_at"] = started_at
+    item["last_activity_at"] = last_activity_at
+    item["last_activity_kind"] = activity_kind
+    item["idle_deadline"] = idle_deadline
+    ledger["updated_at"] = updated_at
+    path = tmp_path / "executions.json"
+    write(path, ledger)
+
+    assert ledger_api.load_trusted(path, "parent-7") == ledger
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid_value"),
+    [
+        ("native_child_id", None),
+        ("native_child_id", ""),
+        ("started_at", None),
+        ("last_activity_at", None),
+        ("last_activity_kind", None),
+        ("last_activity_kind", "status_polled"),
+        ("last_activity_kind", "tool_started"),
+        ("last_activity_kind", "semantic_annotation"),
+        ("started_at", "2026-08-09T20:04:01Z"),
+        ("idle_deadline", "2026-08-09T20:18:59Z"),
+        ("idle_deadline", "2026-08-09T20:19:01Z"),
+    ],
+)
+def test_each_invalid_running_state_invariant_is_unresolved(
+    tmp_path, field, invalid_value
+) -> None:
+    ledger = valid_ledger()
+    ledger["executions"][0][field] = invalid_value
+    path = tmp_path / "executions.json"
+    write(path, ledger)
+
+    assert ledger_api.load_trusted(path, "parent-7") is None
+
+
 @pytest.mark.parametrize(
     "field_path",
     [
@@ -407,6 +488,26 @@ def test_public_validation_and_store_functions_own_nontrivial_implementation() -
         "os.fsync",
         "os.replace",
     } <= mutator_references
+
+
+def test_public_application_boundary_directly_uses_the_trusted_loader() -> None:
+    application_path = BIN / "result_application.py"
+    application_tree = _tree(application_path)
+    bindings = _import_bindings(application_tree)
+    boundary = _top_level_function(application_path, "apply_verified_result")
+    references = {
+        name
+        for node in ast.walk(boundary)
+        if isinstance(node, (ast.Call, ast.Attribute))
+        if (
+            name := _qualified_name(
+                node.func if isinstance(node, ast.Call) else node,
+                bindings,
+            )
+        )
+    }
+
+    assert "execution_store.load_trusted" in references
 
 
 def test_storage_primitives_exist_only_in_execution_store() -> None:

@@ -142,8 +142,10 @@ Claude/Codex plugin surfaces, macOS launchd, Bash deployment tests.
 - `claim_recovery(ledger: dict, execution_id: str, now: datetime,
   owner: str, ttl_seconds: int) -> dict | None`
 - `claim_result_application(...) -> dict | None`
-- `result_application.apply_verified_result(..., verify_outcome: Callable,
-  apply: Callable, idempotency_key: str, now: datetime) -> dict`
+- `result_application.apply_verified_result(path: Path, *, expected_parent: str,
+  execution_id: str, attempt: int, generation: int, owner: str,
+  claim_generation: int, verify_outcome: Callable, apply: Callable,
+  idempotency_key: str, clock: Callable[[], datetime]) -> dict`
 - `load_trusted(path: Path, expected_parent: str) -> dict | None`
 - `mutate_atomic(path: Path, mutation: Callable[[dict], dict]) -> dict`
 
@@ -172,7 +174,10 @@ Claude/Codex plugin surfaces, macOS launchd, Bash deployment tests.
   application. Simulate external application succeeding and process death before
   the ledger persists `applied`; takeover must recheck the business outcome or
   reuse the stable idempotency key, produce exactly one external application,
-  and eventually persist fenced completion.
+  and eventually persist fenced completion. After negative verification and
+  before invoking external `apply`, reload the trusted path and sample `clock`
+  again; only the exact still-current, unexpired claim generation may mutate the
+  business outcome. Repeat that fresh durable fence before persisting `applied`.
 
 - [ ] **Step 4: Write storage/security controls**
 

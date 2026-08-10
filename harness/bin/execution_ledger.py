@@ -229,7 +229,7 @@ def apply_event(ledger: dict, event: dict, now: dt.datetime) -> dict:
         and event_child != item["native_child_id"]
     ):
         raise ValueError("native child identity does not match active execution")
-    if kind in {"activity_completed", "child_terminal"} and (
+    if kind in {"activity_completed", "child_terminal", "child_cancelled"} and (
         item["native_child_id"] is None or event_child != item["native_child_id"]
     ):
         raise ValueError(f"{kind} requires the bound native child identity")

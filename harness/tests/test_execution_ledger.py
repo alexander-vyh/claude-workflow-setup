@@ -289,6 +289,76 @@ def test_terminal_evidence_requires_exact_bound_native_identity(
 
 
 @pytest.mark.parametrize(
+    ("setup", "event_child"),
+    [
+        ("bound", None),
+        ("unbound", "unbound-child"),
+        ("bound", "different-native-child"),
+    ],
+)
+def test_cancellation_evidence_requires_exact_prior_native_binding(
+    setup: str, event_child: str | None
+) -> None:
+    ledger = started() if setup == "bound" else registered()
+    event = {
+        "kind": "child_cancelled",
+        "parent_session_id": "parent-7",
+        "execution_id": "exec-alpha",
+        "attempt": 1,
+        "generation": 1,
+        "terminal_event_id": "cancelled-wrong-child",
+        "terminal_reason": "supervisor_cancelled",
+    }
+    if event_child is not None:
+        event["native_child_id"] = event_child
+    before = copy.deepcopy(ledger)
+
+    with pytest.raises(ValueError, match="native child"):
+        ledger_api.apply_event(ledger, event, at("2026-08-09T20:05:00Z"))
+
+    assert ledger == before
+
+
+def test_cancellation_evidence_accepts_the_exact_bound_native_child() -> None:
+    ledger = started()
+    ledger_api.apply_event(
+        ledger,
+        {
+            "kind": "child_cancelled",
+            "parent_session_id": "parent-7",
+            "execution_id": "exec-alpha",
+            "attempt": 1,
+            "generation": 1,
+            "native_child_id": "child-native-1",
+            "terminal_event_id": "cancelled-900",
+            "terminal_reason": "supervisor_cancelled",
+        },
+        at("2026-08-09T20:05:00Z"),
+    )
+
+    item = execution(ledger)
+    assert item["state"] == "cancelled"
+    assert item["native_child_id"] == "child-native-1"
+    assert item["terminal_at"] == "2026-08-09T20:05:00Z"
+    assert item["terminal_reason"] == "supervisor_cancelled"
+    assert item["terminal_event_id"] == "cancelled-900"
+    assert item["result_digest"] is None
+    assert item["result_application"]["state"] == "unapplied"
+    assert (
+        ledger_api.claim_result_application(
+            ledger,
+            "exec-alpha",
+            at("2026-08-09T20:06:00Z"),
+            "applier",
+            30,
+            attempt=1,
+            generation=1,
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
     "kind", ["tool_started", "status_polled", "semantic_annotation"]
 )
 def test_nonsemantic_events_do_not_renew_activity(kind: str) -> None:
