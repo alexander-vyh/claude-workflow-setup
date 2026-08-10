@@ -43,6 +43,7 @@ from would_block_stop import (  # noqa: E402
 import session_isolation  # noqa: E402  (per-session isolation steer, bead e9v.4)
 import winddown_outage_sentinel as _wos  # noqa: E402
 import datetime as _dt2  # noqa: E402
+from beads_task_state import check_task_root_outcome, check_task_scope  # noqa: E402
 
 # State root is the standard per-user location (env-overridable), NOT relative
 # to where this code is installed — so dev-copy and installed-copy share state
@@ -567,39 +568,6 @@ def _winddown_override(
     return _wg.RECOVERY_PROMPT if decision == "block" else None
 
 
-def _main_repo_has_beads(cwd: str) -> bool:
-    """A3: detect if `cwd` is a LINKED git worktree (`.git` is a FILE) and the
-    resolved main repo has `.beads/`. Used to widen the `has_beads_dir` check so
-    a foreign beads worktree (which lacks a literal `.beads/` at its own cwd)
-    still degrades to BLOCK rather than to the graceful-allow path when bd fails.
-
-    Returns False for:
-    - real repos (`.git` is a directory, not a file)
-    - plain-git linked worktrees (main repo has no `.beads/`)
-    - unreadable / malformed `.git` files
-
-    Fail-open: any OSError → False (never fabricates a block).
-    """
-    if not cwd:
-        return False
-    try:
-        git_path = pathlib.Path(cwd) / ".git"
-        if not git_path.is_file():
-            return False
-        content = git_path.read_text(encoding="utf-8", errors="replace").strip()
-        if not content.startswith("gitdir:"):
-            return False
-        gitdir_str = content[len("gitdir:"):].strip()
-        gitdir = pathlib.Path(gitdir_str)
-        if not gitdir.is_absolute():
-            gitdir = (pathlib.Path(cwd) / gitdir).resolve()
-        # <main>/.git/worktrees/<name> -> parent.parent = <main>/.git -> parent = <main>
-        main_repo = gitdir.parent.parent.parent
-        return (main_repo / ".beads").is_dir()
-    except OSError:
-        return False
-
-
 def _task_mode_in_effect(session_mode) -> bool:
     """Whether queue-drain (task-mode) gating applies to this session.
 
@@ -617,104 +585,8 @@ def _task_mode_in_effect(session_mode) -> bool:
 
 
 def _check_task_mode_queue(session_mode: dict, run_bd=None) -> Tuple[str, str]:
-    """Run bd ready / bd list in repo_cwd to determine if queue-drain allows stop.
-
-    Returns (decision, reason) where decision is "allow" or "block".
-
-    Capability probe, NOT a directory check. A git worktree has no literal
-    `.beads/` directory but `bd` still resolves the shared Dolt DB via the
-    redirect file / BEADS_DIR env (see beads-worktree-integration rule). The
-    prior implementation short-circuited to ("allow", "task_mode_no_beads_in_cwd")
-    whenever `repo_cwd/.beads` was absent — which silently ungated EVERY worktree
-    session (2026-06-01 incident: session 75be09cc allowed Stop 8x while a ready
-    sibling task remained). We now probe `bd` directly and degrade to allow ONLY
-    when bd cannot resolve a queue at all, while still keeping a real beads repo
-    (one whose `.beads/` is present) blocked when bd merely hiccups.
-
-    `run_bd` is injectable for testing; in production it defaults to a
-    subprocess runner scoped to repo_cwd and the molecule/task parent.
-    """
-    repo_cwd = session_mode.get("repo_cwd", "")
-    # Scope priority: parent_id (molecule root) > task_id (standalone task) > unscoped.
-    # parent_id is set when the claimed task has a parent (e.g., a molecule step).
-    # task_id is the fallback for standalone/leaf tasks: bd ready --parent <leaf-id>
-    # returns [] since leaf tasks have no children, so the gate allows Stop once
-    # the leaf task is closed — which is correct. Without scoping, bd ready returns
-    # the entire repo backlog, causing derailment into unrelated tasks.
-    parent_id = session_mode.get("parent_id") or session_mode.get("task_id")
-
-    if not repo_cwd:
-        return ("block", "task_mode_no_cwd")
-
-    # A real beads repo announces itself with a `.beads/` dir; a worktree does
-    # not (it uses a redirect / BEADS_DIR). We use this ONLY to decide how to
-    # degrade when bd is unavailable — never to skip the queue check.
-    # A3 FIX: also treat a linked worktree whose MAIN repo has `.beads/` as a
-    # beads context for degradation purposes — so bd-unavailable there still
-    # degrades to BLOCK rather than the graceful-allow that opens the laundering
-    # channel (the foreign-worktree incident, 2026-06).
-    has_beads_dir = (
-        (pathlib.Path(repo_cwd) / ".beads").exists()
-        or _main_repo_has_beads(repo_cwd)
-    )
-
-    if run_bd is None:
-        import json as _json
-
-        def run_bd(args: list[str]) -> Optional[list]:
-            """Run bd with --json output; returns parsed list or None on failure.
-
-            Returns [] (empty list) when the subprocess exits 0 but produces no
-            parseable JSON (the `blocked` subcommand may not exist on older bd
-            versions — treat that as "zero blocked beads" rather than a failure).
-            Returns None only for genuine subprocess failures (timeout, missing
-            binary, non-zero exit with no parseable output).
-            """
-            cmd = ["bd"] + args + ["--json"] + (["--parent", parent_id] if parent_id else [])
-            try:
-                r = subprocess.run(cmd, cwd=repo_cwd, capture_output=True, text=True, timeout=15)
-                try:
-                    return _json.loads(r.stdout)
-                except (_json.JSONDecodeError, ValueError):
-                    # Subprocess exited (possibly 0) but stdout is not JSON.
-                    # Treat exit 0 as an empty result; non-zero as a failure.
-                    if r.returncode == 0:
-                        return []
-                    return None
-            except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-                return None
-
-    ready = run_bd(["ready"])
-    if ready is None:
-        # bd produced no parseable queue. Inside a real beads repo this is a
-        # transient error — stay blocked so the agent can't sneak out. Outside
-        # one (no .beads/ dir AND bd can't resolve a DB), it's genuinely not a
-        # beads context — degrade gracefully so the gate never permanently traps.
-        if has_beads_dir:
-            return ("block", "task_mode_bd_ready_failed")
-        return ("allow", "task_mode_bd_unavailable")
-    if len(ready) > 0:
-        return ("block", "tasks_remain_in_queue")
-
-    # bd ready empty: check for scoped blocked beads before granting a drain.
-    # An empty ready list with ≥1 blocked bead is the laundering hole: the agent
-    # filed a blocker, drained ready, and called it a clean stop. We must probe
-    # blocked to distinguish a genuine drain from a manufactured one.
-    blocked_args = ["blocked"] + (["--parent", parent_id] if parent_id else [])
-    blocked = run_bd(blocked_args)
-    if blocked is None:
-        # bd failed on the blocked query. Inside a real beads repo, fail toward
-        # BLOCK — we cannot verify the drain. Outside one (worktree or older bd
-        # that lacks the `blocked` subcommand), treat the query as returning [] so
-        # the gate degrades gracefully to queue_drained rather than trapping sessions
-        # in environments where the blocked probe is unavailable.
-        if has_beads_dir:
-            return ("block", "task_mode_bd_ready_failed")
-        return ("allow", "queue_drained")
-    if len(blocked) > 0:
-        return ("block", "blocked_tasks_no_wakeup")
-    # Genuinely empty: no ready work, no blocked beads in scope — clean drain.
-    return ("allow", "queue_drained")
+    """Compatibility alias for the extracted canonical task-state check."""
+    return check_task_scope(session_mode, run_bd=run_bd)
 
 
 def _check_wakeup_blockers(session_mode: dict, run_bd=None, thread_dir=None) -> Tuple[str, str]:
@@ -986,6 +858,25 @@ def main() -> int:
             # can launder a permanent stop through the wakeup path.  user_released is
             # unconditional and bypasses the check.
             if override_reason == "wakeup_registered":
+                # A future wake is a resumption mechanism, not completion proof.
+                # Verify the canonical root/descendant scope before it can bypass
+                # the normal queue path; otherwise an in-progress parent with all
+                # children closed can stop merely by writing scheduled.json.
+                task_decision, task_reason = check_task_root_outcome(session_mode)
+                if task_decision == "block":
+                    _log_incident({
+                        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                        "session_id": session_id,
+                        "decision": task_decision,
+                        "reason": task_reason,
+                        "was_correct": None,
+                        "notes": "task_mode_wakeup_parent_check",
+                    })
+                    display = _TASK_MODE_DISPLAY.get(task_reason) or RESUMPTION_PROMPT.format(
+                        reason=task_reason
+                    )
+                    print(json.dumps({"decision": "block", "reason": display}))
+                    return 0
                 wakeup_blocker_decision, wakeup_blocker_reason = _check_wakeup_blockers(
                     session_mode, thread_dir=thread_dir
                 )
