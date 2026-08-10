@@ -47,7 +47,6 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
-import os
 import pathlib
 import sys
 from typing import Optional
@@ -55,6 +54,7 @@ from typing import Optional
 # Sibling import — works in the repo tree and when installed to ~/.claude/harness/bin.
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from would_block_stop import (  # noqa: E402
+    InvalidActorIdentity,
     thread_dir_for_session,
     sanitize_session_id,
     harness_home,
@@ -211,6 +211,9 @@ def main(argv: Optional[list] = None) -> int:
         return 0  # fail-open
     try:
         parse_and_register(payload)
+    except InvalidActorIdentity as exc:
+        print(f"schedule wakeup denied: invalid actor identity: {exc}", file=sys.stderr)
+        return 2
     except Exception:
         return 0  # never break the agent's tool flow
     return 0

@@ -23,7 +23,7 @@ import time
 from typing import Optional
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from would_block_stop import thread_dir_for_session, harness_home
+from would_block_stop import InvalidActorIdentity, thread_dir_for_session, harness_home
 
 HARNESS_ROOT = harness_home()
 
@@ -183,7 +183,11 @@ def main() -> int:
         return 0
 
     session_id = payload.get("session_id") or ""
-    thread_dir = thread_dir_for_session(session_id, HARNESS_ROOT)
+    try:
+        thread_dir = thread_dir_for_session(session_id, HARNESS_ROOT)
+    except InvalidActorIdentity as exc:
+        print(f"task-mode entry denied: invalid actor identity: {exc}", file=sys.stderr)
+        return 2
     thread_dir.mkdir(parents=True, exist_ok=True)
     mode_file = thread_dir / "session_mode.json"
 
