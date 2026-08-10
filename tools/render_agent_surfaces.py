@@ -45,6 +45,13 @@ CODEX_HOOK_SUPPORT = {
     # path. Without it, an explicitly authorized Codex repository is denied
     # fail-closed because the policy reader cannot be imported.
     "harness/bin/repo_outcome.py",
+    # execution_reconcile.py is a ready Codex SessionStart source and imports
+    # this complete trusted-ledger closure from its sibling directory.
+    "harness/bin/execution_ledger.py",
+    "harness/bin/execution_store.py",
+    "harness/bin/execution_validation.py",
+    "harness/bin/thread_identity.py",
+    "harness/bin/trusted_source.py",
 }
 CLAUDE_EXTRA_HOOK_SUPPORT = {
     "claude/hooks/local_judge_health.py",
@@ -141,10 +148,17 @@ def _render_codex_hooks(manifest: dict[str, Any]) -> str:
 
 
 def _codex_plugin_command(command: str) -> str:
-    if command.startswith("python3 -B claude/hooks/"):
-        return command.replace("python3 -B ", 'python3 -B "${PLUGIN_ROOT}/', 1) + '"'
-    if command.startswith("python3 claude/hooks/"):
-        return command.replace("python3 ", 'python3 "${PLUGIN_ROOT}/', 1) + '"'
+    for interpreter in ("python3 -B ", "python3 "):
+        if not command.startswith(interpreter):
+            continue
+        tail = command[len(interpreter):]
+        if not tail.startswith(("claude/hooks/", "harness/bin/")):
+            return command
+        script, separator, rest = tail.partition(" ")
+        rewritten = f'{interpreter}"${{PLUGIN_ROOT}}/{script}"'
+        if separator:
+            rewritten += " " + rest
+        return rewritten
     return command
 
 

@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
+import os
 import pathlib
 import sys
 from typing import Optional
@@ -60,8 +61,13 @@ from would_block_stop import (  # noqa: E402
     harness_home,
     _parse_iso,
 )
+import execution_store  # noqa: E402
+import schedule_store  # noqa: E402
+import supervisor_health  # noqa: E402
+from thread_identity import canonical_harness_root, supervisor_health_path  # noqa: E402
 
 CREATED_BY = "ScheduleWakeup"
+MANAGED_CREATED_BY = "execution-supervisor"
 
 # Mirror the ScheduleWakeup tool's documented clamp so the registered wake_at
 # matches when the runtime will actually fire.
@@ -102,6 +108,119 @@ def merge_entries(existing: list, new_entry: dict, now: _dt.datetime) -> list:
         kept.append(e)
     kept.append(new_entry)
     return kept
+
+
+def _write_entries(
+    sched_path: pathlib.Path,
+    build,
+) -> list | None:
+    lock_file = schedule_store.try_lock(sched_path, blocking=False)
+    if lock_file is None:
+        return None
+    try:
+        existing = schedule_store.load(sched_path)
+        if existing is None:
+            return None
+        updated = build(existing)
+        schedule_store.write_durable(sched_path, updated)
+        return updated
+    finally:
+        lock_file.close()
+
+
+def _managed_entry(
+    execution: dict,
+    trigger_at: _dt.datetime,
+    registered_at: _dt.datetime,
+    prompt: str,
+    health: dict,
+) -> dict | None:
+    required_text = ("parent_session_id", "watchdog_id", "execution_id")
+    if not all(
+        isinstance(execution.get(key), str) and execution[key] for key in required_text
+    ):
+        return None
+    if not all(
+        isinstance(execution.get(key), int)
+        and not isinstance(execution[key], bool)
+        and execution[key] >= 1
+        for key in ("attempt", "generation")
+    ):
+        return None
+    return {
+        "wake_at": trigger_at.astimezone(_dt.timezone.utc).isoformat(),
+        "registered_at": registered_at.astimezone(_dt.timezone.utc).isoformat(),
+        "prompt": prompt,
+        "thread_id": execution["parent_session_id"],
+        "created_by": MANAGED_CREATED_BY,
+        "crash_count": 0,
+        "supervisor_installation_id": health["installation_id"],
+        "supervisor_generation": health["completed_generation"],
+        **{key: execution[key] for key in required_text},
+        "attempt": execution["attempt"],
+        "generation": execution["generation"],
+    }
+
+
+def _persist_managed_wakeups(
+    executions: list[dict],
+    thread_dir: pathlib.Path,
+    trigger_at: _dt.datetime,
+    *,
+    prompt: str,
+    harness_root: pathlib.Path | None = None,
+) -> list[dict] | None:
+    root = pathlib.Path(harness_root) if harness_root is not None else harness_home()
+    health = supervisor_health.load_trusted(supervisor_health_path(root))
+    if health is None or health["completed_generation"] < 1:
+        return None
+    if not executions:
+        return None
+    sched_path = pathlib.Path(thread_dir) / "scheduled.json"
+    managed: list[dict] = []
+
+    def build(existing: list) -> list:
+        # This timestamp is sampled only after the stable schedule lock is held.
+        # A supervisor pass that began earlier cannot qualify; one that begins
+        # later cannot inspect the schedule until this durable replace finishes.
+        registered_at = _now()
+        entries = [
+            _managed_entry(execution, trigger_at, registered_at, prompt, health)
+            for execution in executions
+        ]
+        if any(entry is None for entry in entries):
+            raise ValueError("managed execution identity is invalid")
+        managed.extend(entry for entry in entries if entry is not None)
+        kept = []
+        for entry in existing:
+            if not isinstance(entry, dict):
+                continue
+            wake_at = _parse_iso(entry.get("wake_at", ""))
+            if wake_at is None or wake_at <= registered_at:
+                continue
+            if entry.get("created_by") in {CREATED_BY, MANAGED_CREATED_BY}:
+                continue
+            kept.append(entry)
+        return [*kept, *managed]
+
+    return managed if _write_entries(sched_path, build) is not None else None
+
+
+def persist_managed_wakeup(
+    execution: dict,
+    thread_dir: pathlib.Path,
+    trigger_at: _dt.datetime,
+) -> dict | None:
+    """Persist one exact execution proof against the current health generation."""
+    root = canonical_harness_root(thread_dir) or harness_home()
+    entries = _persist_managed_wakeups(
+        [execution],
+        pathlib.Path(thread_dir),
+        trigger_at,
+        prompt="reconcile delegated execution",
+        harness_root=root,
+    )
+    return entries[0] if entries else None
 
 
 def parse_and_register(
@@ -148,19 +267,45 @@ def parse_and_register(
         "crash_count": 0,
     }
 
+    ledger_path = thread_dir / "executions.json"
+    if os.path.lexists(ledger_path):
+        if ledger_path.is_symlink():
+            return None
+        ledger = execution_store.load_trusted(ledger_path, expected_parent=thread_id)
+        if ledger is None:
+            return None
+        active = [
+            {
+                "parent_session_id": ledger["parent_session_id"],
+                **{
+                    key: execution[key]
+                    for key in ("watchdog_id", "execution_id", "attempt", "generation")
+                },
+            }
+            for execution in ledger["executions"]
+            if execution["state"] not in {"terminal", "cancelled"}
+        ]
+        if not active:
+            return None
+        if (
+            _persist_managed_wakeups(
+                active,
+                thread_dir,
+                now + _dt.timedelta(seconds=delay),
+                prompt=str(prompt),
+                harness_root=harness_root,
+            )
+            is not None
+        ):
+            return thread_dir / "scheduled.json"
+        return None
+
     sched_path = thread_dir / "scheduled.json"
-    existing = []
-    if sched_path.exists():
-        try:
-            existing = json.loads(sched_path.read_text())
-        except (OSError, json.JSONDecodeError):
-            existing = []
-
-    merged = merge_entries(existing, entry, now)
-
-    thread_dir.mkdir(parents=True, exist_ok=True)
-    sched_path.write_text(json.dumps(merged, indent=2))
-    return sched_path
+    merged = _write_entries(
+        sched_path,
+        lambda existing: merge_entries(existing, entry, now),
+    )
+    return sched_path if merged is not None else None
 
 
 def prune_thread(
@@ -178,21 +323,21 @@ def prune_thread(
     sched_path = pathlib.Path(thread_dir) / "scheduled.json"
     if not sched_path.exists():
         return []
+    creators = {created_by}
+    if created_by == CREATED_BY:
+        creators.add(MANAGED_CREATED_BY)
+
+    def build(entries: list) -> list:
+        return [
+            entry
+            for entry in entries
+            if not (isinstance(entry, dict) and entry.get("created_by") in creators)
+        ]
+
     try:
-        entries = json.loads(sched_path.read_text())
-    except (OSError, json.JSONDecodeError):
+        return _write_entries(sched_path, build) or []
+    except (OSError, ValueError):
         return []
-    if not isinstance(entries, list):
-        return []
-    remaining = [
-        e for e in entries
-        if not (isinstance(e, dict) and e.get("created_by") == created_by)
-    ]
-    try:
-        sched_path.write_text(json.dumps(remaining, indent=2))
-    except OSError:
-        pass
-    return remaining
 
 
 def main(argv: Optional[list] = None) -> int:

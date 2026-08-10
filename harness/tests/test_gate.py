@@ -507,6 +507,7 @@ def run_task_mode() -> int:
         list_json = json.dumps([{"id": f"t-{i}"} for i in range(list_items)])
         script.write_text(
             "#!/bin/sh\n"
+            'if [ "$1" = "show" ]; then printf \'[{"id":"%s","status":"closed"}]\\n\' "$2"; exit 0; fi\n'
             f'if echo "$*" | grep -q "^ready"; then echo \'{ready_json}\'; exit 0; fi\n'
             f'if echo "$*" | grep -q "^list"; then echo \'{list_json}\'; exit 0; fi\n'
             "exit 0\n"
@@ -662,6 +663,7 @@ def run_task_mode() -> int:
             unrelated = json.dumps([{"id": "unrelated-1"}, {"id": "unrelated-2"}])
             script.write_text(
                 "#!/bin/sh\n"
+                'if [ "$1" = "show" ]; then printf \'[{"id":"%s","status":"closed"}]\\n\' "$2"; exit 0; fi\n'
                 # When scoped to the leaf task, no children exist → empty
                 f'if echo "$*" | grep -q -- "--parent {task_id}"; then echo "[]"; exit 0; fi\n'
                 # Without scoping (regression case), returns unrelated items
@@ -953,6 +955,7 @@ def run_wakeup_blocker_wiring() -> int:
         blocked_file.write_text(json.dumps(blocked_beads), encoding="utf-8")
         script.write_text(
             "#!/bin/sh\n"
+            'if [ "$1" = "show" ]; then printf \'[{"id":"%s","status":"closed"}]\\n\' "$2"; exit 0; fi\n'
             'if echo "$*" | grep -q "^ready"; then echo "[]"; exit 0; fi\n'
             f'if echo "$*" | grep -q "blocked"; then cat "{blocked_file}"; exit 0; fi\n'
             'if echo "$*" | grep -q "^list"; then echo "[]"; exit 0; fi\n'

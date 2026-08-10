@@ -23,6 +23,8 @@ import pathlib
 import sys
 from typing import Optional, Tuple
 
+from execution_validation import is_valid_ledger
+import supervisor_health
 from thread_identity import (  # noqa: E402
     InvalidActorIdentity as InvalidActorIdentity,
     resolve_thread_dir,
@@ -32,8 +34,10 @@ from thread_identity import (  # noqa: E402
 try:
     from verify_integrity import is_suppressed_verification
 except ImportError:  # pragma: no cover — fail-open: never crash the Stop gate
+
     def is_suppressed_verification(_command):
         return None
+
 
 # State root: where contracts / wakeups / incidents live. Standard per-user
 # location, independent of where the harness CODE is installed or invoked from,
@@ -52,25 +56,29 @@ def harness_home() -> pathlib.Path:
     """The state root (env-overridable). Single source of truth for all tools."""
     return pathlib.Path(os.environ.get("HARNESS_ROOT", DEFAULT_HARNESS_ROOT))
 
-EXPLICIT_STOP_SET = frozenset({
-    "stop",
-    "stop here",
-    "end here",
-    "that's enough",
-    "thats enough",
-    "done for now",
-    "we're done",
-    "were done",
-    "okay stop",
-    "ok stop",
-    "halt",
-})
+
+EXPLICIT_STOP_SET = frozenset(
+    {
+        "stop",
+        "stop here",
+        "end here",
+        "that's enough",
+        "thats enough",
+        "done for now",
+        "we're done",
+        "were done",
+        "okay stop",
+        "ok stop",
+        "halt",
+    }
+)
 
 # "Current turn" window. last_run older than this is treated as stale so an
 # old passing run can't be reused indefinitely. 5 minutes is the default —
 # long enough for legitimate verification runs, short enough that a passing
 # run from yesterday doesn't unlock today's Stop.
 CURRENT_TURN_WINDOW_SECONDS = 300
+SUPERVISOR_HEALTH_MAX_AGE_SECONDS = 120
 
 
 def _now() -> _dt.datetime:
@@ -186,6 +194,135 @@ def _user_released(recent_user_message: Optional[str]) -> bool:
     return normalized in EXPLICIT_STOP_SET
 
 
+def _deadline_due(execution: dict, now: _dt.datetime) -> bool:
+    if execution.get("reconcile_due") is not None:
+        return True
+    hard = _parse_iso(execution.get("hard_deadline", ""))
+    if hard is None or hard <= now:
+        return True
+    if execution.get("state") == "queued":
+        start = _parse_iso(execution.get("start_deadline", ""))
+        return start is None or start <= now
+    if execution.get("state") == "running":
+        idle = _parse_iso(execution.get("idle_deadline", ""))
+        return idle is None or idle <= now
+    return execution.get("state") not in {"terminal", "cancelled"}
+
+
+def _matching_managed_wake(
+    execution: dict,
+    parent_session_id: str,
+    scheduled: object,
+    now: _dt.datetime,
+) -> dict | None:
+    if not isinstance(scheduled, list):
+        return None
+    for entry in scheduled:
+        if (
+            not isinstance(entry, dict)
+            or entry.get("created_by") != "execution-supervisor"
+        ):
+            continue
+        wake_at = _parse_iso(entry.get("wake_at", ""))
+        if wake_at is None or wake_at <= now:
+            continue
+        if not all(
+            entry.get(key) == expected
+            for key, expected in (
+                ("thread_id", parent_session_id),
+                ("parent_session_id", parent_session_id),
+                ("watchdog_id", execution["watchdog_id"]),
+                ("execution_id", execution["execution_id"]),
+                ("attempt", execution["attempt"]),
+                ("generation", execution["generation"]),
+            )
+        ):
+            continue
+        wake_generation = entry.get("supervisor_generation")
+        if (
+            not isinstance(wake_generation, int)
+            or isinstance(wake_generation, bool)
+            or wake_generation < 0
+        ):
+            continue
+        if (
+            not isinstance(entry.get("supervisor_installation_id"), str)
+            or not entry["supervisor_installation_id"]
+        ):
+            continue
+        if _parse_iso(entry.get("registered_at", "")) is None:
+            continue
+        return entry
+    return None
+
+
+def execution_stop_decision(
+    root_status: str,
+    ledger: dict | None,
+    health: dict | None,
+    scheduled: list,
+    now: _dt.datetime,
+) -> Tuple[str, str]:
+    """Decide completion or bounded pause for durable delegated executions."""
+    if root_status not in {"open", "in_progress", "closed"}:
+        return ("block", "parent_outcome_unresolved")
+    if ledger is None:
+        if root_status == "closed":
+            return ("allow", "no_managed_executions")
+        return ("block", "parent_outcome_unresolved")
+    if not is_valid_ledger(ledger):
+        return ("block", "delegated_execution_unresolved")
+
+    active = [
+        execution
+        for execution in ledger["executions"]
+        if execution["state"] not in {"terminal", "cancelled"}
+    ]
+    if not active:
+        if root_status == "closed":
+            if any(
+                execution["state"] == "terminal"
+                and execution["result_application"]["state"] != "applied"
+                for execution in ledger["executions"]
+            ):
+                return ("block", "delegated_execution_unresolved")
+            return ("allow", "delegated_outcome_complete")
+        return ("block", "parent_outcome_unresolved")
+
+    if any(_deadline_due(execution, now) for execution in active):
+        return ("block", "delegated_execution_overdue")
+
+    wakes = [
+        _matching_managed_wake(execution, ledger["parent_session_id"], scheduled, now)
+        for execution in active
+    ]
+    if any(wake is None for wake in wakes):
+        if not scheduled and health is None:
+            return ("block", "delegated_execution_unresolved")
+        return ("block", "managed_wake_unresolved")
+
+    if not supervisor_health.is_fresh_successful(
+        health, now, SUPERVISOR_HEALTH_MAX_AGE_SECONDS
+    ):
+        return ("block", "supervisor_health_unresolved")
+    for wake in wakes:
+        assert wake is not None
+        registered_at = _parse_iso(wake["registered_at"])
+        successful_start = _parse_iso(
+            health["last_successful_reconcile_started_at"]
+        )
+        if (
+            wake["supervisor_installation_id"] != health["installation_id"]
+            or wake["supervisor_generation"] < 1
+            or health["completed_generation"] <= wake["supervisor_generation"]
+            or registered_at is None
+            or successful_start is None
+            or successful_start <= registered_at
+        ):
+            return ("block", "supervisor_health_unresolved")
+    return ("allow", "delegated_execution_bounded_pause")
+
+
 def would_block_stop(thread_state: dict) -> Tuple[str, str]:
     """
     Decide whether a Stop event for this thread should be blocked.
@@ -203,10 +340,10 @@ def would_block_stop(thread_state: dict) -> Tuple[str, str]:
 
     if _verification_passed_this_turn(contract):
         return ("allow", "verification_passed")
-    if _wakeup_registered(scheduled):
-        return ("allow", "wakeup_registered")
     if _user_released(recent_user_message):
         return ("allow", "user_released")
+    if _wakeup_registered(scheduled):
+        return ("allow", "wakeup_registered")
     if _suppressed_green(contract):
         # Fresh exit-0, but the verify command was gutted (|| true, bare true,
         # --no-verify, ...). Distinct reason so the block explains the COMMAND is

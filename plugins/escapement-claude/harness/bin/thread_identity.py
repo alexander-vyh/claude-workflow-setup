@@ -78,8 +78,43 @@ def resolve_thread_dir(
     return parent if key is None else parent / "agents" / key
 
 
+def is_actor_state_dir(thread_dir: pathlib.Path) -> bool:
+    """Whether this is one canonical actor directory below a parent session."""
+    state_dir = pathlib.Path(thread_dir)
+    return state_dir.parent.name == "agents"
+
+
+def iter_state_dirs(threads_root: pathlib.Path):
+    """Yield supported state dirs: legacy parents and exactly one actor layer."""
+    root = pathlib.Path(threads_root)
+    if not root.is_dir():
+        return
+    for parent in sorted(path for path in root.iterdir() if path.is_dir()):
+        yield parent
+        agents = parent / "agents"
+        if agents.is_dir():
+            yield from sorted(path for path in agents.iterdir() if path.is_dir())
+
+
+def supervisor_health_path(harness_root: pathlib.Path) -> pathlib.Path:
+    """Return the one authoritative health record for the configured harness."""
+    return pathlib.Path(harness_root) / "supervisor-health.json"
+
+
+def canonical_harness_root(thread_dir: pathlib.Path) -> pathlib.Path | None:
+    """Resolve a harness root only for the two canonical state-dir shapes."""
+    state_dir = pathlib.Path(thread_dir)
+    if is_actor_state_dir(state_dir) and state_dir.parent.parent.parent.name == "threads":
+        return state_dir.parent.parent.parent.parent
+    if state_dir.parent.name == "threads":
+        return state_dir.parent.parent
+    return None
+
+
 def _main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(description="resolve the active harness thread directory")
+    parser = argparse.ArgumentParser(
+        description="resolve the active harness thread directory"
+    )
     parser.add_argument("--session-id", default=None)
     parser.add_argument("--harness-root", required=True)
     args = parser.parse_args(argv)

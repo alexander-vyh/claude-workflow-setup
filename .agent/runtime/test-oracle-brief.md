@@ -945,3 +945,147 @@ than risk blocking an unrelated command.
 Run `python3 -m pytest claude/hooks/tests/test_beads_worktree_guard.py -q`,
 render and check generated surfaces, then commit and push from the
 Beads-created worktree. Confirm the remote branch points to the new commit.
+# Test Oracle Brief — delegated-work liveness and parent completion (2026-08-09)
+
+Scope: `escapement-e3ai`, the parent-open premature-final regression, durable
+native execution attempts, independently firing reconciliation, and optional
+local-judge authentication.
+
+## Business invariant
+
+A managed session does not finish while its claimed/root bead remains unresolved.
+Delegated native work either reaches verified terminal evidence and a verified
+parent outcome, or an installed supervisor performs bounded reconciliation
+without waiting for a user message.
+
+## Independent source of truth
+
+- `bd show <root> --json` supplies canonical parent work state independently of
+  descendant queue code or the execution ledger.
+- Literal, hand-authored event/timestamp fixtures and a reference transition
+  table determine execution-attempt behavior.
+- The two real incident orderings determine the regression outcomes: the
+  22-hour child-tool stall and the design-session closed-children/open-parent
+  premature final response.
+- Installed `launchctl` state, supervisor health written after a completed scan,
+  and observed recovery without a user prompt prove firing.
+- The actual business verification command proves result application; ledger
+  terminal status alone does not.
+
+## Solution constraints
+
+- Beads owns durable work identity, hierarchy, claim, and verified closure.
+- Escapement owns attempt identity, native binding, deadlines, recovery,
+  supervisor health, result application, and completion policy.
+- Python standard library core; atomic trusted state; host parsers outside the
+  state machine; local model optional and advisory.
+- No Stop claim for Codex until an effective installed hook fixture and smoke
+  prove it. SessionStart and external reconciliation remain mandatory.
+- No added responsibility in the already oversized `stop_hook.py`; extract
+  cohesive task/execution checks.
+
+## Invalid solution classes
+
+- Descendant-only `bd ready`/`bd blocked` checks that ignore root status.
+- Auto-closing a bead from child/native terminal state.
+- Mirroring Beads metadata or task status into `executions.json`.
+- Transcript/file mtime, tool start, polling chatter, or model opinion as
+  semantic progress.
+- Health stamped before a complete useful reconciliation.
+- Exactly-once-spawn assumptions, unfenced retries, or stale-generation result
+  application.
+- Future wakeup files accepted without fresh successful supervisor proof.
+- Public Stop wiring that bypasses otherwise-correct root/execution helpers.
+- Global health stamped after only part of a multi-thread scan succeeds.
+- Unrelated or old-generation future wakeups treated as current recovery proof.
+- Adapter events with missing generation silently relabeled as current.
+- Result-application claims treated as proof that the business result applied.
+- Missing/malformed/untrusted state treated as complete.
+
+## Fragile implementation to reject
+
+Check only that all child beads are closed and a future wakeup exists. This
+would pass the child-research happy path while the parent remains `in_progress`,
+and would still fail when the parent has already ended or the waker is inert.
+The parent-open regression plus stale/missing supervisor controls must fail it.
+
+## Negative control
+
+- Root `in_progress`, `ready=[]`, `blocked=[]` => block
+  `parent_outcome_unresolved`.
+- Root missing/malformed/unreadable => unresolved, never queue-drained.
+- Complete public Stop fixtures reject an open root with empty descendants both
+  without a wake and with a future wake plus missing/stale health.
+- Queued attempt past start deadline; running attempt past idle deadline; noisy
+  attempt past hard deadline => sticky reconciliation due, not terminal.
+- Successful process start plus failed thread scan => no new successful-health
+  timestamp.
+- A due attempt plus failure after planning, during its atomic claim write, or
+  during spawn => neither successful-health time nor completed generation moves.
+- In a two-thread root, success for A followed by load/reconcile/persist failure
+  for B (and the reverse scan order), or scheduled inspection failure, advances
+  diagnostic `reconcile_started_at` but preserves all authoritative prior health
+  fields.
+- Two concurrent public reconciliations contend for one due attempt => one live
+  current-generation claim and at most one spawn until claim expiry.
+- With `reconcile_due=None`, expired accepted activity/idle deadline, and fresh
+  filesystem mtime plus ledger `updated_at` from polling/tool-start, public
+  reconciliation sets idle-due and claims recovery. A paired completed-activity
+  event is the positive renewal control. Static checks reject mtime and ledger
+  `updated_at` as activity oracles.
+- Every terminal-ingress public path receives open child/root beads and a
+  recording Beads runner; none may issue closure mutation. Architecture checks
+  forbid `bd close`, closed-status updates, and closure-helper imports from the
+  ledger, hook, reconciliation, and supervisor modules. Business verification
+  owns task closure and Stop remains blocked while canonical beads are open.
+- Recovery claim persisted then process crash => no immediate duplicate; claim
+  expiry advances generation and permits recovery.
+- Old-generation completion => incident evidence only, never current result
+  application or Beads close.
+- Late generation-one completion delivered through public adapters after a
+  generation-two takeover cannot mutate generation two; missing generation is
+  unresolved, never defaulted.
+- A public application orchestrator must call an injected business verifier;
+  terminal state/digest cannot directly prove application. Missing/negative/
+  exceptional verification stays unapplied. If application succeeds and the
+  process dies before persistence, takeover rechecks the real outcome or reuses
+  a stable idempotency key so the external effect occurs once before fenced
+  completion. Equal digests on distinct executions remain distinct.
+- A future wake must exactly match parent session, watchdog, execution, attempt,
+  and generation; unrelated/mismatched wakeups do not authorize pause.
+- The public wake producer persists those literal identity fields in schema-valid
+  JSON consumed by public Stop; omitting any field fails validation and blocks.
+- HTTP 401/local-model absence => deterministic behavior unchanged.
+
+## Positive control
+
+- Closed root, empty descendants, all managed attempts terminal and independently
+  verified => normal completion.
+- Running attempt with accepted completed activity, unexpired hard deadline,
+  valid future wake, and fresh post-reconcile health => bounded pause.
+- Recovery after claim expiry emits exactly one current-generation spawn in the
+  controlled fixture.
+- Both a complete no-op reconciliation and a complete action reconciliation
+  advance useful-work health exactly once.
+- Authenticated local judge annotation is observable but does not change the
+  deterministic decision.
+
+## Missing/unresolved handling
+
+Fail closed on completion and pause authorization. Wake and reconcile rather
+than blindly replay. A specific auditable human release remains the only manual
+override. Model failure is fail-open only for the advisory annotation.
+
+## Final outcome verification
+
+1. Focused parent-state, execution-ledger, supervisor, Stop, host-adapter,
+   installer, security, and local-auth suites pass after verified RED failures.
+2. An independent mutation challenger proves the named bad implementations are
+   killed.
+3. Full `python -m pytest claude/hooks/tests harness/tests tests -q -rs` and
+   generated-surface checks pass.
+4. Merged source is installed for Claude and Codex; launchd runs
+   `wakeup_waker.py --fire` and exposes fresh post-reconcile health.
+5. A disposable short-deadline delegation is automatically reconciled without
+   a user message, and the open-parent/closed-children fixture continues rather
+   than returning a final answer.

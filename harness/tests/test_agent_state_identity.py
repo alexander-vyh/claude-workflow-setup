@@ -57,7 +57,9 @@ AGENT_B = "oracle-alpha"
 
 
 def _load_rendered_waker():
-    path = REPO / "plugins" / "escapement-claude" / "harness" / "bin" / "wakeup_waker.py"
+    path = (
+        REPO / "plugins" / "escapement-claude" / "harness" / "bin" / "wakeup_waker.py"
+    )
     spec = importlib.util.spec_from_file_location("rendered_wakeup_waker", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -84,11 +86,22 @@ def _env(root: pathlib.Path, agent: str | None, *, seed: str = "17") -> dict[str
     return env
 
 
-def _run(script: str, args: list[str], root: pathlib.Path, agent: str | None,
-         *, payload: dict | None = None, cwd: pathlib.Path | None = None,
-         seed: str = "17") -> subprocess.CompletedProcess[str]:
+def _run(
+    script: str,
+    args: list[str],
+    root: pathlib.Path,
+    agent: str | None,
+    *,
+    payload: dict | None = None,
+    cwd: pathlib.Path | None = None,
+    seed: str = "17",
+) -> subprocess.CompletedProcess[str]:
     executable = BIN / script
-    command = [sys.executable, str(executable), *args] if executable.suffix == ".py" else [str(executable), *args]
+    command = (
+        [sys.executable, str(executable), *args]
+        if executable.suffix == ".py"
+        else [str(executable), *args]
+    )
     return subprocess.run(
         command,
         input=json.dumps(payload) if payload is not None else None,
@@ -100,8 +113,12 @@ def _run(script: str, args: list[str], root: pathlib.Path, agent: str | None,
     )
 
 
-def _init(root: pathlib.Path, agent: str | None, goal: str,
-          verify: str = "test -f definitely-not-present") -> pathlib.Path:
+def _init(
+    root: pathlib.Path,
+    agent: str | None,
+    goal: str,
+    verify: str = "test -f definitely-not-present",
+) -> pathlib.Path:
     before = set(root.rglob("contract.json")) if root.exists() else set()
     proc = _run("init_contract.py", ["--goal", goal, "--verify", verify], root, agent)
     assert proc.returncode == 0, proc.stderr
@@ -136,8 +153,10 @@ def test_parent_and_same_session_agents_keep_independent_contracts(tmp_path) -> 
     assert parent == tmp_path / "threads" / SESSION / "contract.json"
     assert len({parent.parent, a.parent, b.parent}) == 3
     assert a.parent.parent == b.parent.parent
-    assert { _contract(p)["goal"] for p in (parent, a, b) } == {
-        "parent", "agent-a", "agent-b",
+    assert {_contract(p)["goal"] for p in (parent, a, b)} == {
+        "parent",
+        "agent-a",
+        "agent-b",
     }
 
 
@@ -152,8 +171,11 @@ def test_actor_resolution_is_stable_across_cwd_process_and_hash_seed(tmp_path) -
     for cwd, seed in ((REPO, "1"), (tmp_path, "911")):
         proc = subprocess.run(
             [sys.executable, "-c", code, str(BIN), SESSION, str(tmp_path)],
-            cwd=str(cwd), env=_env(tmp_path, AGENT_A, seed=seed),
-            text=True, capture_output=True, check=True,
+            cwd=str(cwd),
+            env=_env(tmp_path, AGENT_A, seed=seed),
+            text=True,
+            capture_output=True,
+            check=True,
         )
         outputs.append(proc.stdout.strip())
     assert outputs[0] == outputs[1]
@@ -162,7 +184,9 @@ def test_actor_resolution_is_stable_across_cwd_process_and_hash_seed(tmp_path) -
     assert resolved != tmp_path / "threads" / SESSION
 
 
-def test_explicit_thread_override_wins_even_with_invalid_actor(tmp_path, monkeypatch) -> None:
+def test_explicit_thread_override_wins_even_with_invalid_actor(
+    tmp_path, monkeypatch
+) -> None:
     exact = tmp_path / "explicit" / "thread"
     monkeypatch.setenv("HARNESS_THREAD_DIR", str(exact))
     monkeypatch.setenv("CLAUDE_AGENT_ID", "  ")
@@ -171,19 +195,31 @@ def test_explicit_thread_override_wins_even_with_invalid_actor(tmp_path, monkeyp
     env = _env(tmp_path, "  ")
     env["HARNESS_THREAD_DIR"] = str(exact)
     init = subprocess.run(
-        [sys.executable, str(BIN / "init_contract.py"), "--goal", "exact",
-         "--verify", "test -f absent"],
-        env=env, text=True, capture_output=True,
+        [
+            sys.executable,
+            str(BIN / "init_contract.py"),
+            "--goal",
+            "exact",
+            "--verify",
+            "test -f absent",
+        ],
+        env=env,
+        text=True,
+        capture_output=True,
     )
     start = subprocess.run(
         [sys.executable, str(BIN / "session_watermark.py")],
         input=json.dumps({"session_id": SESSION, "cwd": str(REPO)}),
-        env=env, text=True, capture_output=True,
+        env=env,
+        text=True,
+        capture_output=True,
     )
     stop = subprocess.run(
         [sys.executable, str(BIN / "stop_hook.py")],
         input=json.dumps({"session_id": SESSION, "transcript_path": ""}),
-        env=env, text=True, capture_output=True,
+        env=env,
+        text=True,
+        capture_output=True,
     )
 
     assert init.returncode == 0 and start.returncode == 0
@@ -194,9 +230,13 @@ def test_explicit_thread_override_wins_even_with_invalid_actor(tmp_path, monkeyp
     assert "invalid_actor_identity" not in decision["reason"]
 
 
-@pytest.mark.parametrize("bad_actor", ["", "   ", "../parent", "agent/name", "agent\nname"])
+@pytest.mark.parametrize(
+    "bad_actor", ["", "   ", "../parent", "agent/name", "agent\nname"]
+)
 def test_present_invalid_actor_never_falls_back_to_parent(
-    tmp_path, monkeypatch, bad_actor,
+    tmp_path,
+    monkeypatch,
+    bad_actor,
 ) -> None:
     """Break caught: sanitizing or ignoring an invalid actor reads parent state."""
     parent = tmp_path / "threads" / SESSION
@@ -204,30 +244,46 @@ def test_present_invalid_actor_never_falls_back_to_parent(
     (parent / "contract.json").write_text(json.dumps(_passing_contract("parent")))
 
     init = _run(
-        "init_contract.py", ["--goal", "bad actor", "--verify", "test -d ."],
-        tmp_path, bad_actor,
+        "init_contract.py",
+        ["--goal", "bad actor", "--verify", "test -d ."],
+        tmp_path,
+        bad_actor,
     )
     verify = _run("verify", [], tmp_path, bad_actor)
     task = _run(
-        "task_mode_entry.py", [], tmp_path, bad_actor,
+        "task_mode_entry.py",
+        [],
+        tmp_path,
+        bad_actor,
         payload={
-            "session_id": SESSION, "tool_name": "Bash",
+            "session_id": SESSION,
+            "tool_name": "Bash",
             "tool_input": {"command": "bd update escapement-egc --claim"},
         },
     )
     watermark = _run(
-        "session_watermark.py", [], tmp_path, bad_actor,
+        "session_watermark.py",
+        [],
+        tmp_path,
+        bad_actor,
         payload={"session_id": SESSION, "cwd": str(REPO)},
     )
     schedule = _run(
-        "schedule_wakeup_bridge.py", [], tmp_path, bad_actor,
+        "schedule_wakeup_bridge.py",
+        [],
+        tmp_path,
+        bad_actor,
         payload={
-            "session_id": SESSION, "tool_name": "ScheduleWakeup",
+            "session_id": SESSION,
+            "tool_name": "ScheduleWakeup",
             "tool_input": {"delaySeconds": 600},
         },
     )
     stop = _run(
-        "stop_hook.py", [], tmp_path, bad_actor,
+        "stop_hook.py",
+        [],
+        tmp_path,
+        bad_actor,
         payload={"session_id": SESSION, "transcript_path": ""},
     )
 
@@ -236,14 +292,18 @@ def test_present_invalid_actor_never_falls_back_to_parent(
     monkeypatch.setenv("CLAUDE_AGENT_ID", bad_actor)
     monkeypatch.delenv("HARNESS_THREAD_DIR", raising=False)
     bead = {
-        "id": "escapement-egc", "title": "bad actor",
+        "id": "escapement-egc",
+        "title": "bad actor",
         "acceptance_criteria": "```verify\ntest -d .\n```",
     }
     derived = derive_contract.main(
-        ["--bead", "escapement-egc"], _fetch=lambda _id: bead,
+        ["--bead", "escapement-egc"],
+        _fetch=lambda _id: bead,
     )
 
-    assert all(proc.returncode != 0 for proc in (init, verify, task, watermark, schedule))
+    assert all(
+        proc.returncode != 0 for proc in (init, verify, task, watermark, schedule)
+    )
     assert derived != 0
     assert _contract(parent / "contract.json")["goal"] == "parent"
     assert not list(parent.glob("agents/*/contract.json"))
@@ -274,7 +334,10 @@ def test_stop_uses_actor_failure_not_green_parent(tmp_path) -> None:
     actor_contract = _init(tmp_path, AGENT_A, "actor red")
 
     proc = _run(
-        "stop_hook.py", [], tmp_path, AGENT_A,
+        "stop_hook.py",
+        [],
+        tmp_path,
+        AGENT_A,
         payload={"session_id": SESSION, "transcript_path": ""},
     )
 
@@ -290,7 +353,9 @@ def test_stop_allows_green_actor_despite_red_parent(tmp_path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"], cwd=repo, check=True
+    )
     subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
     (repo / "tracked.txt").write_text("clean")
     subprocess.run(["git", "add", "tracked.txt"], cwd=repo, check=True)
@@ -302,8 +367,12 @@ def test_stop_allows_green_actor_despite_red_parent(tmp_path) -> None:
     actor.write_text(json.dumps(_passing_contract("actor")))
 
     proc = _run(
-        "stop_hook.py", [], root, AGENT_A,
-        payload={"session_id": SESSION, "transcript_path": ""}, cwd=repo,
+        "stop_hook.py",
+        [],
+        root,
+        AGENT_A,
+        payload={"session_id": SESSION, "transcript_path": ""},
+        cwd=repo,
     )
 
     assert _contract(parent)["last_run"] is None
@@ -320,15 +389,25 @@ def test_actor_writers_share_one_state_directory(tmp_path) -> None:
         "tool_name": "Bash",
         "tool_input": {"command": "bd update escapement-egc --claim"},
     }
-    assert _run("task_mode_entry.py", [], tmp_path, AGENT_A, payload=claim).returncode == 0
+    assert (
+        _run("task_mode_entry.py", [], tmp_path, AGENT_A, payload=claim).returncode == 0
+    )
     start = {"session_id": SESSION, "cwd": str(REPO)}
-    assert _run("session_watermark.py", [], tmp_path, AGENT_A, payload=start).returncode == 0
+    assert (
+        _run("session_watermark.py", [], tmp_path, AGENT_A, payload=start).returncode
+        == 0
+    )
     wake = {
         "session_id": SESSION,
         "tool_name": "ScheduleWakeup",
         "tool_input": {"delaySeconds": 600, "prompt": "resume actor"},
     }
-    assert _run("schedule_wakeup_bridge.py", [], tmp_path, AGENT_A, payload=wake).returncode == 0
+    assert (
+        _run(
+            "schedule_wakeup_bridge.py", [], tmp_path, AGENT_A, payload=wake
+        ).returncode
+        == 0
+    )
 
     assert (actor_dir / "session_mode.json").is_file()
     assert (actor_dir / "scope_watermark.json").is_file()
@@ -347,7 +426,9 @@ def test_derive_contract_uses_actor_directory(tmp_path, monkeypatch) -> None:
         "title": "isolate actor",
         "acceptance_criteria": "```verify\ntest -d .\n```",
     }
-    assert derive_contract.main(["--bead", "escapement-egc"], _fetch=lambda _id: bead) == 0
+    assert (
+        derive_contract.main(["--bead", "escapement-egc"], _fetch=lambda _id: bead) == 0
+    )
     contracts = list((tmp_path / "threads" / SESSION).glob("agents/*/contract.json"))
     assert len(contracts) == 1
     assert _contract(contracts[0])["source"] == "bead-derived"
@@ -357,37 +438,57 @@ def test_nested_actor_checkouts_participate_in_collision_detection(tmp_path) -> 
     root = tmp_path / "harness"
     actor_dir = root / "threads" / SESSION / "agents" / "actor-key"
     actor_dir.mkdir(parents=True)
-    (actor_dir / "checkout.json").write_text(json.dumps({
-        "session_id": SESSION, "worktree_root": "/repo", "git_common_dir": "/repo/.git",
-        "is_linked_worktree": False,
-        "heartbeat": dt.datetime.now(dt.timezone.utc).isoformat(),
-    }))
+    (actor_dir / "checkout.json").write_text(
+        json.dumps(
+            {
+                "session_id": SESSION,
+                "worktree_root": "/repo",
+                "git_common_dir": "/repo/.git",
+                "is_linked_worktree": False,
+                "heartbeat": dt.datetime.now(dt.timezone.utc).isoformat(),
+            }
+        )
+    )
     records = session_isolation.read_checkouts(root)
     assert [r["worktree_root"] for r in records] == ["/repo"]
 
 
 @pytest.mark.parametrize("waker", WAKER_SURFACES)
 def test_waker_fires_only_due_actor_schedule_and_ignores_arbitrary_depth(
-    tmp_path, monkeypatch, waker,
+    tmp_path,
+    monkeypatch,
+    waker,
 ) -> None:
     root = tmp_path / "threads"
     parent = root / "parent" / "scheduled.json"
-    actor_a = root / SESSION / "agents" / "actor-a" / "scheduled.json"
-    actor_b = root / SESSION / "agents" / "actor-b" / "scheduled.json"
+    actor_a = root / SESSION / "agents" / "state-key-a" / "scheduled.json"
+    actor_b = root / SESSION / "agents" / "state-key-b" / "scheduled.json"
     unrelated = root / "x" / "arbitrary" / "depth" / "scheduled.json"
     for path in (parent, actor_a, actor_b, unrelated):
         path.parent.mkdir(parents=True, exist_ok=True)
     parent_entry = {
-        "wake_at": "2999-01-01T00:00:00+00:00", "kind": "resume",
-        "prompt": "parent", "thread_id": "parent", "created_by": "x", "crash_count": 0,
+        "wake_at": "2999-01-01T00:00:00+00:00",
+        "kind": "resume",
+        "prompt": "parent",
+        "thread_id": "parent",
+        "created_by": "x",
+        "crash_count": 0,
     }
     actor_a_entry = {
-        "wake_at": "2999-01-01T00:00:00+00:00", "kind": "resume",
-        "prompt": "actor-a", "thread_id": SESSION, "created_by": "x", "crash_count": 0,
+        "wake_at": "2999-01-01T00:00:00+00:00",
+        "kind": "resume",
+        "prompt": "future-actor-prompt",
+        "thread_id": SESSION,
+        "created_by": "x",
+        "crash_count": 0,
     }
     actor_b_entry = {
-        "wake_at": "2000-01-01T00:00:00+00:00", "kind": "resume",
-        "prompt": "actor-b", "thread_id": SESSION, "created_by": "x", "crash_count": 0,
+        "wake_at": "2000-01-01T00:00:00+00:00",
+        "kind": "resume",
+        "prompt": "due-actor-prompt-unique",
+        "thread_id": SESSION,
+        "created_by": "x",
+        "crash_count": 0,
     }
     # Deliberately preserve distinct serializations. A semantic JSON equality
     # assertion misses sibling rewrites that perturb bytes/watchers/racing writers.
@@ -395,11 +496,28 @@ def test_waker_fires_only_due_actor_schedule_and_ignores_arbitrary_depth(
     actor_a.write_text(json.dumps([actor_a_entry], separators=(",", ":")) + "\n")
     actor_b.write_text(json.dumps([actor_b_entry]))
     unrelated.write_text(json.dumps([actor_b_entry]))
+    repo = tmp_path / "actor-b-repo"
+    repo.mkdir()
+    (actor_b.parent / "session_mode.json").write_text(
+        json.dumps(
+            {
+                "mode": "task",
+                "repo_cwd": str(repo),
+                "task_id": "actor-b-task",
+                "parent_id": "actor-b-root",
+                "session_id": SESSION,
+            }
+        )
+    )
     parent_before = parent.read_bytes()
     actor_a_before = actor_a.read_bytes()
-    spawned: list[list[str]] = []
+    spawned: list[tuple[list[str], pathlib.Path]] = []
     monkeypatch.setattr(waker.ts, "is_trusted_file", lambda _path: True)
-    monkeypatch.setattr(waker.subprocess, "Popen", lambda argv: spawned.append(argv))
+    monkeypatch.setattr(
+        waker.es,
+        "launch_in_repo",
+        lambda argv, cwd: spawned.append((argv, cwd)),
+    )
 
     assert waker.main(["--fire", "--threads-root", str(root)]) == 0
 
@@ -407,4 +525,62 @@ def test_waker_fires_only_due_actor_schedule_and_ignores_arbitrary_depth(
     assert actor_a.read_bytes() == actor_a_before
     assert json.loads(actor_b.read_text()) == []
     assert json.loads(unrelated.read_text()) == [actor_b_entry]
-    assert len(spawned) == 1 and "actor-b" in spawned[0]
+    assert len(spawned) == 1
+    assert spawned[0][0] == [
+        "claude",
+        "--resume",
+        SESSION,
+        "-p",
+        "due-actor-prompt-unique",
+    ]
+    assert spawned[0][1] == repo.resolve()
+
+
+@pytest.mark.parametrize("waker", WAKER_SURFACES)
+@pytest.mark.parametrize("context_case", ["missing", "foreign-session"])
+def test_actor_due_schedule_without_exact_session_context_fails_closed(
+    tmp_path,
+    monkeypatch,
+    waker,
+    context_case,
+) -> None:
+    """Actor discovery must validate the parent session, not the actor directory key."""
+    root = tmp_path / "threads"
+    schedule = root / SESSION / "agents" / "actor-key" / "scheduled.json"
+    schedule.parent.mkdir(parents=True)
+    entry = {
+        "wake_at": "2000-01-01T00:00:00+00:00",
+        "kind": "resume",
+        "prompt": "must not resume",
+        "thread_id": SESSION,
+        "created_by": "x",
+        "crash_count": 0,
+    }
+    schedule.write_text(json.dumps([entry], separators=(",", ":")) + "\n")
+    before = schedule.read_bytes()
+    if context_case == "foreign-session":
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (schedule.parent / "session_mode.json").write_text(
+            json.dumps(
+                {
+                    "mode": "task",
+                    "repo_cwd": str(repo),
+                    "task_id": "actor-child",
+                    "parent_id": "actor-root",
+                    "session_id": "foreign-parent-session",
+                }
+            )
+        )
+
+    launched: list[tuple[list[str], pathlib.Path]] = []
+    monkeypatch.setattr(waker.ts, "is_trusted_file", lambda _path: True)
+    monkeypatch.setattr(
+        waker.es,
+        "launch_in_repo",
+        lambda argv, cwd: launched.append((argv, cwd)),
+    )
+
+    assert waker.main(["--fire", "--threads-root", str(root)]) == 1
+    assert launched == []
+    assert schedule.read_bytes() == before

@@ -32,6 +32,8 @@ import shlex
 import subprocess
 from typing import Callable, Optional
 
+from thread_identity import iter_state_dirs
+
 # A session whose heartbeat is older than this is presumed idle/dead and does
 # not count as a live collision (a stale record must not phantom-collide forever).
 LIVENESS_WINDOW_SECONDS = 1800  # 30 min
@@ -130,8 +132,7 @@ def read_checkouts(harness_root: pathlib.Path) -> list[dict]:
     threads = pathlib.Path(harness_root) / "threads"
     if not threads.is_dir():
         return records
-    paths = list(threads.glob("*/checkout.json"))
-    paths.extend(threads.glob("*/agents/*/checkout.json"))
+    paths = [state_dir / "checkout.json" for state_dir in iter_state_dirs(threads)]
     for path in sorted(paths):
         if not path.is_file():
             continue

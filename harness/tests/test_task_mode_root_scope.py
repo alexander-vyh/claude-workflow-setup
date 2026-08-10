@@ -28,7 +28,7 @@ sys.path.insert(0, str(REPO / "harness" / "bin"))
 import task_mode_entry  # noqa: E402
 
 
-_FAKE_BD = r'''#!/usr/bin/env python3
+_FAKE_BD = r"""#!/usr/bin/env python3
 import json
 import os
 import pathlib
@@ -62,6 +62,8 @@ if command == "show":
         issue["id"] = spec.get("id", issue_id)
     if not spec.get("omit_parent"):
         issue[spec.get("parent_key", "parent")] = spec.get("parent")
+    if "status" in spec:
+        issue["status"] = spec["status"]
     sys.stdout.write(json.dumps([issue]))
     raise SystemExit(0)
 
@@ -75,7 +77,7 @@ if command == "blocked":
     sys.stdout.write(json.dumps(fixture.get("blocked_by_parent", {}).get(scope, [])))
     raise SystemExit(0)
 sys.stdout.write("[]")
-'''
+"""
 
 
 def _write_fake_bd(tmp_path: pathlib.Path, fixture: dict[str, Any]):
@@ -136,7 +138,12 @@ def _run_entry(
     return proc, state, repo, thread_dir, env, log_path
 
 
-def _run_stop(repo: pathlib.Path, thread_dir: pathlib.Path, env: dict[str, str], session_id="session"):
+def _run_stop(
+    repo: pathlib.Path,
+    thread_dir: pathlib.Path,
+    env: dict[str, str],
+    session_id="session",
+):
     proc = subprocess.run(
         [sys.executable, str(STOP)],
         input=json.dumps({"session_id": session_id, "transcript_path": ""}),
@@ -160,7 +167,9 @@ def _deep_graph() -> dict[str, Any]:
     }
 
 
-def test_deep_ready_sibling_under_other_branch_blocks_stop(tmp_path: pathlib.Path) -> None:
+def test_deep_ready_sibling_under_other_branch_blocks_stop(
+    tmp_path: pathlib.Path,
+) -> None:
     # Real molecule steps use dotted hierarchical IDs (for example 858.3).
     fixture = {
         "shows": {
@@ -186,11 +195,14 @@ def test_deep_ready_sibling_under_other_branch_blocks_stop(tmp_path: pathlib.Pat
     assert stop.returncode == 0
     assert output is not None and output["decision"] == "block"
     calls = [json.loads(line) for line in log_path.read_text().splitlines()]
-    assert ["ready", "--json", "--parent", "mol"] in calls
+    assert ["ready", "--parent", "mol", "--json"] in calls
 
 
-def test_deep_molecule_with_all_work_complete_allows_stop(tmp_path: pathlib.Path) -> None:
+def test_deep_molecule_with_all_work_complete_allows_stop(
+    tmp_path: pathlib.Path,
+) -> None:
     fixture = _deep_graph()
+    fixture["shows"]["root"]["status"] = "closed"
     fixture["ready_by_parent"] = {"root": []}
     fixture["blocked_by_parent"] = {"root": []}
 
@@ -201,6 +213,40 @@ def test_deep_molecule_with_all_work_complete_allows_stop(tmp_path: pathlib.Path
     assert state["parent_id"] == "root"
     assert stop.returncode == 0
     assert output is None
+
+
+@pytest.mark.parametrize(
+    "root_spec",
+    [
+        {"omit_parent": True, "status": "open"},
+        {"omit_parent": True},
+    ],
+    ids=["open-root", "missing-root-status"],
+)
+def test_empty_descendant_queues_do_not_complete_an_unclosed_root(
+    tmp_path: pathlib.Path, root_spec: dict[str, Any]
+) -> None:
+    """An empty queue is not an independent proof that the root outcome closed."""
+    fixture = {
+        "shows": {
+            "leaf": {"parent": "root"},
+            "root": root_spec,
+        },
+        "ready_by_parent": {"root": []},
+        "blocked_by_parent": {"root": []},
+    }
+
+    entry, state, repo, thread_dir, env, log_path = _run_entry(tmp_path, fixture)
+    stop, output = _run_stop(repo, thread_dir, env)
+
+    assert entry.returncode == 0
+    assert state["parent_id"] == "root"
+    assert stop.returncode == 0
+    assert output is not None and output["decision"] == "block"
+    assert "parent_outcome_unresolved" in output["reason"]
+    calls = [json.loads(line) for line in log_path.read_text().splitlines()]
+    assert ["ready", "--parent", "root", "--json"] in calls
+    assert ["show", "root", "--json"] in calls
 
 
 def test_standalone_claim_retains_task_scope(tmp_path: pathlib.Path) -> None:
@@ -256,9 +302,18 @@ def test_absent_or_null_parent_is_a_valid_root_terminal(
         ({"leaf": {"kind": "exit_error"}}, "leaf", "lookup failed"),
         ({"leaf": {"kind": "raw_json", "value": []}}, "leaf", "issue record"),
         ({"leaf": {"id": "different", "parent": None}}, "leaf", "issue id"),
-        ({"leaf": {"kind": "raw_json", "value": [
-            {"id": "leaf", "parent": "root-a", "parent_id": "root-b"}
-        ]}}, "leaf", "parent"),
+        (
+            {
+                "leaf": {
+                    "kind": "raw_json",
+                    "value": [
+                        {"id": "leaf", "parent": "root-a", "parent_id": "root-b"}
+                    ],
+                }
+            },
+            "leaf",
+            "parent",
+        ),
         (
             {"leaf": {"parent": "parent"}, "parent": {"kind": "invalid_json"}},
             "leaf",
@@ -456,7 +511,7 @@ def test_same_task_id_is_rewalked_for_each_public_claim_in_one_process(
     fixture["shows"] = {
         "leaf": {"parent": "branch-b"},
         "branch-b": {"parent": "root-b"},
-        "root-b": {"parent": None},
+        "root-b": {"parent": None, "status": "closed"},
     }
     fixture_path.write_text(json.dumps(fixture))
     claim("session-b")

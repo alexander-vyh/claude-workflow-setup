@@ -159,6 +159,63 @@
       }
     },
     {
+      "id": "delegation_hook",
+      "description": "Require an explicitly prepared Beads execution before Claude Agent dispatch.",
+      "source": "harness/bin/delegation_hook.py",
+      "hosts": {
+        "codex": {
+          "status": "unsupported",
+          "unsupported_reason": "Codex does not expose the verified Claude Agent PreToolUse payload and matcher contract used by this adapter."
+        },
+        "claude": {
+          "status": "ready",
+          "events": [
+            {
+              "event": "PreToolUse",
+              "matcher": "Agent",
+              "command": "python3 -B ~/.claude/harness/bin/delegation_hook.py"
+            }
+          ],
+          "fixtures": [
+            "harness/tests/test_delegation_hook.py::test_complete_claude_agent_fixture_registers_dispatch_before_allow"
+          ]
+        }
+      }
+    },
+    {
+      "id": "execution_reconcile",
+      "description": "Surface unresolved delegated Beads work and due execution attempts at SessionStart.",
+      "source": "harness/bin/execution_reconcile.py",
+      "hosts": {
+        "codex": {
+          "status": "ready",
+          "events": [
+            {
+              "event": "SessionStart",
+              "matcher": "",
+              "command": "python3 -B harness/bin/execution_reconcile.py"
+            }
+          ],
+          "fixtures": [
+            "harness/tests/test_execution_reconcile.py::test_codex_sessionstart_uses_the_same_reconciliation_without_stop_claims"
+          ]
+        },
+        "claude": {
+          "status": "ready",
+          "events": [
+            {
+              "event": "SessionStart",
+              "matcher": "",
+              "command": "python3 -B ~/.claude/harness/bin/execution_reconcile.py"
+            }
+          ],
+          "fixtures": [
+            "harness/tests/test_execution_reconcile.py::test_unresolved_parent_emits_actionable_continuation_context"
+          ]
+        }
+      }
+    },
+    {
       "id": "beads_worktree_guard",
       "description": "Route literal Git and Beads worktree creation through Escapement-owned worktree policy.",
       "source": "claude/hooks/beads_worktree_guard.py",
