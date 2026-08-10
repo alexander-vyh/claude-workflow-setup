@@ -30,6 +30,10 @@ SHARED_HOOK_SUPPORT = {
     # Omitting either silently activates a permissive defensive fallback.
     "claude/hooks/magic_number_echo.py",
     "claude/hooks/oracle_reason_validation.py",
+    # test_oracle_brief_gate keeps path/content and landing-command policy in
+    # bounded siblings shared byte-for-byte by both host packages.
+    "claude/hooks/test_oracle_brief_policy.py",
+    "claude/hooks/test_oracle_brief_landing.py",
 }
 SHARED_RUNTIME_SUPPORT = {
     "bin/escapement-worktree",
