@@ -388,15 +388,7 @@ def test_fire_skips_locked_schedule_to_avoid_duplicate_wakers(
 
     assert json.loads(schedule.read_text()) == [entry]
     assert "skipped locked schedule" in capsys.readouterr().err
-    observed = json.loads(health_path.read_text())
-    assert observed["reconcile_started_at"] != seeded_health["reconcile_started_at"]
-    for field in (
-        "last_successful_reconcile_at",
-        "completed_generation",
-        "installation_id",
-        "counts",
-    ):
-        assert observed[field] == seeded_health[field]
+    assert json.loads(health_path.read_text()) == seeded_health
 
 
 # --- public --fire supervisor boundary -----------------------------------
@@ -491,15 +483,7 @@ def test_fire_partial_schedule_failure_withholds_authoritative_health(tmp_path):
     assert json.loads(bad_schedule.read_text()) == {
         "malformed": "schedule-must-be-an-array"
     }
-    observed = json.loads(health_path.read_text())
-    assert observed["reconcile_started_at"] != seeded["reconcile_started_at"]
-    for field in (
-        "last_successful_reconcile_at",
-        "completed_generation",
-        "installation_id",
-        "counts",
-    ):
-        assert observed[field] == seeded[field]
+    assert json.loads(health_path.read_text()) == seeded
 
 
 def test_fire_fsyncs_schedule_source_and_directory_before_certifying_health(

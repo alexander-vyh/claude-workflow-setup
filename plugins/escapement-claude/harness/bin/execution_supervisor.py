@@ -6,19 +6,16 @@ from __future__ import annotations
 import argparse
 import copy
 import datetime as dt
-import fcntl
 import json
 import os
 import pathlib
-import stat
 import subprocess
-import tempfile
-import uuid
 from collections.abc import Callable
 
 from execution_ledger import apply_event, claim_recovery, reconcile_deadlines
 from execution_store import load_trusted, mutate_atomic
 from trusted_source import is_trusted_file
+import supervisor_health
 
 UTC = dt.timezone.utc
 CLAIM_TTL_SECONDS = 60
@@ -65,135 +62,6 @@ def session_repo_cwd(thread_dir: pathlib.Path, session_id: str) -> pathlib.Path 
     if not repo_cwd.is_absolute() or not repo_cwd.is_dir():
         return None
     return repo_cwd.resolve()
-
-
-def _valid_health(value: object) -> bool:
-    if not isinstance(value, dict):
-        return False
-    required = {
-        "reconcile_started_at",
-        "last_successful_reconcile_at",
-        "completed_generation",
-        "installation_id",
-        "counts",
-    }
-    if set(value) != required:
-        return False
-    if not isinstance(value["reconcile_started_at"], (str, type(None))):
-        return False
-    if not isinstance(value["last_successful_reconcile_at"], (str, type(None))):
-        return False
-    generation = value["completed_generation"]
-    if (
-        not isinstance(generation, int)
-        or isinstance(generation, bool)
-        or generation < 0
-    ):
-        return False
-    return (
-        isinstance(value["installation_id"], str)
-        and bool(value["installation_id"])
-        and isinstance(value["counts"], dict)
-    )
-
-
-def _new_health() -> dict:
-    installation_id = os.environ.get("ESCAPEMENT_INSTALLATION_ID") or uuid.uuid4().hex
-    return {
-        "reconcile_started_at": None,
-        "last_successful_reconcile_at": None,
-        "completed_generation": 0,
-        "installation_id": installation_id,
-        "counts": {"successful_passes": 0, "threads": 0, "recoveries": 0},
-    }
-
-
-def _mutate_health(path: pathlib.Path, mutation: Callable[[dict], dict]) -> dict:
-    """Durably mutate supervisor health under its own stable lock."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    lock_path = path.with_name(f".{path.name}.lock")
-    lock_fd = os.open(
-        lock_path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600
-    )
-    try:
-        lock_stat = os.fstat(lock_fd)
-        if not stat.S_ISREG(lock_stat.st_mode):
-            raise ValueError("health lock is not a regular file")
-        os.chmod(lock_path, 0o600)
-        with os.fdopen(lock_fd, "r+") as lock_file:
-            lock_fd = -1
-            fcntl.flock(lock_file, fcntl.LOCK_EX)
-            if not is_trusted_file(lock_path):
-                raise ValueError("health lock is untrusted")
-            if is_trusted_file(path):
-                try:
-                    current = json.loads(path.read_text())
-                except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-                    raise ValueError("supervisor health is malformed") from exc
-                if not _valid_health(current):
-                    raise ValueError("supervisor health is invalid")
-            elif os.path.lexists(path):
-                raise ValueError("supervisor health is untrusted")
-            else:
-                current = _new_health()
-            updated = mutation(copy.deepcopy(current))
-            if not _valid_health(updated):
-                raise ValueError("health mutation produced invalid state")
-            temporary_name: str | None = None
-            try:
-                with tempfile.NamedTemporaryFile(
-                    mode="w",
-                    encoding="utf-8",
-                    dir=path.parent,
-                    prefix=f".{path.name}.",
-                    suffix=".tmp",
-                    delete=False,
-                ) as temporary:
-                    temporary_name = temporary.name
-                    os.chmod(temporary_name, 0o600)
-                    json.dump(updated, temporary, sort_keys=True, separators=(",", ":"))
-                    temporary.write("\n")
-                    temporary.flush()
-                    os.fsync(temporary.fileno())
-                os.replace(temporary_name, path)
-                temporary_name = None
-                directory_fd = os.open(path.parent, os.O_RDONLY)
-                try:
-                    os.fsync(directory_fd)
-                finally:
-                    os.close(directory_fd)
-            finally:
-                if temporary_name is not None:
-                    pathlib.Path(temporary_name).unlink(missing_ok=True)
-            return updated
-    finally:
-        if lock_fd >= 0:
-            os.close(lock_fd)
-
-
-def _mark_started(path: pathlib.Path, now: dt.datetime) -> dict:
-    def mutate(current: dict) -> dict:
-        current["reconcile_started_at"] = _iso(now)
-        return current
-
-    return _mutate_health(path, mutate)
-
-
-def _mark_success(
-    path: pathlib.Path, now: dt.datetime, *, threads: int, recoveries: int
-) -> dict:
-    def mutate(current: dict) -> dict:
-        previous = current.get("counts", {})
-        current["last_successful_reconcile_at"] = _iso(now)
-        current["completed_generation"] += 1
-        current["counts"] = {
-            "successful_passes": int(previous.get("successful_passes", 0)) + 1,
-            "threads": threads,
-            "recoveries": recoveries,
-        }
-        return current
-
-    return _mutate_health(path, mutate)
 
 
 def _claim_expired(claim: dict | None, now: dt.datetime) -> bool:
@@ -341,11 +209,13 @@ def reconcile_all(
     phase_hook: Callable[[str, dict], None] | None = None,
     recovery_budget: int = DEFAULT_RECOVERY_BUDGET,
     completion_clock: Callable[[], dt.datetime] | None = None,
+    pass_started_at: dt.datetime | None = None,
 ) -> dict:
     """Reconcile current level state; stamp health only after the full pass."""
     root = pathlib.Path(threads_root)
     health_path = root.parent / "supervisor-health.json"
-    _mark_started(health_path, now)
+    successful_pass_started_at = pass_started_at or now
+    supervisor_health.mark_started(health_path, successful_pass_started_at)
     if inspect_scheduled is not None:
         inspect_scheduled()
     if not root.is_dir():
@@ -465,8 +335,12 @@ def reconcile_all(
             "recoveries": recoveries,
         }
     completed_at = completion_clock() if completion_clock is not None else now
-    health = _mark_success(
-        health_path, completed_at, threads=len(plans), recoveries=recoveries
+    health = supervisor_health.mark_success(
+        health_path,
+        completed_at,
+        threads=len(plans),
+        recoveries=recoveries,
+        started_at=successful_pass_started_at,
     )
     return {"status": "ok", "recoveries": recoveries, "health": health}
 

@@ -61,6 +61,7 @@ def test_generated_surfaces_are_current():
 def test_ci_runs_claude_install_cutover_regressions():
     workflow = (ROOT / ".github" / "workflows" / "tests.yml").read_text()
     required = (
+        "bash tests/test_continuation_supervisor_install.sh",
         "bash tests/test_plugin_update.sh",
         "bash tests/test_install_pinned.sh",
         "bash tests/test_install_pinned_drift.sh",

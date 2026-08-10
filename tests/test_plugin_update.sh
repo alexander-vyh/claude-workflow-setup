@@ -73,6 +73,15 @@ mkdir -p \
 # Execute a copied updater from a miniature repository so a random, repo-owned
 # source can prove cleanup is inventory-driven rather than name-specific.
 cp "$REPO/scripts/plugin-update.sh" "$UPDATER_REPO/scripts/plugin-update.sh"
+cp "$REPO/scripts/plugin-update-transaction.py" \
+  "$UPDATER_REPO/scripts/plugin-update-transaction.py"
+cp "$REPO/scripts/continuation-supervisor-install.sh" \
+  "$UPDATER_REPO/scripts/continuation-supervisor-install.sh"
+cp "$REPO/scripts/continuation-supervisor-state.py" \
+  "$UPDATER_REPO/scripts/continuation-supervisor-state.py"
+chmod +x \
+  "$UPDATER_REPO/scripts/plugin-update-transaction.py" \
+  "$UPDATER_REPO/scripts/continuation-supervisor-state.py"
 cp "$REPO/scripts/prune_settings_hooks.py" "$UPDATER_REPO/scripts/prune_settings_hooks.py"
 cp "$REPO/plugins/escapement-claude/harness/bin/stop_hook.py" \
   "$UPDATER_REPO/plugins/escapement-claude/harness/bin/stop_hook.py"
@@ -87,6 +96,11 @@ mkdir -p \
 
 # Representative plugin payload.
 cp "$REPO/plugins/escapement-claude/harness/bin/stop_hook.py" "$CACHE/harness/bin/stop_hook.py"
+cp "$REPO/plugins/escapement-claude/harness/bin/wakeup_waker.py" \
+  "$CACHE/harness/bin/wakeup_waker.py"
+cp "$REPO/plugins/escapement-claude/harness/bin/wakeup_waker.py" \
+  "$PIN/harness/bin/wakeup_waker.py"
+chmod +x "$PIN/harness/bin/wakeup_waker.py"
 printf '#!/bin/bash\nexit 0\n' > "$CACHE/harness/bin/verify"
 chmod 644 "$CACHE/harness/bin/verify"
 printf '{}\n' > "$CACHE/harness/schemas/thread.schema.json"
@@ -236,6 +250,33 @@ esac
 exit 0
 STUB
 chmod +x "$BIN/claude"
+cat > "$BIN/uname" <<'STUB'
+#!/usr/bin/env bash
+printf 'Darwin\n'
+STUB
+cat > "$BIN/launchctl" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$HOME/launchctl.log"
+state="$HOME/launchctl.loaded"
+label="com.escapement.continuation-supervisor"
+touch "$state"
+if [[ "${1:-}" == print ]]; then
+  grep -Fxq "$label" "$state" && exit 0
+  exit 113
+fi
+if [[ "${1:-}" == bootout ]]; then
+  grep -Fxq "$label" "$state" || exit 3
+  grep -Fvx "$label" "$state" > "$state.next" || true
+  mv -f "$state.next" "$state"
+  exit 0
+fi
+if [[ "${1:-}" == bootstrap ]]; then
+  grep -Fxq "$label" "$state" && exit 72
+  printf '%s\n' "$label" >> "$state"
+fi
+exit 0
+STUB
+chmod +x "$BIN/uname" "$BIN/launchctl"
 
 HOME="$HOME_DIR" PATH="$BIN:$PATH" bash "$UPDATER_REPO/scripts/plugin-update.sh" >"$TD/out.log" 2>&1 \
   || { cat "$TD/out.log"; bad "plugin-update.sh exited non-zero"; }
@@ -253,6 +294,9 @@ model="$(python3 -c "import json;print(json.load(open('$CLAUDE_DIR/settings.json
 [ "$(readlink "$CLAUDE_DIR/harness/schemas" 2>/dev/null)" = "$CACHE/harness/schemas" ] \
   && ok "harness/schemas converged to registry-selected plugin" \
   || bad "harness/schemas did not converge to $CACHE/harness/schemas"
+rg -q '^bootstrap ' "$HOME_DIR/launchctl.log" 2>/dev/null \
+  && ok "complete updater fixture reaches the supervisor load boundary" \
+  || bad "complete updater fixture never loaded the supervisor"
 
 for stale in \
   "$CLAUDE_DIR/skills/discovery" \

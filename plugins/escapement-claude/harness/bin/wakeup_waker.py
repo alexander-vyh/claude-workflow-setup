@@ -23,17 +23,16 @@ from __future__ import annotations
 
 import argparse
 import datetime as _dt
-import fcntl
 import json
 import os
 import pathlib
 import sys
-import tempfile
 from typing import Callable, List, Optional, Tuple
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import wakeup_dispatch as wd  # noqa: E402
 import execution_supervisor as es  # noqa: E402
+import schedule_store  # noqa: E402
 import trusted_source as ts  # noqa: E402
 
 HARNESS_ROOT = pathlib.Path(
@@ -57,6 +56,7 @@ def plan(
     n = now if now.tzinfo else now.replace(tzinfo=_dt.timezone.utc)
     kept: List[dict] = []
     spawns: List[dict] = []
+    spawn_keys: set[tuple] = set()
     for e in entries:
         if not isinstance(e, dict):
             continue  # malformed → drop
@@ -77,25 +77,29 @@ def plan(
             rearmed["wake_at"] = (n + _dt.timedelta(seconds=interval)).isoformat()
             kept.append(rearmed)  # re-armed; NO spawn
         elif kind == "handoff":
-            spawns.append(
-                {
-                    "type": "handoff",
-                    "thread_id": e.get("thread_id"),
-                    "model": action.get("model"),
-                    "prompt": action.get("prompt"),
-                    "reason": action.get("reason"),
-                    "_entry": e,
-                }
-            )  # PRUNED (not kept)
+            spawn = {
+                "type": "handoff",
+                "thread_id": e.get("thread_id"),
+                "model": action.get("model"),
+                "prompt": action.get("prompt"),
+                "reason": action.get("reason"),
+                "_entry": e,
+            }
+            key = (spawn["type"], spawn["thread_id"], spawn["model"], spawn["prompt"])
+            if key not in spawn_keys:
+                spawn_keys.add(key)
+                spawns.append(spawn)
         elif kind == "resume":
-            spawns.append(
-                {
-                    "type": "resume",
-                    "thread_id": e.get("thread_id"),
-                    "prompt": action.get("prompt"),
-                    "_entry": e,
-                }
-            )  # PRUNED
+            spawn = {
+                "type": "resume",
+                "thread_id": e.get("thread_id"),
+                "prompt": action.get("prompt"),
+                "_entry": e,
+            }
+            key = (spawn["type"], spawn["thread_id"], spawn["prompt"])
+            if key not in spawn_keys:
+                spawn_keys.add(key)
+                spawns.append(spawn)
         # noop → dropped
     return kept, spawns
 
@@ -131,13 +135,7 @@ def _load(path: pathlib.Path):
 
 
 def _try_lock(path: pathlib.Path):
-    lock_file = path.with_suffix(".json.lock").open("a+")
-    try:
-        fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        lock_file.close()
-        return None
-    return lock_file
+    return schedule_store.try_lock(path)
 
 
 def _public_spawn(spawn: dict) -> dict:
@@ -150,32 +148,7 @@ def _dry_run_runner(command: str) -> Tuple[int, str]:
 
 
 def _write_schedule_durable(path: pathlib.Path, entries: list) -> None:
-    """Replace a schedule durably while the caller holds its stable lock."""
-    temporary_name: str | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            dir=path.parent,
-            prefix=f".{path.name}.",
-            suffix=".tmp",
-            delete=False,
-        ) as temporary:
-            temporary_name = temporary.name
-            os.chmod(temporary_name, 0o600)
-            json.dump(entries, temporary)
-            temporary.flush()
-            os.fsync(temporary.fileno())
-        os.replace(temporary_name, path)
-        temporary_name = None
-        directory_fd = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
-    finally:
-        if temporary_name is not None:
-            pathlib.Path(temporary_name).unlink(missing_ok=True)
+    schedule_store.write_durable(path, entries)
 
 
 def main(argv=None) -> int:
@@ -255,27 +228,31 @@ def main(argv=None) -> int:
     if args.fire:
         if not scheduled_ok:
             exit_code = 1
-        reconcile_now = _dt.datetime.now(_dt.timezone.utc)
-
-        def inspect_scheduled():
-            if not scheduled_ok:
-                raise RuntimeError("scheduled-work inspection was incomplete")
-            return {"status": "ok"}
-
-        try:
-            result = es.reconcile_all(
-                root,
-                reconcile_now,
-                f"wakeup-waker:{os.getpid()}",
-                es.launch_recovery,
-                inspect_scheduled=inspect_scheduled,
-                completion_clock=lambda: _dt.datetime.now(_dt.timezone.utc),
+            print(
+                "execution reconciliation incomplete: scheduled-work inspection was incomplete",
+                file=sys.stderr,
             )
-            if result["status"] != "ok":
+        else:
+            reconcile_now = _dt.datetime.now(_dt.timezone.utc)
+
+            def inspect_scheduled():
+                return {"status": "ok"}
+
+            try:
+                result = es.reconcile_all(
+                    root,
+                    reconcile_now,
+                    f"wakeup-waker:{os.getpid()}",
+                    es.launch_recovery,
+                    inspect_scheduled=inspect_scheduled,
+                    completion_clock=lambda: _dt.datetime.now(_dt.timezone.utc),
+                    pass_started_at=now,
+                )
+                if result["status"] != "ok":
+                    exit_code = 1
+            except (OSError, RuntimeError, ValueError) as exc:
                 exit_code = 1
-        except (OSError, RuntimeError, ValueError) as exc:
-            exit_code = 1
-            print(f"execution reconciliation incomplete: {exc}", file=sys.stderr)
+                print(f"execution reconciliation incomplete: {exc}", file=sys.stderr)
     for s in total_spawns:
         print(json.dumps({"would_spawn" if not args.fire else "spawned": s}))
     print(

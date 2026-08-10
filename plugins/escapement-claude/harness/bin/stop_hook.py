@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# file-complexity-waiver: 947 lines, pre-existing; split owned by bead e9v.7. This change only adds a one-line per-session isolation steer (e9v.4), not new bulk.
+# file-complexity-waiver: 1068 lines; delegated Stop policy is isolated in execution_stop_adapter.py, leaving this legacy hook with one adapter import and call. Broader split remains owned by bead e9v.7.
 """
 Claude Code Stop-hook adapter for continuation-harness.
 
@@ -44,6 +44,7 @@ import session_isolation  # noqa: E402  (per-session isolation steer, bead e9v.4
 import winddown_outage_sentinel as _wos  # noqa: E402
 import datetime as _dt2  # noqa: E402
 from beads_task_state import check_task_root_outcome, check_task_scope  # noqa: E402
+from execution_stop_adapter import decide_task_mode  # noqa: E402
 
 # State root is the standard per-user location (env-overridable), NOT relative
 # to where this code is installed — so dev-copy and installed-copy share state
@@ -832,10 +833,44 @@ def main() -> int:
     # B1 fix: read last user message from transcript so _user_released() fires.
     recent_user_message = _read_last_user_message(transcript_path)
 
+    # User release is unconditional, including when managed local state is corrupt.
+    release_decision, release_reason = would_block_stop({
+        "contract": None,
+        "scheduled": None,
+        "recent_user_message": recent_user_message,
+    })
+    if release_decision == "allow" and release_reason == "user_released":
+        _log_incident({
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "session_id": session_id,
+            "decision": release_decision,
+            "reason": release_reason,
+            "was_correct": None,
+            "notes": "universal_override",
+        })
+        return 0
+
+    # The delegated adapter owns trusted exact-session context loading. Existing
+    # managed state cannot fall through to legacy behavior when that context is bad.
+    session_mode, delegated = decide_task_mode(session_id, thread_dir, _now_dt)
+    if delegated is not None:
+        decision, reason = delegated
+        _log_incident({
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "session_id": session_id,
+            "decision": decision,
+            "reason": reason,
+            "was_correct": None,
+            "notes": "delegated_execution_stop_gate",
+        })
+        if decision == "block":
+            display = _TASK_MODE_DISPLAY.get(reason) or RESUMPTION_PROMPT.format(
+                reason=reason
+            )
+            print(json.dumps({"decision": "block", "reason": display}))
+        return 0
+
     # Task mode: queue-drain is the session-scope stopping criterion.
-    # User release and wakeup remain universal overrides (checked via would_block_stop
-    # with contract=None, which short-circuits to the universal paths before contract check).
-    session_mode = _load_json(thread_dir / "session_mode.json")
     # e9v.11: only a SCOPED task-mode record gates here. A scopeless record
     # (task_id and parent_id both null) is not really task mode — gating it would
     # block on the whole-repo backlog — so it falls through to the contract gate.
@@ -852,7 +887,7 @@ def main() -> int:
         # here, which now also returns ("allow", "conversational") — that must NOT
         # bypass the queue gate (it would let a task-mode session with ready work
         # stop). Gate strictly on the two real overrides.
-        if override_decision == "allow" and override_reason in ("wakeup_registered", "user_released"):
+        if override_decision == "allow" and override_reason == "wakeup_registered":
             # F1 wiring (verifier Finding 1): a wakeup override must pass through
             # _check_wakeup_blockers before being allowed — a fabricated blocker bead
             # can launder a permanent stop through the wakeup path.  user_released is
@@ -895,17 +930,15 @@ def main() -> int:
                     )
                     print(json.dumps({"decision": "block", "reason": display}))
                     return 0
-            # universal overrides apply in task mode too.
-            # Tag a wakeup-allow as scope_wakeup_pause so half-life review can count
-            # pacing-pause fires vs genuine completion (858.6 / design Step 4 signal).
+            # Tag a legacy wakeup-allow as scope_wakeup_pause so half-life review
+            # can count pacing pauses. Managed execution wakes are handled above.
             _log_incident({
                 "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 "session_id": session_id,
                 "decision": override_decision,
                 "reason": override_reason,
                 "was_correct": None,
-                "notes": ("scope_wakeup_pause" if override_reason == "wakeup_registered"
-                          else "task_mode_universal_override"),
+                "notes": "scope_wakeup_pause",
             })
             return 0
         decision, reason = _check_task_mode_queue(session_mode)

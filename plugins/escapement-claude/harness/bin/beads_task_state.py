@@ -27,7 +27,7 @@ def _main_repo_has_beads(cwd: str) -> bool:
         content = git_path.read_text(encoding="utf-8", errors="replace").strip()
         if not content.startswith("gitdir:"):
             return False
-        gitdir = pathlib.Path(content[len("gitdir:"):].strip())
+        gitdir = pathlib.Path(content[len("gitdir:") :].strip())
         if not gitdir.is_absolute():
             gitdir = (pathlib.Path(cwd) / gitdir).resolve()
         return (gitdir.parent.parent.parent / ".beads").is_dir()
@@ -45,10 +45,12 @@ def _default_runner(repo_cwd: str) -> BdRunner:
                 text=True,
                 timeout=15,
             )
+            if result.returncode != 0:
+                return None
             try:
                 payload = json.loads(result.stdout)
             except (json.JSONDecodeError, ValueError):
-                return [] if result.returncode == 0 else None
+                return []
             return payload if isinstance(payload, list) else None
         except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
             return None
@@ -68,13 +70,45 @@ def _closed_root(root_id: str, records: Optional[list[dict]]) -> bool:
     )
 
 
-def check_task_root_outcome(session_mode: dict, run_bd: BdRunner | None = None) -> tuple[str, str]:
+def task_root_status(session_mode: dict, run_bd: BdRunner | None = None) -> str | None:
+    """Return the exact canonical root status, or None when it is unresolved."""
+    repo_cwd = (
+        session_mode.get("repo_cwd", "") if isinstance(session_mode, dict) else ""
+    )
+    root_id = (
+        session_mode.get("parent_id") or session_mode.get("task_id")
+        if isinstance(session_mode, dict)
+        else None
+    )
+    if not repo_cwd or not root_id:
+        return None
+    record = _one_exact_root(
+        root_id, (run_bd or _default_runner(repo_cwd))(["show", root_id])
+    )
+    status = record.get("status") if record is not None else None
+    return status if isinstance(status, str) and status else None
+
+
+def _one_exact_root(root_id: str, records: Optional[list[dict]]) -> dict | None:
+    if not isinstance(records, list) or len(records) != 1:
+        return None
+    record = records[0]
+    if not isinstance(record, dict) or record.get("id") != root_id:
+        return None
+    return record
+
+
+def check_task_root_outcome(
+    session_mode: dict, run_bd: BdRunner | None = None
+) -> tuple[str, str]:
     """Check canonical root closure without applying descendant queue policy.
 
     This is used by the wakeup path: a wake can defer a verified blocker, but it
     cannot turn an in-progress or untrustworthy parent record into completion.
     """
-    repo_cwd = session_mode.get("repo_cwd", "") if isinstance(session_mode, dict) else ""
+    repo_cwd = (
+        session_mode.get("repo_cwd", "") if isinstance(session_mode, dict) else ""
+    )
     root_id = (
         session_mode.get("parent_id") or session_mode.get("task_id")
         if isinstance(session_mode, dict)
@@ -91,7 +125,9 @@ def check_task_root_outcome(session_mode: dict, run_bd: BdRunner | None = None) 
     return ("block", "parent_outcome_unresolved")
 
 
-def check_task_scope(session_mode: dict, run_bd: BdRunner | None = None) -> tuple[str, str]:
+def check_task_scope(
+    session_mode: dict, run_bd: BdRunner | None = None
+) -> tuple[str, str]:
     """Return whether a scoped task-mode session has a verified clean drain.
 
     The root Beads record must be exactly ``closed`` before empty ready/blocked
@@ -99,7 +135,9 @@ def check_task_scope(session_mode: dict, run_bd: BdRunner | None = None) -> tupl
     fails closed in a Beads context; a genuinely non-Beads cwd keeps the existing
     graceful degradation when no ``bd`` query can resolve.
     """
-    repo_cwd = session_mode.get("repo_cwd", "") if isinstance(session_mode, dict) else ""
+    repo_cwd = (
+        session_mode.get("repo_cwd", "") if isinstance(session_mode, dict) else ""
+    )
     root_id = (
         session_mode.get("parent_id") or session_mode.get("task_id")
         if isinstance(session_mode, dict)
@@ -111,8 +149,8 @@ def check_task_scope(session_mode: dict, run_bd: BdRunner | None = None) -> tupl
         return ("block", "parent_outcome_unresolved")
 
     has_beads_dir = (
-        (pathlib.Path(repo_cwd) / ".beads").exists() or _main_repo_has_beads(repo_cwd)
-    )
+        pathlib.Path(repo_cwd) / ".beads"
+    ).exists() or _main_repo_has_beads(repo_cwd)
     runner = run_bd or _default_runner(repo_cwd)
 
     scope = ["--parent", root_id]
