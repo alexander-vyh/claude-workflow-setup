@@ -19,9 +19,11 @@ from __future__ import annotations
 
 import copy
 import datetime as dt
+import fcntl
 import json
 import os
 import pathlib
+import select
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -53,7 +55,9 @@ def at(value: str) -> dt.datetime:
     return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
-def claude_agent_pretool(tool_use_id: str = "toolu-agent-44") -> dict:
+def claude_agent_pretool(
+    tool_use_id: str = "toolu-agent-44", *, agent_name: str = AGENT
+) -> dict:
     """Complete installed Claude Agent PreToolUse fixture."""
     return {
         "session_id": SESSION,
@@ -64,7 +68,7 @@ def claude_agent_pretool(tool_use_id: str = "toolu-agent-44") -> dict:
         "tool_name": "Agent",
         "tool_use_id": tool_use_id,
         "tool_input": {
-            "name": AGENT,
+            "name": agent_name,
             "description": "Implement only the assigned host adapter tests",
             "prompt": (
                 "Work on prompt-only bead escapement-foreign-999. "
@@ -552,3 +556,142 @@ def test_dispatch_write_failure_never_allows_before_durable_commit(
     assert read_ledger(path)["executions"][0]["dispatch_tool_use_id"] == (
         f"prepared:{EXECUTION}"
     )
+
+
+def _public_concurrent_first_preparations(
+    path: pathlib.Path, agent_names: tuple[str, str]
+) -> list[dict]:
+    """Drive two real prepare CLIs through the stable absent-ledger lock."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = path.with_name(f".{path.name}.lock")
+    commands = [
+        [
+            sys.executable,
+            str(BIN / "delegation_hook.py"),
+            "prepare",
+            "--ledger-path",
+            str(path),
+            "--bead-id",
+            BEAD,
+            "--session",
+            SESSION,
+            "--host",
+            "claude",
+            "--agent-name",
+            agent_name,
+            "--execution-id",
+            f"exec-first-{index}",
+            "--watchdog-id",
+            f"watch-first-{index}",
+            "--now",
+            "2026-08-09T20:00:00Z",
+        ]
+        for index, agent_name in enumerate(agent_names, start=1)
+    ]
+
+    processes: list[subprocess.Popen[str]] = []
+    with lock_path.open("w+") as lock_file:
+        lock_path.chmod(0o600)
+        fcntl.flock(lock_file, fcntl.LOCK_EX)
+        try:
+            processes = [
+                subprocess.Popen(
+                    command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+                )
+                for command in commands
+            ]
+            readable, _writable, _exceptional = select.select(
+                [process.stdout for process in processes if process.stdout], [], [], 1.0
+            )
+            polls_while_locked = [process.poll() for process in processes]
+            durable_while_locked = path.exists()
+        finally:
+            fcntl.flock(lock_file, fcntl.LOCK_UN)
+
+    completed = [process.communicate(timeout=5) for process in processes]
+    assert readable == []
+    assert polls_while_locked == [None, None]
+    assert durable_while_locked is False
+    for process, (_stdout, stderr) in zip(processes, completed, strict=True):
+        assert process.returncode == 0, stderr
+    return [json.loads(stdout) for stdout, _stderr in completed]
+
+
+def test_concurrent_first_same_agent_preparations_survive_and_dispatch_is_ambiguous(
+    tmp_path,
+) -> None:
+    path = tmp_path / "executions.json"
+    results = _public_concurrent_first_preparations(path, (AGENT, AGENT))
+
+    assert {result["execution_id"] for result in results} == {
+        "exec-first-1",
+        "exec-first-2",
+    }
+    persisted = ledger_api.load_trusted(path, SESSION)
+    assert persisted is not None
+    assert {
+        (item["execution_id"], item["agent_name"], item["dispatch_tool_use_id"])
+        for item in persisted["executions"]
+    } == {
+        ("exec-first-1", AGENT, "prepared:exec-first-1"),
+        ("exec-first-2", AGENT, "prepared:exec-first-2"),
+    }
+    before_dispatch = copy.deepcopy(persisted)
+    bd_calls: list[list[str]] = []
+
+    result = delegation_hook.pre_tool(
+        claude_agent_pretool("toolu-ambiguous-same-agent"),
+        lambda args: bd_calls.append(args),
+        path,
+    )
+
+    assert result["decision"] == "deny"
+    assert result["reason"] == "prepared_execution_required"
+    assert bd_calls == []
+    assert ledger_api.load_trusted(path, SESSION) == before_dispatch
+
+
+def test_concurrent_first_distinct_agent_preparations_bind_only_exact_agent(
+    tmp_path,
+) -> None:
+    path = tmp_path / "executions.json"
+    agent_names = ("task-3-agent-alpha", "task-3-agent-beta")
+    _public_concurrent_first_preparations(path, agent_names)
+    run_bd, _calls = canonical_bead()
+
+    alpha = delegation_hook.pre_tool(
+        claude_agent_pretool("toolu-exact-alpha", agent_name=agent_names[0]),
+        run_bd,
+        path,
+    )
+    after_alpha = ledger_api.load_trusted(path, SESSION)
+    assert alpha["decision"] == "allow"
+    assert after_alpha is not None
+    alpha_item = next(
+        item
+        for item in after_alpha["executions"]
+        if item["agent_name"] == agent_names[0]
+    )
+    beta_item = next(
+        item
+        for item in after_alpha["executions"]
+        if item["agent_name"] == agent_names[1]
+    )
+    assert alpha_item["dispatch_tool_use_id"] == "toolu-exact-alpha"
+    assert beta_item["dispatch_tool_use_id"] == "prepared:exec-first-2"
+
+    beta = delegation_hook.pre_tool(
+        claude_agent_pretool("toolu-exact-beta", agent_name=agent_names[1]),
+        run_bd,
+        path,
+    )
+    final = ledger_api.load_trusted(path, SESSION)
+    assert beta["decision"] == "allow"
+    assert final is not None
+    assert {
+        (item["agent_name"], item["dispatch_tool_use_id"])
+        for item in final["executions"]
+    } == {
+        (agent_names[0], "toolu-exact-alpha"),
+        (agent_names[1], "toolu-exact-beta"),
+    }

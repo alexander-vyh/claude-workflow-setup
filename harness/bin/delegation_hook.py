@@ -15,11 +15,10 @@ import os
 import pathlib
 import subprocess
 import sys
-import tempfile
 import uuid
 
 from execution_ledger import new_ledger, register_execution
-from execution_store import load_trusted, mutate_atomic
+from execution_store import initialize_or_mutate_atomic, load_trusted, mutate_atomic
 
 
 UTC = dt.timezone.utc
@@ -179,36 +178,6 @@ def post_tool(payload: dict, ledger_path) -> dict:
     }
 
 
-def _write_new_ledger(path: pathlib.Path, ledger: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_name: str | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            dir=path.parent,
-            prefix=f".{path.name}.",
-            suffix=".tmp",
-            delete=False,
-        ) as temporary:
-            temporary_name = temporary.name
-            os.chmod(temporary_name, 0o600)
-            json.dump(ledger, temporary, sort_keys=True, separators=(",", ":"))
-            temporary.write("\n")
-            temporary.flush()
-            os.fsync(temporary.fileno())
-        os.replace(temporary_name, path)
-        temporary_name = None
-        directory_fd = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
-    finally:
-        if temporary_name is not None:
-            pathlib.Path(temporary_name).unlink(missing_ok=True)
-
-
 def _prepare(args: argparse.Namespace) -> dict:
     path = (
         pathlib.Path(args.ledger_path)
@@ -228,18 +197,18 @@ def _prepare(args: argparse.Namespace) -> dict:
         "generation": 1,
     }
     now = _parse_now(args.now)
-    if path.exists():
+    path.parent.mkdir(parents=True, exist_ok=True)
 
-        def register(current: dict) -> dict:
-            if current.get("parent_session_id") != args.session:
-                raise ValueError("parent session does not match ledger")
-            return register_execution(current, event, now)
+    def register(current: dict) -> dict:
+        if current.get("parent_session_id") != args.session:
+            raise ValueError("parent session does not match ledger")
+        return register_execution(current, event, now)
 
-        mutate_atomic(path, register)
-    else:
-        ledger = new_ledger(args.session)
-        register_execution(ledger, event, now)
-        _write_new_ledger(path, ledger)
+    initialize_or_mutate_atomic(
+        path,
+        lambda: new_ledger(args.session),
+        register,
+    )
     return {
         "status": "prepared",
         "bead_id": args.bead_id,

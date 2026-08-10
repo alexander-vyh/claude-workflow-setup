@@ -11,7 +11,7 @@ import subprocess
 import sys
 
 from execution_ledger import apply_event, reconcile_deadlines
-from execution_store import load_trusted
+from execution_store import load_trusted, mutate_atomic
 
 
 def _harness_root() -> pathlib.Path:
@@ -123,7 +123,13 @@ def _canonical_parent_messages(ledger: dict, run_bd, messages: list[str]) -> Non
             )
 
 
-def reconcile_session(payload: dict, run_bd, ledger_loader, now: dt.datetime) -> dict:
+def reconcile_session(
+    payload: dict,
+    run_bd,
+    ledger_loader,
+    now: dt.datetime,
+    ledger_mutator=None,
+) -> dict:
     """Return normalized SessionStart continuation context."""
     session_id = payload.get("session_id") if isinstance(payload, dict) else None
     if not isinstance(session_id, str) or not session_id:
@@ -149,16 +155,30 @@ def reconcile_session(payload: dict, run_bd, ledger_loader, now: dt.datetime) ->
         }
 
     messages: list[str] = []
-    _apply_normalized_events(payload, ledger, now, messages)
+    due: list[dict] = []
+
+    def reconcile(current: dict) -> dict:
+        nonlocal due
+        if current.get("parent_session_id") != session_id:
+            raise ValueError("parent session does not match ledger")
+        _apply_normalized_events(payload, current, now, messages)
+        due = reconcile_deadlines(current, now)
+        return current
+
     try:
-        due = reconcile_deadlines(ledger, now)
-    except (TypeError, ValueError, KeyError):
-        due = []
-        _append_once(
-            messages,
-            "execution deadline state is unresolved; inspect executions.json before "
-            "continuing.",
+        ledger = (
+            ledger_mutator(session_id, reconcile)
+            if ledger_mutator is not None
+            else reconcile(ledger)
         )
+    except (OSError, TypeError, ValueError, KeyError):
+        return {
+            "status": "continue",
+            "additional_context": (
+                "execution reconciliation could not be durably persisted; inspect "
+                "executions.json before continuing."
+            ),
+        }
     _canonical_parent_messages(ledger, run_bd, messages)
     for execution in due:
         _append_once(
@@ -205,6 +225,7 @@ def main() -> int:
         _default_run_bd(payload.get("cwd", "")),
         lambda expected: load_trusted(_ledger_path(expected), expected),
         dt.datetime.now(dt.timezone.utc),
+        lambda expected, mutation: mutate_atomic(_ledger_path(expected), mutation),
     )
     if result["additional_context"]:
         print(

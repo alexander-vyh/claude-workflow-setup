@@ -363,6 +363,42 @@ def test_concurrent_mutations_serialize_without_lost_updates(tmp_path):
 
 
 @skip_non_posix
+def test_atomic_initializer_rejects_untrusted_parent_directory(tmp_path):
+    loose = tmp_path / "loose"
+    loose.mkdir()
+    loose.chmod(0o777)
+    path = loose / "executions.json"
+    try:
+        with pytest.raises(ValueError, match="trusted"):
+            execution_store.initialize_or_mutate_atomic(
+                path,
+                _ledger,
+                lambda current: current,
+            )
+        assert not path.exists()
+    finally:
+        loose.chmod(0o755)
+
+
+@skip_non_posix
+def test_atomic_initializer_preserves_dangling_target_symlink(tmp_path):
+    path = tmp_path / "executions.json"
+    target = tmp_path / "missing-target.json"
+    path.symlink_to(target)
+
+    with pytest.raises(ValueError, match="trusted"):
+        execution_store.initialize_or_mutate_atomic(
+            path,
+            _ledger,
+            lambda current: current,
+        )
+
+    assert path.is_symlink()
+    assert os.readlink(path) == str(target)
+    assert not target.exists()
+
+
+@skip_non_posix
 def test_cross_process_mutations_serialize_without_lost_updates(tmp_path):
     path = tmp_path / "executions.json"
     _write_ledger(path, _ledger())

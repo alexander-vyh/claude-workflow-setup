@@ -16,9 +16,11 @@ from __future__ import annotations
 
 import copy
 import datetime as dt
+import fcntl
 import json
 import os
 import pathlib
+import select
 import subprocess
 import sys
 
@@ -456,3 +458,184 @@ def test_public_sessionstart_hook_emits_native_additional_context(tmp_path) -> N
     context = output["hookSpecificOutput"]["additionalContext"]
     assert "parent outcome escapement-e3ai is unresolved" in context
     assert "bd show escapement-e3ai" in context
+
+
+def test_public_sessionstart_durably_merges_reconciliation_with_concurrent_change(
+    tmp_path,
+) -> None:
+    """Reject in-memory-only reconcile and unsafe whole-snapshot replacement."""
+    harness_root = tmp_path / "harness"
+    ledger_path = harness_root / "threads" / SESSION / "executions.json"
+    ledger_path.parent.mkdir(parents=True)
+    ledger = generation_two()
+    active_before = copy.deepcopy(ledger["executions"][0])
+    active_before["reconcile_due"] = None
+    active_before["start_deadline"] = "2020-01-01T00:00:00Z"
+    active_before["idle_deadline"] = "2020-01-01T00:00:00Z"
+    active_before["hard_deadline"] = "2020-01-01T00:00:00Z"
+    ledger["executions"][0] = copy.deepcopy(active_before)
+    ledger_path.write_text(json.dumps(ledger), encoding="utf-8")
+    ledger_path.chmod(0o600)
+    assert ledger_api.load_trusted(ledger_path, SESSION) is not None
+
+    mutation_marker = tmp_path / "concurrent-mutation-recorded"
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_bd = fake_bin / "bd"
+    fake_bd.write_text(
+        "#!/usr/bin/env python3\n"
+        "import datetime as dt, json, pathlib, sys\n"
+        f"sys.path.insert(0, {str(BIN)!r})\n"
+        "import execution_ledger, execution_store\n"
+        f"ledger_path = pathlib.Path({str(ledger_path)!r})\n"
+        f"marker = pathlib.Path({str(mutation_marker)!r})\n"
+        "args = [arg for arg in sys.argv[1:] if arg != '--json']\n"
+        f"if args == ['show', {BEAD!r}]:\n"
+        "    if not marker.exists():\n"
+        "        event = {\n"
+        "            'kind': 'dispatch_registered',\n"
+        f"            'parent_session_id': {SESSION!r},\n"
+        "            'bead_id': 'escapement-concurrent-child',\n"
+        "            'execution_id': 'exec-concurrent-durable',\n"
+        "            'host': 'claude',\n"
+        "            'agent_name': 'concurrent-writer',\n"
+        "            'dispatch_tool_use_id': 'toolu-concurrent-durable',\n"
+        "            'watchdog_id': 'watch-concurrent-durable',\n"
+        "            'attempt': 1,\n"
+        "            'generation': 1,\n"
+        "        }\n"
+        "        def add(current):\n"
+        "            return execution_ledger.register_execution(\n"
+        "                current, event, dt.datetime(2026, 8, 9, 20, 3, "
+        "tzinfo=dt.timezone.utc))\n"
+        "        execution_store.mutate_atomic(ledger_path, add)\n"
+        "        marker.write_text('done')\n"
+        f"    print(json.dumps([{{'id': {BEAD!r}, 'status': 'closed', "
+        f"'parent': {ROOT!r}}}]))\n"
+        f"elif args == ['show', {ROOT!r}]:\n"
+        f"    print(json.dumps([{{'id': {ROOT!r}, 'status': 'closed'}}]))\n"
+        "elif args == ['show', 'escapement-concurrent-child']:\n"
+        "    print(json.dumps([{'id': 'escapement-concurrent-child', "
+        f"'status': 'open', 'parent': {ROOT!r}}}]))\n"
+        "else:\n"
+        "    raise SystemExit(2)\n",
+        encoding="utf-8",
+    )
+    fake_bd.chmod(0o755)
+    env = os.environ.copy()
+    env["HARNESS_ROOT"] = str(harness_root)
+    env["PATH"] = f"{fake_bin}{os.pathsep}{env.get('PATH', '')}"
+    payload = claude_session_start()
+    payload["execution_events"] = [late_generation_one_terminal()]
+
+    result = subprocess.run(
+        [sys.executable, str(BIN / "execution_reconcile.py")],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert result.returncode == 0, result.stderr
+    persisted = ledger_api.load_trusted(ledger_path, SESSION)
+    assert persisted is not None
+    assert {item["execution_id"] for item in persisted["executions"]} == {
+        EXECUTION,
+        "exec-concurrent-durable",
+    }
+    active = next(
+        item for item in persisted["executions"] if item["execution_id"] == EXECUTION
+    )
+    assert active["reconcile_due"] == "hard"
+    active_without_due = copy.deepcopy(active)
+    active_without_due["reconcile_due"] = None
+    assert active_without_due == active_before
+    assert any(
+        incident
+        == {
+            "type": "old_generation_event",
+            "execution_id": EXECUTION,
+            "event_kind": "child_terminal",
+            "event_id": "literal-late-generation-one",
+            "event_attempt": 1,
+            "event_generation": 1,
+            "active_attempt": 1,
+            "active_generation": 2,
+            "recorded_at": incident["recorded_at"],
+        }
+        for incident in persisted["incidents"]
+    )
+    assert active["generation"] == 2
+    assert active["native_child_id"] == "native-generation-2"
+    assert active["result_application"] == active_before["result_application"]
+
+
+def test_public_sessionstart_emits_only_after_durable_reconciliation(tmp_path) -> None:
+    """The native hook response cannot outrun the ledger's exclusive lock."""
+    harness_root = tmp_path / "harness"
+    ledger_path = harness_root / "threads" / SESSION / "executions.json"
+    ledger_path.parent.mkdir(parents=True)
+    ledger = registered()
+    ledger["executions"][0]["hard_deadline"] = "2020-01-01T00:00:00Z"
+    ledger_path.write_text(json.dumps(ledger), encoding="utf-8")
+    ledger_path.chmod(0o600)
+    assert ledger_api.load_trusted(ledger_path, SESSION) is not None
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_bd = fake_bin / "bd"
+    fake_bd.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, sys\n"
+        "args = [arg for arg in sys.argv[1:] if arg != '--json']\n"
+        f"if args == ['show', {BEAD!r}]:\n"
+        f"    print(json.dumps([{{'id': {BEAD!r}, 'status': 'closed', "
+        f"'parent': {ROOT!r}}}]))\n"
+        f"elif args == ['show', {ROOT!r}]:\n"
+        f"    print(json.dumps([{{'id': {ROOT!r}, 'status': 'closed'}}]))\n"
+        "else:\n"
+        "    raise SystemExit(2)\n",
+        encoding="utf-8",
+    )
+    fake_bd.chmod(0o755)
+    payload_path = tmp_path / "session-start.json"
+    payload_path.write_text(json.dumps(claude_session_start()), encoding="utf-8")
+    env = os.environ.copy()
+    env["HARNESS_ROOT"] = str(harness_root)
+    env["PATH"] = f"{fake_bin}{os.pathsep}{env.get('PATH', '')}"
+
+    lock_path = ledger_path.with_name(f".{ledger_path.name}.lock")
+    process: subprocess.Popen[str] | None = None
+    with lock_path.open("w+") as lock_file, payload_path.open() as payload_file:
+        lock_path.chmod(0o600)
+        fcntl.flock(lock_file, fcntl.LOCK_EX)
+        try:
+            process = subprocess.Popen(
+                [sys.executable, str(BIN / "execution_reconcile.py")],
+                stdin=payload_file,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=env,
+            )
+            assert process.stdout is not None
+            readable, _writable, _exceptional = select.select(
+                [process.stdout], [], [], 1.0
+            )
+            assert readable == []
+            assert process.poll() is None
+            locked = ledger_api.load_trusted(ledger_path, SESSION)
+            assert locked is not None
+            assert locked["executions"][0]["reconcile_due"] is None
+        finally:
+            fcntl.flock(lock_file, fcntl.LOCK_UN)
+
+    assert process is not None
+    stdout, stderr = process.communicate(timeout=5)
+    assert process.returncode == 0, stderr
+    output = json.loads(stdout)
+    context = output["hookSpecificOutput"]["additionalContext"]
+    assert "crossed its hard deadline" in context
+    persisted = ledger_api.load_trusted(ledger_path, SESSION)
+    assert persisted is not None
+    assert persisted["executions"][0]["reconcile_due"] == "hard"
