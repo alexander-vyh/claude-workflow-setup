@@ -8,6 +8,7 @@ import os
 import signal
 import subprocess
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -132,8 +133,7 @@ def _output_tail(stream) -> str:
     stream.seek(max(0, size - BOOTSTRAP_OUTPUT_TAIL_BYTES))
     raw = stream.read(BOOTSTRAP_OUTPUT_TAIL_BYTES)
     decoded = raw.decode("utf-8", errors="replace")
-    escaped = decoded.encode("unicode_escape").decode("ascii")
-    return escaped[-BOOTSTRAP_OUTPUT_TAIL_BYTES:]
+    return decoded.encode("unicode_escape").decode("ascii")
 
 
 def _output_diagnostic(stdout_stream, stderr_stream) -> str:
@@ -147,40 +147,34 @@ def _output_diagnostic(stdout_stream, stderr_stream) -> str:
     return "; " + "; ".join(parts) if parts else ""
 
 
-def _process_group_exists(process_group: int) -> bool:
-    try:
-        os.killpg(process_group, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
-
-
 def _terminate_process_group(process: subprocess.Popen[bytes]) -> None:
     process_group = process.pid
+    termination_delivered = False
     try:
         os.killpg(process_group, signal.SIGTERM)
+        termination_delivered = True
     except ProcessLookupError:
         pass
+
+    # Do not reap the session leader until after the final group signal. Its
+    # unreaped PID pins the process-group identity and prevents a reuse race.
+    time.sleep(BOOTSTRAP_TERMINATION_GRACE_SECONDS)
+    try:
+        os.killpg(process_group, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    except PermissionError:
+        # macOS can report EPERM for a group containing only unsignalable
+        # zombies. This is safe only after TERM was successfully delivered to
+        # the transaction-owned group while its leader was still pinned.
+        if not termination_delivered:
+            raise
 
     try:
         process.wait(timeout=BOOTSTRAP_TERMINATION_GRACE_SECONDS)
     except subprocess.TimeoutExpired:
-        pass
-
-    if _process_group_exists(process_group):
-        try:
-            os.killpg(process_group, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-
-    if process.poll() is None:
-        try:
-            process.wait(timeout=BOOTSTRAP_TERMINATION_GRACE_SECONDS)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait()
+        process.kill()
+        process.wait()
 
 
 def run_bootstrap(contract: BootstrapContract, target: Path) -> None:

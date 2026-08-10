@@ -69,6 +69,41 @@ def git(
     return run(("git", "-C", str(repo), *args), env=env, check=check)
 
 
+def _nul_worktree_records(porcelain: str) -> list[dict[str, str]]:
+    records: list[dict[str, str]] = []
+    for block in porcelain.split("\0\0"):
+        if not block:
+            continue
+        record: dict[str, str] = {}
+        for field in block.split("\0"):
+            if not field:
+                continue
+            key, separator, value = field.partition(" ")
+            record[key] = value if separator else ""
+        records.append(record)
+    return records
+
+
+def registered_branch_owners(
+    ctx: RepositoryContext, branch_ref: str
+) -> list[str]:
+    """Return paths that Git's NUL-delimited registry assigns to a branch."""
+    records = _nul_worktree_records(
+        git(ctx, "worktree", "list", "--porcelain", "-z").stdout
+    )
+    owners: list[str] = []
+    for record in records:
+        if record.get("branch") != branch_ref:
+            continue
+        owner = record.get("worktree")
+        if not owner:
+            raise WorktreeError(
+                f"Git worktree registry omitted the owner path for {branch_ref}"
+            )
+        owners.append(owner)
+    return owners
+
+
 def resolve_repository(path: Path) -> RepositoryContext:
     requested = path.expanduser().resolve()
     top_level = Path(

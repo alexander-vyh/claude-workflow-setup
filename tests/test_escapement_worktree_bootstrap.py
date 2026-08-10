@@ -785,6 +785,58 @@ def test_failed_bootstrap_preserves_valid_replacement_worktree_identity(
     ) in listing
 
 
+def test_failed_bootstrap_preserves_foreign_same_branch_same_sha_worktree(
+    tmp_path: Path, public_worktree_cli: Path
+) -> None:
+    scenario = make_remote_scenario(tmp_path)
+    name = "foreign-branch-owner"
+    branch = "feature/foreign-branch-owner"
+    target = scenario.primary / ".worktrees" / name
+    foreign_target = tmp_path / "foreign\nregistered-worktree"
+    marker = foreign_target / "foreign-owner-marker.txt"
+    code = (
+        "import subprocess; from pathlib import Path; "
+        f"repo={str(scenario.primary)!r}; target={str(target)!r}; "
+        f"foreign={str(foreign_target)!r}; branch={branch!r}; "
+        "subprocess.run(['git','-C',repo,'worktree','remove','--force',target],check=True); "
+        "subprocess.run(['git','-C',repo,'worktree','add',foreign,branch],check=True); "
+        f"Path({str(marker)!r}).write_text('foreign worktree owns branch'); "
+        "raise SystemExit(61)"
+    )
+    source_sha = _commit_contract(
+        scenario.primary,
+        argv=[sys.executable, "-c", code],
+    )
+
+    result = _run_public_cli(
+        public_worktree_cli,
+        scenario.primary,
+        "create",
+        "--repo",
+        str(scenario.primary),
+        "--name",
+        name,
+        "--branch",
+        branch,
+        "--source",
+        source_sha,
+    )
+
+    assert result.returncode != 0
+    assert not target.exists()
+    assert marker.read_text(encoding="utf-8") == "foreign worktree owns branch"
+    assert rev(foreign_target) == source_sha
+    assert rev(scenario.primary, f"refs/heads/{branch}") == source_sha
+    listing = git(scenario.primary, "worktree", "list", "--porcelain", "-z").stdout
+    records = [record.split("\0") for record in listing.split("\0\0") if record]
+    assert any(
+        f"worktree {foreign_target.resolve()}" in record
+        and f"HEAD {source_sha}" in record
+        and f"branch refs/heads/{branch}" in record
+        for record in records
+    )
+
+
 def test_noisy_failure_reports_bounded_output_tails(
     tmp_path: Path, public_worktree_cli: Path
 ) -> None:
@@ -822,6 +874,17 @@ def test_noisy_failure_reports_bounded_output_tails(
     assert "useful stdout tail" in result.stderr
     assert "useful stderr tail" in result.stderr
     assert "\x1b" not in result.stderr
-    assert "\\x1b" in result.stderr
-    assert len(result.stderr.encode("utf-8")) < 40_000
+    failure = result.stderr.removesuffix("\n")
+    stderr_section, stdout_tail = failure.rsplit("; stdout tail: ", maxsplit=1)
+    _prefix, stderr_tail = stderr_section.rsplit("; stderr tail: ", maxsplit=1)
+    stdout_suffix = b" useful stdout tail\n"
+    stderr_suffix = b"\x1b[31m useful stderr tail\n"
+    expected_stdout = (
+        b"o" * (8192 - len(stdout_suffix)) + stdout_suffix
+    ).decode("ascii").encode("unicode_escape").decode("ascii")
+    expected_stderr = (
+        b"e" * (8192 - len(stderr_suffix)) + stderr_suffix
+    ).decode("ascii").encode("unicode_escape").decode("ascii")
+    assert stdout_tail == expected_stdout
+    assert stderr_tail == expected_stderr
     _assert_no_transaction(scenario.primary, name, branch)

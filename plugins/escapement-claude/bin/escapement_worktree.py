@@ -23,6 +23,7 @@ from escapement_worktree_git import (
     ResolvedSource,
     WorktreeError,
     git,
+    registered_branch_owners,
     resolve_default_source,
     resolve_explicit_source,
     resolve_repository,
@@ -352,6 +353,13 @@ def rollback_created_artifacts(
                 f"{branch_ref}: expected {expected_sha}, found {current_sha}"
             )
         else:
+            owners = registered_branch_owners(ctx, branch_ref)
+            if owners:
+                residue.append(
+                    f"refused to delete registered branch {branch_ref}: "
+                    f"owned by worktree {owners[0]!r}"
+                )
+                return residue
             deleted = git(
                 ctx,
                 "update-ref",

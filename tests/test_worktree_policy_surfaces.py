@@ -179,8 +179,7 @@ def test_bootstrap_output_tail_memory_bound_is_statically_pinned() -> None:
             and isinstance(node.value, ast.Constant)
             and isinstance(node.value.value, int)
         ]
-        assert len(bounds) == 1, path
-        assert 0 < bounds[0] <= 16 * 1024, (path, bounds[0])
+        assert bounds == [8192], (path, bounds)
         calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
         assert any(
             isinstance(call.func, ast.Attribute)
@@ -203,6 +202,35 @@ def test_bootstrap_output_tail_memory_bound_is_statically_pinned() -> None:
                     and keyword.value.value.id == "subprocess"
                     and keyword.value.attr == "PIPE"
                 ), path
+
+
+def test_branch_owner_scan_uses_nul_delimited_git_porcelain() -> None:
+    for path in (
+        ROOT / "bin" / "escapement_worktree_git.py",
+        ROOT / "plugins" / "escapement" / "bin" / "escapement_worktree_git.py",
+        ROOT
+        / "plugins"
+        / "escapement-claude"
+        / "bin"
+        / "escapement_worktree_git.py",
+    ):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        git_argument_lists = [
+            [
+                argument.value
+                for argument in call.args
+                if isinstance(argument, ast.Constant)
+                and isinstance(argument.value, str)
+            ]
+            for call in ast.walk(tree)
+            if isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Name)
+            and call.func.id == "git"
+        ]
+        assert any(
+            arguments == ["worktree", "list", "--porcelain", "-z"]
+            for arguments in git_argument_lists
+        ), path
 
 
 def test_obsolete_generated_location_guard_copies_do_not_exist() -> None:

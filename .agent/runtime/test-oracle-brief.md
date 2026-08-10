@@ -982,12 +982,14 @@ populated, and the actual affected-test hook reuses it.
   fail and invokes the existing identity-guarded rollback. Rollback may remove
   only the exact worktree/ref created by this transaction and must preserve a
   replaced path, moved branch, or foreign registration, including a valid
-  same-path/same-branch worktree whose HEAD differs from the source SHA.
+  same-path/same-branch worktree whose HEAD differs from the source SHA and a
+  foreign-path worktree that owns the same branch at the same source SHA.
 - Bootstrap runs in a dedicated process session. On timeout Escapement
   terminates and reaps the whole process group before rollback, so delayed
   descendants cannot recreate the target after the transaction returns.
 - Child output capture is memory-bounded. Failure and timeout errors expose
-  fixed-size, control-escaped stderr/stdout tails that remain useful for repair.
+  exactly the final 8192 bytes per stream as bounded, control-escaped
+  stderr/stdout tails that remain useful for repair.
 - Keep policy generic and stdlib-only. Do not hard-code CAKE, `uv`, `.env`,
   pytest, testmon, or a `worktree-bootstrap` naming convention in Escapement.
 - Render the complete runtime sibling closure into both plugin distributions.
@@ -1027,7 +1029,8 @@ leave no transaction-owned target/ref; race fixtures that replace or move those
 identities must remain intact after rollback. A delayed descendant must be dead
 before rollback and remain unable to recreate the target after its planned write
 time. A valid registered replacement at the same path and branch but a different
-HEAD must also survive intact.
+HEAD must also survive intact. A valid foreign-path registration owning the
+same branch and source SHA must preserve its path, marker, registration, and ref.
 
 ## Positive control
 
