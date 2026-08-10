@@ -945,3 +945,133 @@ than risk blocking an unrelated command.
 Run `python3 -m pytest claude/hooks/tests/test_beads_worktree_guard.py -q`,
 render and check generated surfaces, then commit and push from the
 Beads-created worktree. Confirm the remote branch points to the new commit.
+
+---
+
+# Test Oracle Brief — discovery interaction depth by blast radius
+
+## 1. Business invariant
+
+Discovery must make the user a co-author before committing to a high-blast-radius
+or hard-to-reverse solution. After the six framing fields are confirmed, high-risk
+work asks 2-4 explicit, alternative-bearing load-bearing forks across at least two
+decision categories and waits for every explicit answer before architecture,
+recommendations, rollout plans, tasks, walking skeletons, or other solution
+commitments. Low-blast, cheaply reversible work keeps the lightweight
+draft-and-react path. The gate is cleared only when the later draft reflects the
+user's selected ownership, compatibility, rollout, and failure policy.
+
+## 2. Independent source of truth
+
+The primary oracle is the ordered transcript from a fresh agent consuming the
+complete canonical skill: first-turn ordering, question shape/category breadth,
+whether partial answers remain gated, and whether a second-turn draft reflects the
+answers delivered in that same conversation. Strict and federated answer sets start
+from the same first-turn prompt and diverge only at the user's answer turn. A
+committed, redacted transcript corpus is bound to the exact canonical skill SHA and
+runner metadata. Static prose tests are secondary backstops, never the behavioral
+oracle by themselves.
+
+## 3. Solution constraints
+
+- Canonical guidance lives in `claude/skills/discovery/SKILL.md`; the Claude plugin
+  copy is renderer-generated and must remain byte-identical.
+- Interaction depth is conditional on consequences and reversibility, not schema,
+  domain names, or risk keywords.
+- High-risk questions are 2-4 explicit forks with 2-3 mutually exclusive
+  alternatives and material tradeoffs, spanning at least two of authority/ownership,
+  migration/compatibility, enforcement/rollout, and rollback/failure policy.
+- The blast-radius gate does not repeat the six framing fields or route every task
+  through a heavy interview.
+- Silence, `use your judgment`, and answers to only some forks do not authorize a
+  draft. Only unresolved forks are re-asked.
+- Unknown blast radius or reversibility fails closed to one consequence probe.
+- A completeness pass occurs before composing so a newly discovered load-bearing
+  fork cannot be deferred until after a draft.
+- Evaluation records contain no credentials or private project content; generic
+  prompts and redacted outputs are durable under `tests/evals/`.
+
+## 4. Invalid solution classes
+
+- A paragraph-only addition that leaves the unconditional zero-upfront/one-mid-draft
+  cap authoritative elsewhere in the skill.
+- Keyword- or domain-only routing such as treating `architecture`, `migration`,
+  `security`, or `breaking API` as the high-risk classifier.
+- Drafting a recommended solution, architecture, rollout, tasks, or walking skeleton
+  before the required forks are explicitly answered.
+- Re-asking the six framing fields instead of surfacing load-bearing alternatives.
+- Generic questions without alternatives or tradeoffs.
+- Asking forks and then ignoring selected ownership, rollout, or rollback in the
+  draft.
+- Treating `use your judgment`, silence, or a single answered fork as sufficient.
+- Applying the heavy interview to all work, including matched copy-only,
+  documentation-only, and read-only controls.
+- Hardcoded low-risk bypasses or a corpus made only of obvious risk keywords.
+
+## 5. Fragile implementation to reject
+
+The named tempting mutant is: "Classify high risk only when the prompt contains
+architecture, migration, security, or breaking API; draft a recommended solution
+first, then ask the forks." It can coexist with a correct-looking paragraph and pass
+the original four phrase/order tests. The strengthened oracle rejects it three ways:
+(1) the committed corpus is SHA-bound to the exact skill, so inserting the
+contradiction invalidates the corpus; (2) the skill-contract validator reports both
+keyword-only routing and draft-before-forks contradictions; and (3) high-risk corpus
+prompts avoid those obvious keywords while their matched low-risk controls share
+domain vocabulary.
+
+## 6. Negative control
+
+- No-guidance high-risk prompts covering governed metric authority, destructive
+  record transition, account visibility, and shared caller contract must show the
+  baseline failure: solution commitments before only one question. A baseline that
+  already asks the required forks is discarded or reworked.
+- A transcript with `Draft direction`, architecture, rollout, tasks, or walking
+  skeleton prose before the first required fork must fail even if its scorecard says
+  pass.
+- A high-risk response containing only generic questions, fewer than two categories,
+  or no alternatives must fail.
+- Partial-answer responses that draft must fail.
+- Differential drafts that omit or contradict chosen authority, rollout, or rollback
+  must fail.
+- Duplicate/missing run IDs, superseded ambiguity runs, wrong model/runner flags,
+  wrong skill SHA, failed exit status, unordered turns, or incomplete rubric fields
+  must fail corpus validation.
+
+## 7. Positive control
+
+- Matched low-risk prompts using contribution-margin, identifier, invoice, and
+  submit-order vocabulary remain lightweight: they draft normally and never receive
+  the 2-4-fork interview.
+- High-risk first turns ask 2-4 alternative-bearing forks across the required category
+  breadth before solution commitment and then stop.
+- Unknown cross-domain cases ask the consequence/reversibility probe and stop.
+- Partial answers acknowledge resolved choices, re-ask only unresolved choices, and
+  do not draft.
+- Ordered strict and federated conversations reuse the same turn-one prompt/session;
+  their turn-two drafts visibly differ in authority, rollout, and rollback.
+
+## 8. Missing/unresolved handling
+
+Unknown blast radius or reversibility fails closed to the consequence probe. Missing
+or partial fork answers fail closed to continued questioning. Missing corpus metadata,
+transcripts, score fields, hashes, timestamps, or runner evidence fail validation.
+An ambiguous scenario that already establishes high blast is superseded rather than
+counted as an unknown-risk pass. An unavailable fresh-agent runner is a precise
+blocker; source grep or static prose checks cannot substitute for transcript evidence.
+
+## 9. Final outcome verification
+
+1. Run the committed corpus validator against all baseline and final records; it must
+   report the declared matrix, unique IDs, exact skill SHA/model/flags, complete
+   rubrics, and zero unexpected final-guidance violations.
+2. Run 5+ final repetitions for high, matched low, unknown, and partial-answer paths.
+3. Run 5+ real ordered two-turn strict and federated conversations. Each pair starts
+   with the same prompt in its own fresh session, persists the turn-one forks, resumes
+   that exact session with the selected answer set, and persists the turn-two draft.
+4. Manually review every final response. Any ordering, alternatives, category,
+   answer-gating, answer-reflection, or late-load-bearing-fork violation blocks.
+5. Run `pytest -q tests/test_discovery_interaction_contract.py`,
+   `python3 tests/evals/discovery_blast_radius/validate_corpus.py`,
+   `python3 tools/render_agent_surfaces.py --check`, relevant agent-surface tests,
+   Ruff, and `git diff --check`.
