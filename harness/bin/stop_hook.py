@@ -7,8 +7,9 @@ Reads the Anthropic hook protocol JSON from stdin, calls would_block_stop
 against the active thread directory, logs the decision to incidents.jsonl,
 and emits a block decision (with constructive resumption prompt) when warranted.
 
-v0: single active thread at harness/threads/current/. The session_id from the
-hook payload is included in the incidents log for later correlation.
+State is keyed by the hook payload's session_id and, for a subagent, the
+CLAUDE_AGENT_ID actor identity. The session_id is also included in the incidents
+log for correlation.
 
 Coexists with ~/.claude/hooks/validate_no_shirking.py — both run on Stop;
 both can block. Additive coverage.
@@ -32,6 +33,7 @@ _TRANSCRIPT_WINDOW = 25_000  # bytes — same tail size as validate_no_shirking.
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 from would_block_stop import (  # noqa: E402
+    InvalidActorIdentity,
     would_block_stop,
     load_thread_state,
     thread_dir_for_session,
@@ -40,6 +42,7 @@ from would_block_stop import (  # noqa: E402
     _load_json,
     _parse_iso,
 )
+from thread_identity import state_identity  # noqa: E402
 import session_isolation  # noqa: E402  (per-session isolation steer, bead e9v.4)
 import winddown_outage_sentinel as _wos  # noqa: E402
 import datetime as _dt2  # noqa: E402
@@ -945,7 +948,21 @@ def main() -> int:
     session_id = payload.get("session_id") or "unknown"
     transcript_path = payload.get("transcript_path", "")
 
-    thread_dir = thread_dir_for_session(session_id, HARNESS_ROOT)
+    try:
+        thread_dir = thread_dir_for_session(session_id, HARNESS_ROOT)
+        checkout_id = state_identity(session_id)
+    except InvalidActorIdentity as exc:
+        reason = f"continuation-harness: invalid_actor_identity. {exc}"
+        _log_incident({
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "session_id": session_id,
+            "decision": "block",
+            "reason": "invalid_actor_identity",
+            "was_correct": None,
+            "notes": str(exc),
+        })
+        print(json.dumps({"decision": "block", "reason": reason}))
+        return 0
     thread_dir.mkdir(parents=True, exist_ok=True)
 
     # bead e9v.4: stamp this session's checkout identity (worktree root + fresh
@@ -953,7 +970,7 @@ def main() -> int:
     # stamp failure must never affect the Stop decision.
     _now_dt = _dt2.datetime.now(_dt2.timezone.utc)
     try:
-        session_isolation.write_checkout(thread_dir, session_id, os.getcwd(), _now_dt)
+        session_isolation.write_checkout(thread_dir, checkout_id, os.getcwd(), _now_dt)
     except Exception:  # noqa: BLE001 — deliberate never-raise-into-the-Stop-hook boundary
         pass
 
@@ -1127,7 +1144,7 @@ def main() -> int:
         if reason == "no_completion_or_resumption_proof":
             try:
                 steer = session_isolation.isolation_steer_for_thread(
-                    HARNESS_ROOT, session_id, thread_dir, _now_dt
+                    HARNESS_ROOT, checkout_id, thread_dir, _now_dt
                 )
             except Exception:  # noqa: BLE001 — never let the steer crash the Stop decision
                 steer = None

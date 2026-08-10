@@ -5,7 +5,8 @@ Helper for agents to scaffold a contract.json in the active thread directory.
 Usage:
   init_contract.py --goal "..." --verify "shell command" [--expected-exit N] [--source agent-declared|bead-derived|user-authored]
 
-Writes to $HARNESS_THREAD_DIR/contract.json (default: harness/threads/current/contract.json).
+Writes to the exact HARNESS_THREAD_DIR override, actor-owned session directory,
+or legacy parent session directory resolved by thread_identity.py.
 """
 
 from __future__ import annotations
@@ -20,7 +21,12 @@ import sys
 import uuid
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from would_block_stop import thread_dir_for_session, sanitize_session_id, harness_home  # noqa: E402
+from would_block_stop import (  # noqa: E402
+    InvalidActorIdentity,
+    thread_dir_for_session,
+    sanitize_session_id,
+    harness_home,
+)
 
 # Commands that exit 0 regardless of system state — i.e. not oracles at all.
 # An exact whole-segment match against this set (case-insensitive) is trivial.
@@ -121,7 +127,11 @@ def main(argv: list[str]) -> int:
     # Resolve the per-session thread dir the same way the Stop hook and verify do,
     # so a session's contract lands where its own Stop hook will look for it.
     session_id = os.environ.get("CLAUDE_CODE_SESSION_ID")
-    thread_dir = thread_dir_for_session(session_id, harness_root)
+    try:
+        thread_dir = thread_dir_for_session(session_id, harness_root)
+    except InvalidActorIdentity as exc:
+        print(f"refusing to write contract: invalid actor identity: {exc}", file=sys.stderr)
+        return 2
     thread_dir.mkdir(parents=True, exist_ok=True)
 
     contract = build_contract(

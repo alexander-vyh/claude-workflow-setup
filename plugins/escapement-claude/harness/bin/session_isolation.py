@@ -125,13 +125,14 @@ def write_checkout(
 
 
 def read_checkouts(harness_root: pathlib.Path) -> list[dict]:
-    """Read every `threads/*/checkout.json` under harness_root. Skips malformed."""
+    """Read supported parent and actor checkout records. Skips malformed."""
     records: list[dict] = []
     threads = pathlib.Path(harness_root) / "threads"
     if not threads.is_dir():
         return records
-    for child in threads.iterdir():
-        path = child / "checkout.json"
+    paths = list(threads.glob("*/checkout.json"))
+    paths.extend(threads.glob("*/agents/*/checkout.json"))
+    for path in sorted(paths):
         if not path.is_file():
             continue
         try:
