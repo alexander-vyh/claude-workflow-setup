@@ -41,24 +41,6 @@ def _allow() -> int:
     return 0
 
 
-def _head_src(repo_root: Path, rel: str) -> str:
-    """Committed (HEAD) content of `rel`, or "" if it is new/unknown to git."""
-    from oracle_downgrade_warning_gate import git_output
-
-    return git_output(repo_root, ["show", f"HEAD:{rel}"])
-
-
-def _worktree_src(repo_root: Path, rel: str) -> str:
-    """Current working-tree content of `rel`, or "" if deleted."""
-    path = repo_root / rel
-    if not path.exists():
-        return ""
-    try:
-        return path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return ""
-
-
 def _build_message(findings: list[tuple[str, list[str]]]) -> str:
     lines = [
         "⚠ Oracle-downgrade advisory (non-blocking) — changed test file(s) look like "
@@ -77,15 +59,17 @@ def _build_message(findings: list[tuple[str, list[str]]]) -> str:
 
 
 def _collect_findings(repo_root: Path) -> list[tuple[str, list[str]]]:
-    from oracle_downgrade_warning_gate import changed_files, is_test_file
+    from git_change_scope import net_tree_scope, revision_file, worktree_file
+    from oracle_downgrade_warning_gate import is_test_file
     import oracle_strength_diff as osd
 
     findings: list[tuple[str, list[str]]] = []
-    for rel in changed_files(repo_root):
+    scope = net_tree_scope(repo_root)
+    for rel in scope.files:
         if not is_test_file(rel):
             continue
-        old_src = _head_src(repo_root, rel)
-        new_src = _worktree_src(repo_root, rel)
+        old_src = revision_file(repo_root, scope.baseline, rel)
+        new_src = worktree_file(repo_root, rel)
         if not old_src and not new_src:
             continue
         try:

@@ -945,3 +945,91 @@ than risk blocking an unrelated command.
 Run `python3 -m pytest claude/hooks/tests/test_beads_worktree_guard.py -q`,
 render and check generated surfaces, then commit and push from the
 Beads-created worktree. Confirm the remote branch points to the new commit.
+
+---
+
+# Test Oracle Brief — committed oracle-downgrade detection (`escapement-gdf`)
+
+## Business invariant
+
+When a feature branch weakens a test oracle, both supported policy boundaries
+must still surface the downgrade after the weakening has been committed: a
+landing command receives the existing advisory `ask`, and the Stop hook emits
+its non-blocking advisory. A clean working tree must not erase the branch's
+committed evidence. Genuine strengthening, no-op churn, and changes outside the
+feature branch must remain silent.
+
+## Independent source of truth
+
+Correctness is determined by two sources independent of the hook's change-scope
+implementation: (1) Git's merge-base/landing-ref-to-final-tree comparison in
+disposable repositories with real commits, and (2) the adjudicated portable
+oracle-strength corpus, whose expected WARN/NONE decisions predate this change.
+The public hook subprocess output—not a private helper call—is the observable
+decision boundary.
+
+## Solution constraints
+
+- Preserve the corpus-backed advisory-only decision: PreToolUse may `ask`; Stop
+  may emit a `systemMessage`; neither path may hard-deny or block.
+- Preserve staged, unstaged, deletion, rename, and untracked-test behavior while
+  adding committed branch scope.
+- Compare the landing baseline to the final candidate tree. If a file has both
+  committed and uncommitted edits, evaluate its net branch result once rather
+  than summing intermediate diffs.
+- Resolve the declared/default landing ref without assuming branch name `main`;
+  keep hook execution repository-relative and host-surface parity intact.
+- Reuse the existing per-function strength evaluator and its fail-open parse
+  behavior. Do not revive the refuted negative-control hard-block tier.
+
+## Invalid solution classes
+
+- Looking only at `HEAD` versus the working tree, index, or untracked files.
+- Looking only at the last commit rather than the full landing range.
+- Warning on every committed test-file change or on assertion-count decreases.
+- Hard-blocking a negative-control removal that the adjudicated corpus cannot
+  mechanically distinguish from legitimate red-to-green TDD cleanup.
+- Comparing against a hard-coded `main`, analyzing pre-branch history, or
+  double-counting committed plus worktree versions of the same file.
+- Testing only a change-scope helper while the public PreToolUse/Stop hook still
+  silently allows a clean committed weakening.
+
+## Fragile implementation to reject
+
+The tempting shortcut is to retain `changed_files()` and `_head_src()` exactly
+as they are. That implementation catches an uncommitted weakening but returns
+an empty change set immediately after `git commit`, which is the reported bug.
+The same disposable feature branch must warn before and after commit.
+
+## Negative control
+
+From a repository whose default branch contains a strong outcome assertion,
+create a feature branch, commit a weakening, leave the working tree clean, and
+invoke both public hooks. Stop must emit an advisory naming the test file, and a
+landing-shaped PreToolUse payload must return `permissionDecision=ask`. A second
+fixture with two feature commits must prove the comparison reaches the landing
+base rather than only `HEAD^`.
+
+## Positive control
+
+A clean feature branch that only strengthens the assertion must be silent at
+both boundaries. A baseline-only weakening that predates the feature branch
+must also be silent, proving the range is scoped rather than repository-wide.
+Existing uncommitted weakening controls must continue to warn.
+
+## Missing/unresolved handling
+
+This gate remains advisory and fail-open. If a landing ref, merge base, file, or
+language cannot be resolved confidently, it must never manufacture a deny.
+The unresolved branch-range path must retain any independently observable
+working-tree advisory rather than discarding it; diagnostics/signals may record
+the lost committed-range coverage.
+
+## Final outcome verification
+
+Run the canonical Claude and rendered Codex hook entrypoints as subprocesses in
+fresh disposable Git repositories. For a clean feature branch with a committed
+weakening, verify Stop emits the advisory and landing emits exactly one `ask`;
+for a committed strengthening and baseline-only change, verify both are silent.
+Then run the portable strength corpus, focused hook suites, generated-surface
+parity, renderer check, and Ruff.

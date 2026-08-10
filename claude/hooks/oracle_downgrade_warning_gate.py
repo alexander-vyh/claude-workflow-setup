@@ -12,6 +12,7 @@ It looks only at changed test diffs and warns on conservative signals:
 
 from __future__ import annotations
 
+import difflib
 import json
 import os
 import re
@@ -26,8 +27,12 @@ sys.path.insert(0, str(Path(__file__).parent))
 try:
     from _gate_signal import record as _record_signal
 except ImportError:  # pragma: no cover
+
     def _record_signal(*_args, **_kwargs) -> None:
         return None
+
+
+from git_change_scope import net_tree_scope, revision_file, worktree_file
 
 
 # Test Oracle Brief location (matches test_oracle_brief_gate.py BRIEF_RELATIVE_PATH).
@@ -115,8 +120,12 @@ STRING_LITERAL_RE = re.compile(
     re.VERBOSE | re.DOTALL,
 )
 
-SALESFORCE_ID_RE = re.compile(r"^(?:001|003|005|006|00Q|012|500|701)[A-Za-z0-9]{12}(?:[A-Za-z0-9]{3})?$")
-UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+SALESFORCE_ID_RE = re.compile(
+    r"^(?:001|003|005|006|00Q|012|500|701)[A-Za-z0-9]{12}(?:[A-Za-z0-9]{3})?$"
+)
+UUID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
 HEX_TOKEN_RE = re.compile(r"^[0-9a-fA-F]{24,}$")
 
 
@@ -201,33 +210,8 @@ def find_git_root(start: str | Path) -> Path | None:
     return Path(result.stdout.strip())
 
 
-def git_output(repo_root: Path, args: list[str]) -> str:
-    try:
-        result = subprocess.run(
-            ["git", *args],
-            cwd=str(repo_root),
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return ""
-    if result.returncode != 0:
-        return ""
-    return result.stdout
-
-
-def git_files(repo_root: Path, args: list[str]) -> list[str]:
-    return [line.strip() for line in git_output(repo_root, args).splitlines() if line.strip()]
-
-
 def changed_files(repo_root: Path) -> list[str]:
-    files: set[str] = set()
-    files.update(git_files(repo_root, ["diff", "--name-only"]))
-    files.update(git_files(repo_root, ["diff", "--cached", "--name-only"]))
-    files.update(git_files(repo_root, ["ls-files", "--others", "--exclude-standard"]))
-    return sorted(files)
+    return list(net_tree_scope(repo_root).files)
 
 
 def is_test_file(filepath: str) -> bool:
@@ -251,23 +235,27 @@ def parse_diff_lines(diff_text: str) -> tuple[list[str], list[str]]:
     return added, deleted
 
 
-def diff_for_file(repo_root: Path, filepath: str) -> tuple[list[str], list[str]]:
-    added: list[str] = []
-    deleted: list[str] = []
-    for args in (
-        ["diff", "--unified=0", "--", filepath],
-        ["diff", "--cached", "--unified=0", "--", filepath],
-    ):
-        a, d = parse_diff_lines(git_output(repo_root, args))
-        added.extend(a)
-        deleted.extend(d)
+def _source_diff_lines(
+    old_src: str,
+    new_src: str,
+    filepath: str,
+) -> tuple[list[str], list[str]]:
+    diff = difflib.unified_diff(
+        old_src.splitlines(),
+        new_src.splitlines(),
+        fromfile=f"a/{filepath}",
+        tofile=f"b/{filepath}",
+        n=0,
+        lineterm="",
+    )
+    return parse_diff_lines("\n".join(diff))
 
-    if (repo_root / filepath).exists() and filepath in git_files(repo_root, ["ls-files", "--others", "--exclude-standard"]):
-        try:
-            added.extend((repo_root / filepath).read_text(encoding="utf-8", errors="replace").splitlines())
-        except OSError:
-            pass
-    return added, deleted
+
+def diff_for_file(repo_root: Path, filepath: str) -> tuple[list[str], list[str]]:
+    scope = net_tree_scope(repo_root)
+    old_src = revision_file(repo_root, scope.baseline, filepath)
+    new_src = worktree_file(repo_root, filepath)
+    return _source_diff_lines(old_src, new_src, filepath)
 
 
 def is_opaque_generated_literal(value: str) -> bool:
@@ -276,11 +264,17 @@ def is_opaque_generated_literal(value: str) -> bool:
         return False
     if any(ch.isspace() for ch in stripped):
         return False
-    if SALESFORCE_ID_RE.match(stripped) or UUID_RE.match(stripped) or HEX_TOKEN_RE.match(stripped):
+    if (
+        SALESFORCE_ID_RE.match(stripped)
+        or UUID_RE.match(stripped)
+        or HEX_TOKEN_RE.match(stripped)
+    ):
         return True
     has_alpha = any(ch.isalpha() for ch in stripped)
     has_digit = any(ch.isdigit() for ch in stripped)
-    return has_alpha and has_digit and bool(re.match(r"^[A-Za-z0-9_:/+=.-]+$", stripped))
+    return (
+        has_alpha and has_digit and bool(re.match(r"^[A-Za-z0-9_:/+=.-]+$", stripped))
+    )
 
 
 def line_has_generated_literal(line: str) -> bool:
@@ -300,7 +294,9 @@ def analyze_file(filepath: str, added: list[str], deleted: list[str]) -> list[Is
 
     for line in added:
         if SKIP_OR_XFAIL_RE.search(line):
-            issues.append(Issue(filepath, "skip-or-xfail-added", f"added: {line_label(line)}"))
+            issues.append(
+                Issue(filepath, "skip-or-xfail-added", f"added: {line_label(line)}")
+            )
 
     deleted_strong = [line for line in deleted if STRONG_ASSERTION_RE.search(line)]
     added_strong = [line for line in added if STRONG_ASSERTION_RE.search(line)]
@@ -358,13 +354,40 @@ def analyze_file(filepath: str, added: list[str], deleted: list[str]) -> list[Is
 
 def analyze(repo_root: Path) -> list[Issue]:
     issues: list[Issue] = []
-    for filepath in changed_files(repo_root):
+    scope = net_tree_scope(repo_root)
+    for filepath in scope.files:
         if not is_test_file(filepath):
             continue
-        added, deleted = diff_for_file(repo_root, filepath)
+        old_src = revision_file(repo_root, scope.baseline, filepath)
+        new_src = worktree_file(repo_root, filepath)
+        added, deleted = _source_diff_lines(old_src, new_src, filepath)
         if not added and not deleted:
             continue
-        issues.extend(analyze_file(filepath, added, deleted))
+        file_issues = analyze_file(filepath, added, deleted)
+
+        # Line-level heuristics cannot distinguish a real strength loss from a
+        # duplicate assertion being deduplicated.  Let the corpus-backed,
+        # per-function differ adjudicate only the strength-loss class; the
+        # independent skip/generated-identity/negative-control signals retain
+        # their existing behavior.  Import/parse uncertainty fails open for the
+        # strength class rather than manufacturing a warning.
+        if any(issue.kind.startswith("strong-assertion-") for issue in file_issues):
+            strength_warn = False
+            try:
+                import oracle_strength_diff as osd
+
+                strength_warn = (
+                    osd.evaluate(old_src, new_src, filepath).level == osd.Level.WARN
+                )
+            except Exception:
+                pass
+            if not strength_warn:
+                file_issues = [
+                    issue
+                    for issue in file_issues
+                    if not issue.kind.startswith("strong-assertion-")
+                ]
+        issues.extend(file_issues)
     return issues
 
 
@@ -381,6 +404,7 @@ def _brief_recently_modified(repo_root: Path) -> bool:
         return False
     try:
         import time
+
         return (time.time() - brief_path.stat().st_mtime) <= _BRIEF_RECENT_WINDOW_SEC
     except OSError:
         return False

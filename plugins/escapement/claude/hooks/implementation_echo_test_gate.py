@@ -30,6 +30,8 @@ except ImportError:  # pragma: no cover
     def _record_signal(*_args, **_kwargs) -> None:
         return None
 
+from git_change_scope import remote_default_ref
+
 try:
     from data_fixture_echo import (
         build_data_fixture_warning,
@@ -350,47 +352,6 @@ def git_files(repo_root: Path, args: list[str]) -> list[str]:
     if result.returncode != 0:
         return []
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
-
-
-def remote_default_ref(repo_root: Path) -> str | None:
-    """Return the locally known remote landing ref only when it names a commit.
-
-    ``refs/remotes/origin/HEAD`` is Git's local symbolic record of the remote
-    default branch.  A feature's tracking ref is deliberately not a fallback:
-    it identifies the feature, not where the change will land.  When the
-    symbolic landing identity is absent or stale, committed scope is unknown
-    and callers must retain only working-tree scope.
-    """
-    try:
-        result = subprocess.run(
-            ["git", "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"],
-            cwd=str(repo_root),
-            capture_output=True,
-            text=True,
-            timeout=5,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    if result.returncode != 0:
-        return None
-    ref = result.stdout.strip()
-    remote_prefix = "refs/remotes/origin/"
-    if not ref.startswith(remote_prefix) or ref == f"{remote_prefix}HEAD":
-        return None
-
-    try:
-        resolved = subprocess.run(
-            ["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
-            cwd=str(repo_root),
-            capture_output=True,
-            text=True,
-            timeout=5,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    return ref if resolved.returncode == 0 and resolved.stdout.strip() else None
 
 
 def committed_change_files(repo_root: Path, landing_ref: str) -> tuple[list[str] | None, str | None]:
