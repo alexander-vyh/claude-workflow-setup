@@ -244,19 +244,24 @@ Claude/Codex plugin surfaces, macOS launchd, Bash deployment tests.
   or missing/closed/foreign beads deny dispatch with an exact preparation command;
   a valid attempt is marked dispatched before native execution.
 
-- [ ] **Step 2: Write PostToolUse binding and duplicate controls**
+- [ ] **Step 2: Keep unverified PostToolUse binding fail-closed**
 
-  Capture the documented current Agent result fixture. Bind the native child ID
-  once; duplicate delivery is idempotent; an unparseable result leaves the
-  attempt queued and therefore subject to its start deadline.
+  No installed Agent PostToolUse payload fixture currently proves where a native
+  child ID is exposed. Test `post_tool` against malformed/unverified fixtures and
+  require it to leave the attempt queued for start-deadline reconciliation.
+  Assert the generated Claude surface does **not** register the Agent PostToolUse
+  hook. Keep the normalized `child_bound` ledger event independently tested so a
+  later real installed capture can enable the adapter without changing core
+  semantics.
 
 - [ ] **Step 3: Reject adapter-level generation laundering**
 
   Bind distinct native child IDs to generations one and two, then deliver the
-  literal late generation-one terminal fixture through every applicable public
-  adapter/reconciler ingress. Generation two and its application state remain
+  literal late generation-one terminal fixture through every currently verified
+  public reconciler ingress. Generation two and its application state remain
   untouched. A payload without enough identity to determine generation is
-  unresolved; adapters must never default missing generation to current.
+  unresolved; adapters must never default missing generation to current. Do not
+  manufacture an Agent PostToolUse fixture to satisfy this control.
 
 - [ ] **Step 4: Write SessionStart reconciliation controls**
 
@@ -273,10 +278,11 @@ Claude/Codex plugin surfaces, macOS launchd, Bash deployment tests.
 
 - [ ] **Step 6: Implement adapters and renderer packaging**
 
-  Register Claude PreToolUse/PostToolUse `Agent` hooks. Register the same
-  `execution_reconcile.py` SessionStart source for Claude and Codex. Extend the
-  renderer’s plugin-relative command rewriting and Codex support-file bundle so
-  it never calls through `~/.claude`.
+  Register the verified Claude PreToolUse `Agent` hook and the same
+  `execution_reconcile.py` SessionStart source for Claude and Codex. Leave Agent
+  PostToolUse registration disabled until an installed payload fixture proves
+  the child identifier. Extend the renderer’s plugin-relative command rewriting
+  and Codex support-file bundle so it never calls through `~/.claude`.
 
 - [ ] **Step 7: Render and run GREEN**
 
