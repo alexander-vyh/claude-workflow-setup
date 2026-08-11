@@ -945,3 +945,70 @@ than risk blocking an unrelated command.
 Run `python3 -m pytest claude/hooks/tests/test_beads_worktree_guard.py -q`,
 render and check generated surfaces, then commit and push from the
 Beads-created worktree. Confirm the remote branch points to the new commit.
+
+---
+
+# Test Oracle Brief — oracle-independence human handoff (`escapement-mol-5s2`)
+
+## Business invariant
+
+The recorded A/B judgments must remain identified as an AI-only pilot. A human
+result exists only after the user supplies distinct Condition A and Condition B
+responses; until then, the human-only outcome is explicitly blocked.
+
+## Independent source of truth
+
+The committed Condition A and B rows and sealed answer key determine the
+AI-pilot arithmetic. The future user's two responses—not repository prose,
+actor labels, commit authorship, or generated receipts—determine whether a
+human review occurred.
+
+## Solution constraints
+
+- Preserve the six existing cases and the pilot's recorded judgments.
+- Correct the sealed-key timestamp without changing its observed instant.
+- Supply one concise packet that a person can run in order without seeing the
+  prior AI judgments.
+- Do not invent a human response or add signatures, receipts, manifests, or
+  other self-authentication machinery.
+
+## Invalid solution classes
+
+Relabeling the AI reviewer as human, implying that the pilot completes the
+human outcome, exposing references before Condition A, copying the AI verdicts
+into a purported human response, or reporting totals that disagree with the
+six recorded rows are invalid.
+
+## Fragile implementation to reject
+
+The tempting shortcut is to keep the prior result unchanged and infer human
+authorship from a name, commit author, or prose label. The verification must
+instead require explicit AI disclosure and must not accept a claimed human
+result when no user response exists.
+
+## Negative control
+
+The unmodified pilot artifacts fail because they omit the AI reviewer identity,
+mislabel a local-offset timestamp as UTC, and provide no runnable human handoff.
+A packet that reveals the planted changes or claims a completed human result
+also fails.
+
+## Positive control
+
+The pilot remains publishable as pilot evidence: its six A/B rows join exactly
+to the condition artifacts and still compute 4/6 versus 6/6. A packet covering
+all six cases and both ordered conditions is valid while honestly saying that
+the human response is absent.
+
+## Missing/unresolved handling
+
+Missing human responses block the human-only bead. They do not justify
+fabricating provenance, discarding the AI pilot, or treating a negative future
+result as invalid.
+
+## Final outcome verification
+
+Run `pytest -q tests/test_oracle_independence_human_probe.py`; inspect the
+pilot labels, scoring packet, diff, and worktree status; then mark
+`escapement-mol-5s2` blocked on the external human response and commit the
+test/brief-only handoff.

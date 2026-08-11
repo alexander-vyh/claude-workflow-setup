@@ -1,4 +1,7 @@
-# Oracle-Independence Skeleton Probe — Final Result
+# Oracle-Independence Skeleton Probe — AI Pilot Result
+
+> **AI PILOT ONLY.** An AI subagent produced both condition result sets. This
+> artifact is not human evidence and does not complete the human-only probe.
 
 ## Evidence and scoring rule
 
@@ -40,24 +43,24 @@ Condition B catches; Condition B introduced no new miss.
 
 ## Interpretation
 
-**Premise result under the design's stated binary rule: TRUE.** The
+**AI-pilot premise result under the design's stated binary rule: TRUE.** The
 independent-reference condition caught at least one planted transcription error
 that framing-only missed: `diff-01`. This is neither the FALSE outcome
 (reference changes nothing) nor an inconclusive caught-in-both/missed-in-both
 outcome for every planted case.
 
-This is a **positive, suggestive skeleton result, not validation of the
-human-gate-independence capability**. The reviewer knew a probe was running, so
-vigilance was elevated; the experiment has one self-administered reviewer/trial
-(`n=1`). That contamination can inflate both conditions and does not establish
-the effect's repeatability or its size in the live gate.
+This is a **positive AI-pilot result, not validation of the
+human-gate-independence capability**. The AI reviewer knew a probe was running,
+so vigilance was elevated; the experiment has one self-administered AI
+reviewer/trial (`n=1`). That contamination can inflate both conditions and does
+not establish the effect's repeatability or its size in the live gate.
 
 ## Sealed-key provenance
 
 The scoring source was the external sealed key at
 `/Users/alexandervyhmeister/GitHub/.oracle-probe-answer-key.md`, SHA-256
 `18ed08412ccdd2cbe7322be069c2bab2bac14a86c372093b8210509ef0d6a818`. Its
-filesystem birth/modified timestamp is `2026-06-12T01:27:01Z`, before the
+filesystem birth/modified timestamp is `2026-06-12T01:27:01-07:00`, before the
 Condition A and B commits on `2026-08-09`. The key names the same six seams and
 the exact two corruptions present in the committed probe. Its header retains the
 probe's pre-relocation `cake/...` locator; the case identities and contents, not

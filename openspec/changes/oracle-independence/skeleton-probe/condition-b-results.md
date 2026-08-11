@@ -1,5 +1,6 @@
 # Condition B Results — Framing Plus Independent Reference
 
+- Reviewer: **AI subagent**. This is pilot evidence, not a human-authored review.
 - Evidence boundary: compared each moved body only with its case's tracked `reference.md`; no answer key was opened.
 - Review order: `diff-01` through `diff-06`, sequentially.
 - Verdict meaning: **CLEAN** means the extraction preserves the original body after factoring out the reference's listed mechanical differences; **PLANTED** means a behavior-changing transcription difference was found.

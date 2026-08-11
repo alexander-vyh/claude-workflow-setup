@@ -1,5 +1,6 @@
 # Condition A Results — Framing Only
 
+- Reviewer: **AI subagent**. This is pilot evidence, not a human-authored review.
 - Evidence boundary: reviewed only each case's `framing.md`; no independent reference or answer key was opened.
 - Review order: `diff-01` through `diff-06`, sequentially.
 - Verdict meaning: **CLEAN** means no planted behavior-changing transcription error was detected from the framing-only evidence; it does not independently prove byte identity.
