@@ -310,6 +310,7 @@ def write_plist(args: argparse.Namespace) -> None:
     job = {
         "Label": args.label,
         "ProgramArguments": [str(args.waker), "--fire"],
+        "AbandonProcessGroup": True,
         "RunAtLoad": True,
         "StartInterval": args.interval,
         "StandardOutPath": str(args.stdout_log),
