@@ -945,3 +945,6 @@ than risk blocking an unrelated command.
 Run `python3 -m pytest claude/hooks/tests/test_beads_worktree_guard.py -q`,
 render and check generated surfaces, then commit and push from the
 Beads-created worktree. Confirm the remote branch points to the new commit.
+
+The independently labeled gate-replay-corpus oracle brief is maintained at
+[`test-oracle-briefs/gate-decision-replay.md`](test-oracle-briefs/gate-decision-replay.md).

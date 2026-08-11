@@ -1,0 +1,12 @@
+{
+  "receipt_id": "gate-replay-review-2026-08-09",
+  "reviewer": "independent parent oracle reviewer",
+  "reviewed_at": "2026-08-11T00:00:00Z",
+  "review_method": "independent behavioral review; gate output hidden",
+  "source_artifact": "source-events.jsonl",
+  "source_revision": "sha256:8d04c39bcf296da8ff8bf442698c2e8aa1584cc74ba2cc212c6e74d862a7e676",
+  "selected_source_sha256": "cc88b7f708f833d965ac856029beaaf597bc83b4e7e8266145e81cbd72e799fc",
+  "labels_sha256": "866bfc0b46d0817f2f6280f85356cf3a3529fd0c0c9fb6a9c7eb0ff6363c063d",
+  "policy_revision": "5d2b43492b81006b289b19f78d81757c39c38529",
+  "notes": "Independent readback approved the exact label rules and five 36-case cells. Labels express intended policy, not historical or replayed decisions. Hashes are integrity pointers, not a trust or signing system."
+}
