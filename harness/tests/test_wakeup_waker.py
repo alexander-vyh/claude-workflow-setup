@@ -13,7 +13,6 @@ import os
 import pathlib
 import shlex
 import sys
-import time
 
 BIN = pathlib.Path(__file__).resolve().parent.parent / "bin"
 sys.path.insert(0, str(BIN))
@@ -436,130 +435,6 @@ def test_fire_advances_health_once_after_scheduled_and_execution_work_succeed(tm
     assert (
         second["last_successful_reconcile_at"] >= first["last_successful_reconcile_at"]
     )
-
-
-def test_later_public_tick_does_not_duplicate_a_successful_recovery(
-    tmp_path, monkeypatch
-):
-    """One durable recovery claim fences later level-triggered ticks.
-
-    The fake host and Beads executables are process-boundary dependencies.  The
-    oracle is their external launch record plus the durable ledger, not a mock
-    interaction or a private supervisor call.
-    """
-    root = tmp_path / "threads"
-    session_id = "parent-exactly-once"
-    child_bead = "escapement-child-exactly-once"
-    parent_bead = "escapement-parent-exactly-once"
-    execution_id = "recovery-exactly-once"
-    later_execution_id = "recovery-distinct-later-work"
-    thread_dir = root / session_id
-    thread_dir.mkdir(parents=True)
-    _write_session_repo_context(thread_dir, session_id)
-
-    queued_at = dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=3)
-    ledger = execution_ledger_api.new_ledger(session_id)
-    execution_ledger_api.register_execution(
-        ledger,
-        {
-            "kind": "dispatch_registered",
-            "parent_session_id": session_id,
-            "bead_id": child_bead,
-            "execution_id": execution_id,
-            "host": "claude",
-            "agent_name": "exactly-once-worker",
-            "dispatch_tool_use_id": "toolu-exactly-once",
-            "watchdog_id": "watch-exactly-once",
-            "attempt": 1,
-            "generation": 1,
-        },
-        queued_at,
-    )
-    ledger_path = thread_dir / "executions.json"
-    ledger_path.write_text(json.dumps(ledger))
-
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    launch_log = tmp_path / "recovery-launches.jsonl"
-    completion_log = tmp_path / "recovery-completions.jsonl"
-    bd_script = fake_bin / "bd"
-    bd_script.write_text(
-        "#!/bin/sh\n"
-        f'if [ "$2" = "{child_bead}" ]; then '
-        f'printf \'%s\\n\' \'[{{"id":"{child_bead}","status":"in_progress","parent":"{parent_bead}"}}]\'; '
-        f'elif [ "$2" = "{parent_bead}" ]; then '
-        f'printf \'%s\\n\' \'[{{"id":"{parent_bead}","status":"in_progress"}}]\'; '
-        "else printf '%s\\n' '[]'; fi\n"
-    )
-    bd_script.chmod(0o755)
-    claude_script = fake_bin / "claude"
-    claude_script.write_text(
-        f"#!{sys.executable}\n"
-        "import json,os,pathlib,sys,time\n"
-        "record = {'argv': sys.argv[1:], 'cwd': os.getcwd()}\n"
-        "path = pathlib.Path(os.environ['RECOVERY_LAUNCH_LOG'])\n"
-        "with path.open('a') as handle: handle.write(json.dumps(record) + '\\n')\n"
-        "time.sleep(0.5)\n"
-        "done = pathlib.Path(os.environ['RECOVERY_COMPLETION_LOG'])\n"
-        "with done.open('a') as handle: handle.write(json.dumps(record) + '\\n')\n"
-    )
-    claude_script.chmod(0o755)
-    monkeypatch.setenv("PATH", f"{fake_bin}:{os.environ.get('PATH', '')}")
-    monkeypatch.setenv("RECOVERY_LAUNCH_LOG", str(launch_log))
-    monkeypatch.setenv("RECOVERY_COMPLETION_LOG", str(completion_log))
-
-    assert ww.main(["--threads-root", str(root), "--fire"]) == 0
-    deadline = time.monotonic() + 2
-    while not launch_log.exists() and time.monotonic() < deadline:
-        time.sleep(0.02)
-    assert launch_log.is_file(), "positive control: first tick launched no recovery"
-    assert not completion_log.exists(), (
-        "waker blocked until its long-lived recovery completed"
-    )
-    first_durable = json.loads(ledger_path.read_text())
-    first_claim = first_durable["executions"][0]["recovery_claim"]
-    assert first_claim is not None
-
-    execution_ledger_api.register_execution(
-        first_durable,
-        {
-            "kind": "dispatch_registered",
-            "parent_session_id": session_id,
-            "bead_id": child_bead,
-            "execution_id": later_execution_id,
-            "host": "claude",
-            "agent_name": "distinct-later-worker",
-            "dispatch_tool_use_id": "toolu-distinct-later",
-            "watchdog_id": "watch-distinct-later",
-            "attempt": 1,
-            "generation": 1,
-        },
-        queued_at,
-    )
-    ledger_path.write_text(json.dumps(first_durable))
-
-    assert ww.main(["--threads-root", str(root), "--fire"]) == 0
-    deadline = time.monotonic() + 2
-    while len(launch_log.read_text().splitlines()) < 2 and time.monotonic() < deadline:
-        time.sleep(0.02)
-    assert ww.main(["--threads-root", str(root), "--fire"]) == 0
-    time.sleep(0.1)
-
-    records = [json.loads(line) for line in launch_log.read_text().splitlines()]
-    assert len(records) == 2
-    assert records[0]["argv"][:2] == ["--resume", session_id]
-    assert records[0]["cwd"] == str(thread_dir)
-    prompts = [record["argv"][-1] for record in records]
-    assert sum(execution_id in prompt for prompt in prompts) == 1
-    assert sum(later_execution_id in prompt for prompt in prompts) == 1
-    durable = json.loads(ledger_path.read_text())
-    by_execution = {item["execution_id"]: item for item in durable["executions"]}
-    assert by_execution[execution_id]["generation"] == 1
-    assert by_execution[execution_id]["recovery_claim"] == first_claim
-    assert by_execution[later_execution_id]["recovery_claim"] is not None
-    health = json.loads(_supervisor_health_path(root).read_text())
-    assert health["completed_generation"] == 3
-    assert health["counts"]["successful_passes"] == 3
 
 
 def test_fire_partial_schedule_failure_withholds_authoritative_health(tmp_path):

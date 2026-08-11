@@ -348,6 +348,7 @@ with open(plist_path, "rb") as fh:
     job = plistlib.load(fh)
 argv = job["ProgramArguments"]
 assert job["Label"] == "com.escapement.continuation-supervisor"
+assert job["AbandonProcessGroup"] is True
 assert job["RunAtLoad"] is True
 assert type(job["StartInterval"]) is int
 assert job["StartInterval"] == 60

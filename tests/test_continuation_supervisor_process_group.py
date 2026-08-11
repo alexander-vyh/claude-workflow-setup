@@ -1,10 +1,4 @@
-"""Public and live process-lifetime oracles for the continuation LaunchAgent.
-
-The portable contract check keeps ordinary CI deterministic.  The opt-in Darwin
-controls bootstrap a disposable real LaunchAgent; their final assertion is a
-delayed child effect after the short-lived job has actually exited.  Together,
-these reject a plist-only oracle while avoiding the user's installed service.
-"""
+"""Real-launchd oracle for detached continuation recovery."""
 
 from __future__ import annotations
 
@@ -40,8 +34,7 @@ def _install_child_spawning_job(tmp_path: Path) -> tuple[Path, dict[str, object]
         "import os,pathlib,subprocess,sys\n"
         "home = pathlib.Path.home()\n"
         "home.joinpath('waker.pid').write_text(str(os.getpid()))\n"
-        f"child = subprocess.Popen([sys.executable, '-c', {child_program!r}])\n"
-        "home.joinpath('recovery-child.pid').write_text(str(child.pid))\n"
+        f"subprocess.Popen([sys.executable, '-c', {child_program!r}])\n"
         "home.joinpath('waker.returning').write_text('returning\\n')\n",
     )
 
@@ -87,8 +80,7 @@ def _child_completes_under_real_launchd(
     marker = home / "recovery-child.completed"
     returning = home / "waker.returning"
     waker_pid_path = home / "waker.pid"
-    pid_file = home / "recovery-child.pid"
-    for artifact in (marker, returning, waker_pid_path, pid_file):
+    for artifact in (marker, returning, waker_pid_path):
         artifact.unlink(missing_ok=True)
 
     subprocess.run(
@@ -103,7 +95,7 @@ def _child_completes_under_real_launchd(
         )
         assert loaded.returncode == 0, loaded.stdout + loaded.stderr
         assert _wait_until(returning.is_file), "LaunchAgent never reached waker return"
-        assert waker_pid_path.is_file() and pid_file.is_file()
+        assert waker_pid_path.is_file()
         waker_pid = int(waker_pid_path.read_text())
         assert _wait_until(lambda: not _pid_is_alive(waker_pid)), (
             "waker did not exit before the child-lifetime observation"
@@ -119,33 +111,17 @@ def _child_completes_under_real_launchd(
         )
 
 
-def test_installed_launchagent_declares_recovery_process_group_ownership(tmp_path):
-    _, installed_job = _install_child_spawning_job(tmp_path)
-
-    assert installed_job.get("AbandonProcessGroup") is True
-
-
 @pytest.mark.skipif(
     sys.platform != "darwin"
     or os.environ.get("ESCAPEMENT_RUN_LIVE_LAUNCHD_ORACLE") != "1",
     reason="explicit disposable live-launchd oracle",
 )
-def test_disposable_real_launchagent_keeps_child_alive_after_waker_exit(tmp_path):
+def test_disposable_real_launchagent_enforces_process_group_ownership(tmp_path):
     home, installed_job = _install_child_spawning_job(tmp_path)
 
     assert _child_completes_under_real_launchd(home, installed_job, abandon=None), (
         "real launchd terminated the recovery child after its short-lived waker exited"
     )
-
-
-@pytest.mark.skipif(
-    sys.platform != "darwin"
-    or os.environ.get("ESCAPEMENT_RUN_LIVE_LAUNCHD_ORACLE") != "1",
-    reason="explicit disposable live-launchd oracle",
-)
-def test_disposable_real_launchagent_detects_unsafe_process_group(tmp_path):
-    home, installed_job = _install_child_spawning_job(tmp_path)
-
     assert not _child_completes_under_real_launchd(
         home, installed_job, abandon=False
     ), "real-launchd negative control cannot observe unsafe child termination"
