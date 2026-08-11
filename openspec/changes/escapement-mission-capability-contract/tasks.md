@@ -28,6 +28,6 @@
 
 - [x] 5.1 Validate the OpenSpec change strictly and run the mission-capability, merge-authorization, repository-outcome, Codex final-response-gap, and agent-surface test suites, including every planted negative and positive control.
 - [x] 5.2 Run the renderer drift check and the repository's broader relevant test/lint suite; inspect generated and authored identity surfaces for semantic agreement and truthful adapter gaps.
-- [ ] 5.3 Update and close the tracked Bead only after the exact documentation, generated-package, and installed-adapter outcome is verified.
-- [ ] 5.4 Commit and push the task branch, open the pull request, repair all causal review or CI failures, and merge under the declared repository authorization.
-- [ ] 5.5 Run the repository's declared deployment/refresh path and verify the effective installed Codex and Claude adapters expose the new mission and doctrine without claiming native prompt suppression or scheduler enforcement.
+- [x] 5.3 Update and close the tracked Bead only after the exact documentation, generated-package, and installed-adapter outcome is verified.
+- [x] 5.4 Commit and push the task branch, open the pull request, repair all causal review or CI failures, and merge under the declared repository authorization.
+- [x] 5.5 Run the repository's declared deployment/refresh path and verify the effective installed Codex and Claude adapters expose the new mission and doctrine without claiming native prompt suppression or scheduler enforcement.
