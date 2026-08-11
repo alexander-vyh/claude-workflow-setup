@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
 import os
+import re
 from pathlib import Path
 
 
@@ -62,6 +64,7 @@ def test_renderer_targets_contain_executable_and_importable_module_for_both_plug
         assert executable.is_file()
         assert os.access(executable, os.X_OK)
         assert (plugin / "bin" / "escapement_worktree.py").is_file()
+        assert (plugin / "bin" / "escapement_worktree_bootstrap.py").is_file()
         assert (plugin / "bin" / "escapement_worktree_git.py").is_file()
 
 
@@ -78,6 +81,7 @@ def test_renderer_configures_cli_and_module_delivery_for_both_plugins() -> None:
     for artifact in (
         "escapement-worktree",
         "escapement_worktree.py",
+        "escapement_worktree_bootstrap.py",
         "escapement_worktree_git.py",
     ):
         canonical = (ROOT / "bin" / artifact).read_text(encoding="utf-8")
@@ -108,6 +112,7 @@ def test_plugin_cli_and_module_copies_are_byte_equal_to_canonical_sources() -> N
     for filename in (
         "escapement-worktree",
         "escapement_worktree.py",
+        "escapement_worktree_bootstrap.py",
         "escapement_worktree_git.py",
     ):
         canonical = (ROOT / "bin" / filename).read_bytes()
@@ -116,6 +121,116 @@ def test_plugin_cli_and_module_copies_are_byte_equal_to_canonical_sources() -> N
             ROOT / "plugins" / "escapement-claude",
         ):
             assert (plugin / "bin" / filename).read_bytes() == canonical
+
+
+def test_worktree_runtime_has_no_repository_specific_bootstrap_policy() -> None:
+    """Escapement supplies a generic argv transaction; repositories own commands."""
+    sources: list[tuple[Path, str]] = []
+    for root in (
+        ROOT / "bin",
+        ROOT / "plugins" / "escapement" / "bin",
+        ROOT / "plugins" / "escapement-claude" / "bin",
+    ):
+        for path in (
+            root / "escapement-worktree",
+            *root.glob("escapement_worktree*.py"),
+        ):
+            sources.append((path, path.read_text(encoding="utf-8")))
+
+    forbidden_policy = re.compile(
+        r"\b(?:cake|duckdb|uv|just|justfile|pytest|testmon)\b|\.env\b|\.venv\b|\.testmondata|--all-extras|worktree-bootstrap",
+        re.IGNORECASE,
+    )
+    for path, source in sources:
+        tree = ast.parse(source, filename=str(path))
+        literals = [
+            node.value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        ]
+        matches = sorted({literal for literal in literals if forbidden_policy.search(literal)})
+        assert not matches, f"repository-specific bootstrap literal in {path}: {matches}"
+
+
+def test_bootstrap_output_tail_memory_bound_is_statically_pinned() -> None:
+    for path in (
+        ROOT / "bin" / "escapement_worktree_bootstrap.py",
+        ROOT
+        / "plugins"
+        / "escapement"
+        / "bin"
+        / "escapement_worktree_bootstrap.py",
+        ROOT
+        / "plugins"
+        / "escapement-claude"
+        / "bin"
+        / "escapement_worktree_bootstrap.py",
+    ):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        bounds = [
+            node.value.value
+            for node in tree.body
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name)
+                and target.id == "BOOTSTRAP_OUTPUT_TAIL_BYTES"
+                for target in node.targets
+            )
+            and isinstance(node.value, ast.Constant)
+            and isinstance(node.value.value, int)
+        ]
+        assert bounds == [8192], (path, bounds)
+        calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
+        assert any(
+            isinstance(call.func, ast.Attribute)
+            and isinstance(call.func.value, ast.Name)
+            and call.func.value.id == "tempfile"
+            and call.func.attr == "TemporaryFile"
+            for call in calls
+        ), path
+        for call in calls:
+            for keyword in call.keywords:
+                assert not (
+                    keyword.arg == "capture_output"
+                    and isinstance(keyword.value, ast.Constant)
+                    and keyword.value.value is True
+                ), path
+                assert not (
+                    keyword.arg in {"stdout", "stderr"}
+                    and isinstance(keyword.value, ast.Attribute)
+                    and isinstance(keyword.value.value, ast.Name)
+                    and keyword.value.value.id == "subprocess"
+                    and keyword.value.attr == "PIPE"
+                ), path
+
+
+def test_branch_owner_scan_uses_nul_delimited_git_porcelain() -> None:
+    for path in (
+        ROOT / "bin" / "escapement_worktree_git.py",
+        ROOT / "plugins" / "escapement" / "bin" / "escapement_worktree_git.py",
+        ROOT
+        / "plugins"
+        / "escapement-claude"
+        / "bin"
+        / "escapement_worktree_git.py",
+    ):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        git_argument_lists = [
+            [
+                argument.value
+                for argument in call.args
+                if isinstance(argument, ast.Constant)
+                and isinstance(argument.value, str)
+            ]
+            for call in ast.walk(tree)
+            if isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Name)
+            and call.func.id == "git"
+        ]
+        assert any(
+            arguments == ["worktree", "list", "--porcelain", "-z"]
+            for arguments in git_argument_lists
+        ), path
 
 
 def test_obsolete_generated_location_guard_copies_do_not_exist() -> None:

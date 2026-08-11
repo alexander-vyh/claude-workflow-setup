@@ -1174,3 +1174,45 @@ unreadable candidates do not hard-deny or import external content.
 ## Final outcome verification
 Run the compact five-surface public matrix, existing downgrade regressions,
 renderer/parity, Ruff, and `git diff --check`.
+
+---
+
+# Test Oracle Brief — repository-declared worktree bootstrap
+
+## Business invariant
+`escapement-worktree create` succeeds only after the new worktree completes its
+repository-declared bootstrap; repositories without a declaration behave as before.
+
+## Independent source of truth
+Arbitrary repository executables record exact argv, cwd, and source revision. Git's
+worktree registry and administrative-directory identity determine rollback ownership.
+
+## Solution constraints
+Execute only a nonempty JSON argv directly, after validation, inside the verified
+target. Reverify afterward. Bound raw diagnostic tails, contain descendants on
+failure/timeout, preserve replacements, remain stdlib-only, and render all surfaces.
+
+## Invalid solution classes
+Reject convention inference, hardcoded repository/tool names, shell execution,
+bootstrap before validation, unbounded output, process-group-only cleanup, lossy
+tail decoding, and rollback based only on path/branch/SHA equality.
+
+## Fragile implementation to reject
+Running a guessed setup command and deleting any same-path worktree during rollback.
+
+## Negative control
+Malformed declarations, missing executables, nonzero exits, signals, and timeouts
+fail; same-path replacement worktrees survive; escaped descendants cannot recreate
+the rolled-back target; arbitrary raw-byte tails remain exact.
+
+## Positive control
+An arbitrary repository's declared argv runs exactly once at the source revision,
+while an undeclared repository runs no inferred bootstrap and still succeeds.
+
+## Missing/unresolved handling
+Missing bootstrap is allowed. A present but malformed declaration and uncertain
+rollback ownership fail safely without deleting ambiguous user state.
+
+## Final outcome verification
+Run the public bootstrap, safety, transaction, validation, and parity suites, then
+exercise the installed command against a disposable arbitrary repository.
