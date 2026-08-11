@@ -1,7 +1,7 @@
 {
   "name": "escapement",
   "version": "1.0.0",
-  "description": "Host-neutral agentic workflow layer: beads issue tracking, oracle-discipline gates, TDD enforcement, and outcome-bias continuation for Codex sessions.",
+  "description": "Escapement converts available agent capacity plus delegated authority into verified, delivered outcomes while reserving human attention for consequential choices.",
   "author": {
     "name": "alexander-vyh",
     "url": "https://github.com/alexander-vyh"
@@ -21,8 +21,8 @@
   "hooks": "./hooks/hooks.json",
   "interface": {
     "displayName": "Escapement",
-    "shortDescription": "Agentic workflow gates: oracle discipline, TDD enforcement, beads tracking",
-    "longDescription": "Escapement is a host-neutral workflow layer for agentic coding sessions. Oracle-discipline gates block implementation-echo tests and oracle downgrades. TDD enforcement requires a Test Oracle Brief before writing code. Beads provides durable issue tracking. Works alongside your existing workflow.",
+    "shortDescription": "A client-neutral control layer for directing agent capacity within delegated authority, verifying outcomes independently, and completing authorized delivery.",
+    "longDescription": "Escapement converts available agent capacity plus delegated authority into verified, delivered outcomes while reserving human attention for consequential choices. Oracle-discipline gates block implementation-echo tests and oracle downgrades. TDD enforcement requires a Test Oracle Brief before writing code. Beads provides durable issue tracking. Works alongside your existing workflow.",
     "developerName": "alexander-vyh",
     "category": "Developer Tools",
     "capabilities": [

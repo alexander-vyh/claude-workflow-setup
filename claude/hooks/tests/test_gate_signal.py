@@ -26,7 +26,6 @@ Run from anywhere:
 from __future__ import annotations
 
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -84,13 +83,14 @@ def test_record_writes_wellformed_entry(isolated_env, monkeypatch):
     monkeypatch.setenv("BEADS_DIR", str(beads_dir))
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "session-abc-123")
 
-    record(
+    persisted = record(
         gate_name="spec_id_enforcement",
         decision="deny",
         reason="placeholder value 'none'",
         command="bd create --type=task --spec-id none",
     )
 
+    assert persisted is True
     signal_file = beads_dir / _SIGNAL_FILENAME
     assert signal_file.is_file(), "record() must create the signal file"
 
@@ -191,8 +191,9 @@ def test_record_fails_soft_on_unwritable_path(isolated_env, monkeypatch):
     monkeypatch.setenv("BEADS_DIR", str(beads_dir))
 
     # Must not raise despite the open() failing.
-    record(gate_name="g", decision="allow", reason="io error path")
+    persisted = record(gate_name="g", decision="allow", reason="io error path")
 
+    assert persisted is False
     # The directory we created is still a directory (no file clobbered it).
     assert (beads_dir / _SIGNAL_FILENAME).is_dir()
 
@@ -286,13 +287,14 @@ def test_record_falls_back_when_beads_unresolvable(isolated_env, monkeypatch):
     monkeypatch.setenv(_gate_signal._FALLBACK_DIR_ENV, str(fallback_dir))
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "session-fallback-1")
 
-    record(
+    persisted = record(
         gate_name="spec_id_enforcement",
         decision="deny",
         reason="must be preserved in the fallback, not dropped",
         command="bd create ...",
     )
 
+    assert persisted is True
     fallback_file = fallback_dir / _gate_signal._FALLBACK_FILENAME
     assert fallback_file.is_file(), (
         "record() must write the fallback sink when .beads/ is unresolvable"
@@ -343,7 +345,8 @@ def test_record_fails_soft_when_fallback_also_unwritable(isolated_env, monkeypat
     monkeypatch.setenv(_gate_signal._FALLBACK_DIR_ENV, str(fallback_dir))
 
     # Must not raise despite both primary and fallback being unwritable.
-    record(gate_name="g", decision="deny", reason="both sinks broken")
+    persisted = record(gate_name="g", decision="deny", reason="both sinks broken")
 
+    assert persisted is False
     # The directory we created is still a directory (nothing clobbered it).
     assert (fallback_dir / _gate_signal._FALLBACK_FILENAME).is_dir()

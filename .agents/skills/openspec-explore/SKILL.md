@@ -102,10 +102,11 @@ If the user mentioned a specific change name, read its artifacts for context.
 
 ### When no change exists
 
-Think freely. When insights crystallize, you might offer:
+Think freely. When insights crystallize:
 
-- "This feels solid enough to start a change. Want me to create a proposal?"
-- Or keep exploring - no pressure to formalize
+- If the delegated outcome already includes formalization, create the proposal and continue.
+- If the user explicitly bounded the request to exploration, report that the idea is ready for a proposal without soliciting scope expansion.
+- Otherwise keep exploring; do not turn ordinary forward work into a permission question.
 
 ### When a change exists
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import json
+import stat
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 from typing import Callable, Iterable
@@ -21,6 +22,8 @@ DEFAULT_TIMEOUT = 60.0
 BASE_URL_ENV = "ESCAPEMENT_LOCAL_JUDGE_BASE_URL"
 MODEL_ENV = "ESCAPEMENT_LOCAL_JUDGE_MODEL"
 TIMEOUT_ENV = "ESCAPEMENT_LOCAL_JUDGE_TIMEOUT"
+API_KEY_ENV = "ESCAPEMENT_LOCAL_JUDGE_API_KEY"
+API_KEY_FILE_ENV = "ESCAPEMENT_LOCAL_JUDGE_API_KEY_FILE"
 
 
 def configured_base_url() -> str:
@@ -46,12 +49,62 @@ def chat_completions_url(base_url: str | None = None) -> str:
     return f"{(base_url or configured_base_url()).rstrip('/')}/chat/completions"
 
 
+def configured_auth_header() -> str | None:
+    """Return configured Bearer authentication, or fail closed to no header."""
+    environment_key = os.environ.get(API_KEY_ENV)
+    if environment_key:
+        return f"Bearer {environment_key}"
+
+    key_path = os.environ.get(API_KEY_FILE_ENV)
+    if not key_path:
+        return None
+
+    descriptor = None
+    try:
+        before = os.lstat(key_path)
+        if not stat.S_ISREG(before.st_mode):
+            return None
+        if stat.S_IMODE(before.st_mode) != 0o600 or before.st_uid != os.getuid():
+            return None
+
+        flags = (
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+        )
+        descriptor = os.open(key_path, flags)
+        opened = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or stat.S_IMODE(opened.st_mode) != 0o600
+            or opened.st_uid != os.getuid()
+            or (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)
+        ):
+            return None
+        raw = os.read(descriptor, 65_537)
+        if len(raw) > 65_536:
+            return None
+        value = raw.decode("utf-8")
+    except (OSError, UnicodeError):
+        return None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+    lines = value.splitlines()
+    if len(lines) != 1 or not lines[0]:
+        return None
+    return f"Bearer {lines[0]}"
+
+
 def _default_post(url: str, payload: dict, timeout: float) -> str:
     body = json.dumps(payload).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    authorization = configured_auth_header()
+    if authorization is not None:
+        headers["Authorization"] = authorization
     request = Request(
         url,
         data=body,
-        headers={"Content-Type": "application/json"},
+        headers=headers,
         method="POST",
     )
     try:
@@ -64,7 +117,10 @@ def _default_post(url: str, payload: dict, timeout: float) -> str:
 
 def _label_present(content: str, labels: Iterable[str]) -> bool:
     low = content.strip().lower()
-    return any(label.lower() in low or label.lower().replace("_", " ") in low for label in labels)
+    return any(
+        label.lower() in low or label.lower().replace("_", " ") in low
+        for label in labels
+    )
 
 
 def boolean_verdict(

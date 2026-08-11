@@ -945,133 +945,190 @@ than risk blocking an unrelated command.
 Run `python3 -m pytest claude/hooks/tests/test_beads_worktree_guard.py -q`,
 render and check generated surfaces, then commit and push from the
 Beads-created worktree. Confirm the remote branch points to the new commit.
+# Test Oracle Brief — delegated-work liveness and parent completion (2026-08-09)
+
+Scope: `escapement-e3ai`, the parent-open premature-final regression, durable
+native execution attempts, independently firing reconciliation, and optional
+local-judge authentication.
+
+## Business invariant
+
+A managed session does not finish while its claimed/root bead remains unresolved.
+Delegated native work either reaches verified terminal evidence and a verified
+parent outcome, or an installed supervisor performs bounded reconciliation
+without waiting for a user message.
+
+## Independent source of truth
+
+- `bd show <root> --json` supplies canonical parent work state independently of
+  descendant queue code or the execution ledger.
+- Literal, hand-authored event/timestamp fixtures and a reference transition
+  table determine execution-attempt behavior.
+- The two real incident orderings determine the regression outcomes: the
+  22-hour child-tool stall and the design-session closed-children/open-parent
+  premature final response.
+- Installed `launchctl` state, supervisor health written after a completed scan,
+  and observed recovery without a user prompt prove firing.
+- The actual business verification command proves result application; ledger
+  terminal status alone does not.
+
+## Solution constraints
+
+- Beads owns durable work identity, hierarchy, claim, and verified closure.
+- Escapement owns attempt identity, native binding, deadlines, recovery,
+  supervisor health, result application, and completion policy.
+- Python standard library core; atomic trusted state; host parsers outside the
+  state machine; local model optional and advisory.
+- No Stop claim for Codex until an effective installed hook fixture and smoke
+  prove it. SessionStart and external reconciliation remain mandatory.
+- No added responsibility in the already oversized `stop_hook.py`; extract
+  cohesive task/execution checks.
+
+## Invalid solution classes
+
+- Descendant-only `bd ready`/`bd blocked` checks that ignore root status.
+- Auto-closing a bead from child/native terminal state.
+- Mirroring Beads metadata or task status into `executions.json`.
+- Transcript/file mtime, tool start, polling chatter, or model opinion as
+  semantic progress.
+- Health stamped before a complete useful reconciliation.
+- Exactly-once-spawn assumptions, unfenced retries, or stale-generation result
+  application.
+- Future wakeup files accepted without fresh successful supervisor proof.
+- Public Stop wiring that bypasses otherwise-correct root/execution helpers.
+- Global health stamped after only part of a multi-thread scan succeeds.
+- Unrelated or old-generation future wakeups treated as current recovery proof.
+- Adapter events with missing generation silently relabeled as current.
+- Result-application claims treated as proof that the business result applied.
+- Missing/malformed/untrusted state treated as complete.
+
+## Fragile implementation to reject
+
+Check only that all child beads are closed and a future wakeup exists. This
+would pass the child-research happy path while the parent remains `in_progress`,
+and would still fail when the parent has already ended or the waker is inert.
+The parent-open regression plus stale/missing supervisor controls must fail it.
+
+## Negative control
+
+- Root `in_progress`, `ready=[]`, `blocked=[]` => block
+  `parent_outcome_unresolved`.
+- Root missing/malformed/unreadable => unresolved, never queue-drained.
+- Complete public Stop fixtures reject an open root with empty descendants both
+  without a wake and with a future wake plus missing/stale health.
+- Queued attempt past start deadline; running attempt past idle deadline; noisy
+  attempt past hard deadline => sticky reconciliation due, not terminal.
+- Successful process start plus failed thread scan => no new successful-health
+  timestamp.
+- A due attempt plus failure after planning, during its atomic claim write, or
+  during spawn => neither successful-health time nor completed generation moves.
+- In a two-thread root, success for A followed by load/reconcile/persist failure
+  for B (and the reverse scan order), or scheduled inspection failure, advances
+  diagnostic `reconcile_started_at` but preserves all authoritative prior health
+  fields.
+- Two concurrent public reconciliations contend for one due attempt => one live
+  current-generation claim and at most one spawn until claim expiry.
+- With `reconcile_due=None`, expired accepted activity/idle deadline, and fresh
+  filesystem mtime plus ledger `updated_at` from polling/tool-start, public
+  reconciliation sets idle-due and claims recovery. A paired completed-activity
+  event is the positive renewal control. Static checks reject mtime and ledger
+  `updated_at` as activity oracles.
+- Every terminal-ingress public path receives open child/root beads and a
+  recording Beads runner; none may issue closure mutation. Architecture checks
+  forbid `bd close`, closed-status updates, and closure-helper imports from the
+  ledger, hook, reconciliation, and supervisor modules. Business verification
+  owns task closure and Stop remains blocked while canonical beads are open.
+- Recovery claim persisted then process crash => no immediate duplicate; claim
+  expiry advances generation and permits recovery.
+- Old-generation completion => incident evidence only, never current result
+  application or Beads close.
+- Late generation-one completion delivered through public adapters after a
+  generation-two takeover cannot mutate generation two; missing generation is
+  unresolved, never defaulted.
+- A public application orchestrator must call an injected business verifier;
+  terminal state/digest cannot directly prove application. Missing/negative/
+  exceptional verification stays unapplied. If application succeeds and the
+  process dies before persistence, takeover rechecks the real outcome or reuses
+  a stable idempotency key so the external effect occurs once before fenced
+  completion. Equal digests on distinct executions remain distinct.
+- A future wake must exactly match parent session, watchdog, execution, attempt,
+  and generation; unrelated/mismatched wakeups do not authorize pause.
+- The public wake producer persists those literal identity fields in schema-valid
+  JSON consumed by public Stop; omitting any field fails validation and blocks.
+- HTTP 401/local-model absence => deterministic behavior unchanged.
+
+## Positive control
+
+- Closed root, empty descendants, all managed attempts terminal and independently
+  verified => normal completion.
+- Running attempt with accepted completed activity, unexpired hard deadline,
+  valid future wake, and fresh post-reconcile health => bounded pause.
+- Recovery after claim expiry emits exactly one current-generation spawn in the
+  controlled fixture.
+- Both a complete no-op reconciliation and a complete action reconciliation
+  advance useful-work health exactly once.
+- Authenticated local judge annotation is observable but does not change the
+  deterministic decision.
+
+## Missing/unresolved handling
+
+Fail closed on completion and pause authorization. Wake and reconcile rather
+than blindly replay. A specific auditable human release remains the only manual
+override. Model failure is fail-open only for the advisory annotation.
+
+## Final outcome verification
+
+1. Focused parent-state, execution-ledger, supervisor, Stop, host-adapter,
+   installer, security, and local-auth suites pass after verified RED failures.
+2. An independent mutation challenger proves the named bad implementations are
+   killed.
+3. Full `python -m pytest claude/hooks/tests harness/tests tests -q -rs` and
+   generated-surface checks pass.
+4. Merged source is installed for Claude and Codex; launchd runs
+   `wakeup_waker.py --fire` and exposes fresh post-reconcile health.
+5. A disposable short-deadline delegation is automatically reconciled without
+   a user message, and the open-parent/closed-children fixture continues rather
+   than returning a final answer.
 
 ---
 
-# Test Oracle Brief — discovery interaction depth by blast radius
+# Test Oracle Brief — discovery consequence gating
 
-## 1. Business invariant
+## Business invariant
+Discovery asks the user to co-author load-bearing choices before drafting a
+high-consequence or hard-to-reverse solution, while local reversible work stays
+lightweight.
 
-Discovery must make the user a co-author before committing to a high-blast-radius
-or hard-to-reverse solution. After the six framing fields are confirmed, high-risk
-work asks 2-4 explicit, alternative-bearing load-bearing forks across at least two
-decision categories and waits for every explicit answer before architecture,
-recommendations, rollout plans, tasks, walking skeletons, or other solution
-commitments. Low-blast, cheaply reversible work keeps the lightweight
-draft-and-react path. The gate is cleared only when the later draft reflects the
-user's selected ownership, compatibility, rollout, and failure policy.
+## Independent source of truth
+The public discovery guidance and its observed conversation order: questions
+before solution commitments, explicit answers reflected in the draft, and no
+heavy interview for low-consequence work.
 
-## 2. Independent source of truth
+## Solution constraints
+The canonical skill is the only authority; rendered plugin copies must match.
+Rapid changes ceremony, not consequence calibration.
 
-The primary oracle is the ordered transcript from a fresh agent consuming the
-complete canonical skill: first-turn ordering, question shape/category breadth,
-whether partial answers remain gated, and whether a second-turn draft reflects the
-answers delivered in that same conversation. Strict and federated answer sets start
-from the same first-turn prompt and diverge only at the user's answer turn. A
-committed, redacted transcript corpus is bound to the exact canonical skill SHA and
-runner metadata. Static prose tests are secondary backstops, never the behavioral
-oracle by themselves.
+## Invalid solution classes
+Reject draft-first high-risk responses, keyword-only risk routing, reintroducing
+an earlier owner after an explicit fork answer, reclassifying unknown work instead
+of asking consequences, and over-interviewing local reversible work.
 
-## 3. Solution constraints
+## Fragile implementation to reject
+A direct design request that drafts an architecture before asking the required
+ownership, rollout, compatibility, or rollback choices.
 
-- Canonical guidance lives in `claude/skills/discovery/SKILL.md`; the Claude plugin
-  copy is renderer-generated and must remain byte-identical.
-- Interaction depth is conditional on consequences and reversibility, not schema,
-  domain names, or risk keywords.
-- High-risk questions are 2-4 explicit forks with 2-3 mutually exclusive
-  alternatives and material tradeoffs, spanning at least two of authority/ownership,
-  migration/compatibility, enforcement/rollout, and rollback/failure policy.
-- The blast-radius gate does not repeat the six framing fields or route every task
-  through a heavy interview.
-- Silence, `use your judgment`, and answers to only some forks do not authorize a
-  draft. Only unresolved forks are re-asked.
-- Unknown blast radius or reversibility fails closed to one consequence probe.
-- A completeness pass occurs before composing so a newly discovered load-bearing
-  fork cannot be deferred until after a draft.
-- Evaluation records contain no credentials or private project content; generic
-  prompts and redacted outputs are durable under `tests/evals/`.
+## Negative control
+High-risk work asks 2–4 explicit tradeoff-bearing forks and stops; unknown work
+asks exactly what becomes costly or impossible to undo and who is affected.
 
-## 4. Invalid solution classes
+## Positive control
+Low-risk reversible work uses lightweight draft-and-react, and a complete answer
+set authorizes a draft that follows the selected authority.
 
-- A paragraph-only addition that leaves the unconditional zero-upfront/one-mid-draft
-  cap authoritative elsewhere in the skill.
-- Keyword- or domain-only routing such as treating `architecture`, `migration`,
-  `security`, or `breaking API` as the high-risk classifier.
-- Drafting a recommended solution, architecture, rollout, tasks, or walking skeleton
-  before the required forks are explicitly answered.
-- Re-asking the six framing fields instead of surfacing load-bearing alternatives.
-- Generic questions without alternatives or tradeoffs.
-- Asking forks and then ignoring selected ownership, rollout, or rollback in the
-  draft.
-- Treating `use your judgment`, silence, or a single answered fork as sufficient.
-- Applying the heavy interview to all work, including matched copy-only,
-  documentation-only, and read-only controls.
-- Hardcoded low-risk bypasses or a corpus made only of obvious risk keywords.
+## Missing/unresolved handling
+Unknown consequences require the two-question probe and wait. Partial fork
+answers keep only the unresolved choices gated.
 
-## 5. Fragile implementation to reject
-
-The named tempting mutant is: "Classify high risk only when the prompt contains
-architecture, migration, security, or breaking API; draft a recommended solution
-first, then ask the forks." It can coexist with a correct-looking paragraph and pass
-the original four phrase/order tests. The strengthened oracle rejects it three ways:
-(1) the committed corpus is SHA-bound to the exact skill, so inserting the
-contradiction invalidates the corpus; (2) the skill-contract validator reports both
-keyword-only routing and draft-before-forks contradictions; and (3) high-risk corpus
-prompts avoid those obvious keywords while their matched low-risk controls share
-domain vocabulary.
-
-## 6. Negative control
-
-- No-guidance high-risk prompts covering governed metric authority, destructive
-  record transition, account visibility, and shared caller contract must show the
-  baseline failure: solution commitments before only one question. A baseline that
-  already asks the required forks is discarded or reworked.
-- A transcript with `Draft direction`, architecture, rollout, tasks, or walking
-  skeleton prose before the first required fork must fail even if its scorecard says
-  pass.
-- A high-risk response containing only generic questions, fewer than two categories,
-  or no alternatives must fail.
-- Partial-answer responses that draft must fail.
-- Differential drafts that omit or contradict chosen authority, rollout, or rollback
-  must fail.
-- Duplicate/missing run IDs, superseded ambiguity runs, wrong model/runner flags,
-  wrong skill SHA, failed exit status, unordered turns, or incomplete rubric fields
-  must fail corpus validation.
-
-## 7. Positive control
-
-- Matched low-risk prompts using contribution-margin, identifier, invoice, and
-  submit-order vocabulary remain lightweight: they draft normally and never receive
-  the 2-4-fork interview.
-- High-risk first turns ask 2-4 alternative-bearing forks across the required category
-  breadth before solution commitment and then stop.
-- Unknown cross-domain cases ask the consequence/reversibility probe and stop.
-- Partial answers acknowledge resolved choices, re-ask only unresolved choices, and
-  do not draft.
-- Ordered strict and federated conversations reuse the same turn-one prompt/session;
-  their turn-two drafts visibly differ in authority, rollout, and rollback.
-
-## 8. Missing/unresolved handling
-
-Unknown blast radius or reversibility fails closed to the consequence probe. Missing
-or partial fork answers fail closed to continued questioning. Missing corpus metadata,
-transcripts, score fields, hashes, timestamps, or runner evidence fail validation.
-An ambiguous scenario that already establishes high blast is superseded rather than
-counted as an unknown-risk pass. An unavailable fresh-agent runner is a precise
-blocker; source grep or static prose checks cannot substitute for transcript evidence.
-
-## 9. Final outcome verification
-
-1. Run the committed corpus validator against all baseline and final records; it must
-   report the declared matrix, unique IDs, exact skill SHA/model/flags, complete
-   rubrics, and zero unexpected final-guidance violations.
-2. Run 5+ final repetitions for high, matched low, unknown, and partial-answer paths.
-3. Run 5+ real ordered two-turn strict and federated conversations. Each pair starts
-   with the same prompt in its own fresh session, persists the turn-one forks, resumes
-   that exact session with the selected answer set, and persists the turn-two draft.
-4. Manually review every final response. Any ordering, alternatives, category,
-   answer-gating, answer-reflection, or late-load-bearing-fork violation blocks.
-5. Run `pytest -q tests/test_discovery_interaction_contract.py`,
-   `python3 tests/evals/discovery_blast_radius/validate_corpus.py`,
-   `python3 tools/render_agent_surfaces.py --check`, relevant agent-surface tests,
-   Ruff, and `git diff --check`.
+## Final outcome verification
+Run `pytest -q tests/test_discovery_interaction_contract.py`, render/check agent
+surfaces, and exercise one high-, low-, and unknown-consequence conversation.

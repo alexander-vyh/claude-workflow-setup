@@ -88,9 +88,14 @@ def _judge_up() -> bool:
     import json as _json
     import urllib.request
     base = lj.configured_base_url().rstrip("/")
+    headers = {}
+    authorization = lj.configured_auth_header()
+    if authorization is not None:
+        headers["authorization"] = authorization
     # 1) model-list must listen
     try:
-        with urllib.request.urlopen(base + "/models", timeout=5) as r:
+        models_request = urllib.request.Request(base + "/models", headers=headers)
+        with urllib.request.urlopen(models_request, timeout=5) as r:
             if r.status != 200:
                 return False
     except Exception:
@@ -107,7 +112,7 @@ def _judge_up() -> bool:
                 "messages": [{"role": "user", "content": "ping"}],
                 "max_tokens": 1,
             }).encode(),
-            headers={"content-type": "application/json"},
+            headers={"content-type": "application/json", **headers},
             method="POST",
         )
         with urllib.request.urlopen(req, timeout=15) as r:
@@ -140,7 +145,9 @@ def _real_verdicts(text, want_at_least=2):
     return got
 
 
-pytestmark = pytest.mark.skipif(not _judge_up(), reason="local judge (localhost:8000) unreachable")
+pytestmark = pytest.mark.skipif(
+    not _judge_up(), reason="local judge (localhost:8000) unreachable or unauthenticated"
+)
 
 
 @pytest.mark.parametrize("case", [c for c in CASES if c["expect"] == "block"], ids=lambda c: c["id"])

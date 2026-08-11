@@ -67,6 +67,8 @@ def _fake_runner(responses, calls=None):
     def run_bd(args):
         if calls is not None:
             calls.append(list(args))
+        if args[:1] == ["show"]:
+            return [{"id": args[1], "status": "closed"}]
         return responses.get(args[0])
 
     return run_bd

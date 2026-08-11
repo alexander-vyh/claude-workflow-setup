@@ -33,6 +33,7 @@ rewrite files — those belong to the waker so the dangerous part stays isolated
 from __future__ import annotations
 
 import datetime as _dt
+import os
 import subprocess
 from typing import Callable, Optional, Tuple
 
@@ -42,9 +43,18 @@ MAX_POLL_INTERVAL = 86400            # one day; longer waits should use a fresh 
 DEFAULT_HANDOFF_MODEL = "haiku"      # #5: housekeeping/polling waers run cheap, not Opus 1M
 
 
-def _default_runner(command: str) -> Tuple[int, str]:
+def _default_runner(
+    command: str, *, cwd: Optional[str | os.PathLike[str]] = None
+) -> Tuple[int, str]:
     """Run a shell command; return (exit_code, combined_output). Waker-only; tests inject."""
-    proc = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=120)
+    proc = subprocess.run(
+        command,
+        shell=True,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        cwd=cwd,
+    )
     return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
 
 
