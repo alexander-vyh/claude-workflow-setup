@@ -953,19 +953,15 @@ Beads-created worktree. Confirm the remote branch points to the new commit.
 ## Business invariant
 
 `escapement-worktree create` returns success only when the newly verified
-worktree has also completed the target repository's declared bootstrap. In CAKE,
-that means a fresh Escapement worktree can import `duckdb`, resolves `.env` to
-the primary checkout's file when present, and owns a populated testmon database
-that lets the affected-test pre-push path select from a warm dependency graph.
+worktree has completed that repository's exact declared bootstrap command.
+Repositories without a declaration retain the existing creation behavior.
 
 ## Independent source of truth
 
-The generic transaction is judged by an arbitrary repository-owned executable
-whose sentinel records its real cwd, source revision, and ordering relative to
-Beads validation. CAKE is judged by the existing `just worktree-bootstrap`
-authority plus user-visible artifacts in a disposable real CAKE worktree:
-Python imports `duckdb`, `.env` has the intended target, `.testmondata` is
-populated, and the actual affected-test hook reuses it.
+The transaction is judged by arbitrary repository-owned executables whose
+sentinels record exact argv, cwd, source revision, and ordering relative to
+Beads validation. Git's registry and administrative-directory identity are the
+independent authority for rollback ownership.
 
 ## Solution constraints
 
@@ -983,13 +979,14 @@ populated, and the actual affected-test hook reuses it.
   only the exact worktree/ref created by this transaction and must preserve a
   replaced path, moved branch, or foreign registration, including a valid
   same-path/same-branch worktree whose HEAD differs from the source SHA and a
-  foreign-path worktree that owns the same branch at the same source SHA.
-- Bootstrap runs in a dedicated process session. On timeout Escapement
-  terminates and reaps the whole process group before rollback, so delayed
-  descendants cannot recreate the target after the transaction returns.
+  foreign-path worktree that owns the same branch at the same source SHA. A
+  same-path/same-branch/same-SHA worktree with a different Git-admin creation
+  instance is also a replacement and must survive.
+- On timeout Escapement contains the bootstrap and all descendants observed
+  from it, including descendants that start a new session, before rollback.
 - Child output capture is memory-bounded. Failure and timeout errors expose
-  exactly the final 8192 bytes per stream as bounded, control-escaped
-  stderr/stdout tails that remain useful for repair.
+  exactly the final 8192 bytes per stream as lowercase fixed-width `\\xNN`
+  tokens, preserving arbitrary raw bytes without decoding loss.
 - Keep policy generic and stdlib-only. Do not hard-code CAKE, `uv`, `.env`,
   pytest, testmon, or a `worktree-bootstrap` naming convention in Escapement.
 - Render the complete runtime sibling closure into both plugin distributions.
@@ -1003,8 +1000,8 @@ populated, and the actual affected-test hook reuses it.
   wrong revision, through `shell=True`, or only on the first named repository.
 - Ignoring timeout/non-zero status, accepting malformed JSON types, or silently
   treating a configured missing executable as no bootstrap.
-- Killing only the bootstrap parent, retaining unbounded `PIPE` output in
-  memory, or discarding all child diagnostics.
+- Killing only the bootstrap process group, retaining unbounded `PIPE` output
+  in memory, decoding raw tails, or discarding all child diagnostics.
 - Destructive rollback that deletes a target/ref/registration replaced during a
   failed or timed-out bootstrap.
 - Tests that merely assert a subprocess mock was called instead of observing a
@@ -1031,6 +1028,8 @@ before rollback and remain unable to recreate the target after its planned write
 time. A valid registered replacement at the same path and branch but a different
 HEAD must also survive intact. A valid foreign-path registration owning the
 same branch and source SHA must preserve its path, marker, registration, and ref.
+A same-SHA replacement with a different Git-admin inode must survive. A timed-out
+new-session descendant must be dead before it can recreate the rolled-back target.
 
 ## Positive control
 
@@ -1050,10 +1049,7 @@ user state.
 
 ## Final outcome verification
 
-Run the boundary suite and renderer/parity checks, then land both coordinated
-repository PRs. From merged Escapement and merged CAKE defaults, invoke the
-installed `escapement-worktree create` against a disposable CAKE branch. Inside
-that real target, import `duckdb`, verify `.env` resolution, verify a populated
-target-owned testmon DB, and execute the actual affected-test pre-push command
-to prove warm selection. Finally remove only that explicitly disposable
-worktree/branch and verify both repositories remain clean.
+Run the public bootstrap boundary and existing worktree transaction suites, then
+render and verify canonical/Codex/Claude byte parity. Exercise the public command
+against a disposable arbitrary repository for the declared-command, no-contract,
+post-bootstrap identity, failure-tail, replacement, and escaped-descendant cases.

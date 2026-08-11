@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import fcntl
 import json
+import os
 import re
 import sys
 from collections.abc import Iterator, Sequence
@@ -19,15 +20,18 @@ from escapement_worktree_bootstrap import (
     run_bootstrap,
 )
 from escapement_worktree_git import (
+    CreationIdentity,
     RepositoryContext,
     ResolvedSource,
     WorktreeError,
+    capture_creation_identity,
     git,
     registered_branch_owners,
     resolve_default_source,
     resolve_explicit_source,
     resolve_repository,
     run,
+    target_owned_by_creation,
 )
 
 SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -53,15 +57,14 @@ class CreationResult:
 
 
 def validate_request(ctx: RepositoryContext, request: WorktreeRequest) -> Path:
-    if (
-        not SAFE_NAME_RE.fullmatch(request.name)
-        or request.name in {".", ".."}
-    ):
+    if not SAFE_NAME_RE.fullmatch(request.name) or request.name in {".", ".."}:
         raise WorktreeError(f"unsafe worktree name: {request.name!r}")
 
     worktrees_dir = ctx.primary / ".worktrees"
     if worktrees_dir.is_symlink():
-        raise WorktreeError(f"worktree directory must not be a symlink: {worktrees_dir}")
+        raise WorktreeError(
+            f"worktree directory must not be a symlink: {worktrees_dir}"
+        )
     if worktrees_dir.exists() and not worktrees_dir.is_dir():
         raise WorktreeError(f"worktree directory is not a directory: {worktrees_dir}")
 
@@ -69,9 +72,7 @@ def validate_request(ctx: RepositoryContext, request: WorktreeRequest) -> Path:
     if target.exists() or target.is_symlink():
         raise WorktreeError(f"worktree target already exists: {target}")
 
-    branch_check = git(
-        ctx, "check-ref-format", "--branch", request.branch, check=False
-    )
+    branch_check = git(ctx, "check-ref-format", "--branch", request.branch, check=False)
     if branch_check.returncode or branch_check.stdout.strip() != request.branch:
         raise WorktreeError(f"invalid branch name: {request.branch!r}")
     branch_ref = f"refs/heads/{request.branch}"
@@ -142,7 +143,9 @@ def creation_lock(ctx: RepositoryContext) -> Iterator[None]:
     try:
         lock_file = lock_path.open("w", encoding="utf-8")
     except OSError as error:
-        raise WorktreeError(f"cannot open repository transaction lock: {error}") from error
+        raise WorktreeError(
+            f"cannot open repository transaction lock: {error}"
+        ) from error
     with lock_file:
         try:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
@@ -173,16 +176,12 @@ def verify_created_worktree(
     source: ResolvedSource,
     root_beads: dict[str, str] | None,
 ) -> bool:
-    target_sha = git(
-        target, "rev-parse", "--verify", "HEAD^{commit}"
-    ).stdout.strip()
+    target_sha = git(target, "rev-parse", "--verify", "HEAD^{commit}").stdout.strip()
     if target_sha != source.sha:
         raise WorktreeError(
             f"created worktree HEAD mismatch: expected {source.sha}, found {target_sha}"
         )
-    branch = git(
-        target, "symbolic-ref", "--quiet", "--short", "HEAD"
-    ).stdout.strip()
+    branch = git(target, "symbolic-ref", "--quiet", "--short", "HEAD").stdout.strip()
     if branch != request.branch:
         raise WorktreeError(
             f"created worktree branch mismatch: expected {request.branch}, found {branch}"
@@ -207,9 +206,7 @@ def verify_created_worktree(
             f"failed to resolve created worktree target {target}: {error}"
         ) from error
     expected_branch = f"refs/heads/{request.branch}"
-    records = _worktree_records(
-        git(ctx, "worktree", "list", "--porcelain").stdout
-    )
+    records = _worktree_records(git(ctx, "worktree", "list", "--porcelain").stdout)
     if not any(
         record.get("worktree") == str(expected_target)
         and record.get("HEAD") == source.sha
@@ -220,7 +217,9 @@ def verify_created_worktree(
 
     worktrees_dir = ctx.primary / ".worktrees"
     if worktrees_dir.is_symlink() or not worktrees_dir.is_dir():
-        raise WorktreeError(f"worktree directory changed during creation: {worktrees_dir}")
+        raise WorktreeError(
+            f"worktree directory changed during creation: {worktrees_dir}"
+        )
     try:
         expected_parent = worktrees_dir.resolve(strict=True)
     except OSError as error:
@@ -248,57 +247,23 @@ def verify_created_worktree(
     return True
 
 
-def _target_owned(
-    ctx: RepositoryContext, target: Path, branch: str, expected_sha: str
-) -> tuple[bool, str]:
-    if target.is_symlink():
-        return False, "target is a symlink"
-    top = git(target, "rev-parse", "--show-toplevel", check=False)
-    common = git(
-        target,
-        "rev-parse",
-        "--path-format=absolute",
-        "--git-common-dir",
-        check=False,
-    )
-    symbolic = git(
-        target, "symbolic-ref", "--quiet", "--short", "HEAD", check=False
-    )
-    head = git(target, "rev-parse", "--verify", "HEAD^{commit}", check=False)
-    if (
-        top.returncode
-        or common.returncode
-        or symbolic.returncode
-        or head.returncode
-    ):
-        return False, "target is not an inspectable Git worktree"
-    try:
-        target_path = target.resolve(strict=True)
-        top_path = Path(top.stdout.strip()).resolve(strict=True)
-        common_path = Path(common.stdout.strip()).resolve(strict=True)
-    except OSError:
-        return False, "target Git paths cannot be resolved"
-    if top_path != target_path:
-        return False, "target resolves to a different repository root"
-    if common_path != ctx.common_dir:
-        return False, "target belongs to a different common directory"
-    if symbolic.stdout.strip() != branch:
-        return False, "target branch does not match the transaction"
-    if head.stdout.strip() != expected_sha:
-        return False, "target HEAD does not match the transaction source"
-    return True, ""
-
-
 def rollback_created_artifacts(
     ctx: RepositoryContext,
     target: Path,
     branch: str,
     expected_sha: str,
+    creation_identity: CreationIdentity | None = None,
 ) -> list[str]:
     residue: list[str] = []
     if target.exists() or target.is_symlink():
         try:
-            owned, reason = _target_owned(ctx, target, branch, expected_sha)
+            owned, reason = target_owned_by_creation(
+                ctx,
+                target,
+                branch,
+                expected_sha,
+                creation_identity,
+            )
         except WorktreeError as error:
             owned, reason = False, str(error)
         if owned:
@@ -388,6 +353,7 @@ def create_worktree(request: WorktreeRequest) -> CreationResult:
         bootstrap = resolve_bootstrap_contract(ctx, source)
         root_beads = beads_context(ctx.primary)
         branch_created = False
+        creation_identity: CreationIdentity | None = None
         try:
             git(
                 ctx,
@@ -404,6 +370,7 @@ def create_worktree(request: WorktreeRequest) -> CreationResult:
                 str(target),
                 request.branch,
             )
+            creation_identity = capture_creation_identity(target)
             beads_verified = verify_created_worktree(
                 ctx, request, target, source, root_beads
             )
@@ -420,7 +387,11 @@ def create_worktree(request: WorktreeRequest) -> CreationResult:
             )
             residue = (
                 rollback_created_artifacts(
-                    ctx, target, request.branch, source.sha
+                    ctx,
+                    target,
+                    request.branch,
+                    source.sha,
+                    creation_identity,
                 )
                 if branch_created
                 else []
@@ -430,6 +401,9 @@ def create_worktree(request: WorktreeRequest) -> CreationResult:
                     f"{failure}; rollback residue: {'; '.join(residue)}"
                 ) from None
             raise failure from None
+        finally:
+            if creation_identity is not None:
+                os.close(creation_identity.descriptor)
         return CreationResult(
             repo=ctx.primary,
             target=target,
@@ -466,9 +440,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"escapement-worktree: {error}", file=sys.stderr)
         return 1
     output = {
-        "beads_status": (
-            "verified" if result.beads_verified else "not applicable"
-        ),
+        "beads_status": ("verified" if result.beads_verified else "not applicable"),
         "beads_verified": result.beads_verified,
         "branch": result.branch,
         "repo": str(result.repo),

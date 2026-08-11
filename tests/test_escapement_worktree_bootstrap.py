@@ -21,6 +21,13 @@ from worktree_fixtures import git, make_remote_scenario, rev, run_cli
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def escaped_raw_bytes(raw: bytes) -> str:
+    """Render the contract's reversible fixed-width byte diagnostic."""
+    return "".join(f"\\x{byte:02x}" for byte in raw)
+
+
 PUBLIC_WORKTREE_CLIS = (
     pytest.param(ROOT / "bin" / "escapement-worktree", id="canonical"),
     pytest.param(
@@ -241,7 +248,11 @@ def test_embedded_nul_fails_before_git_creation_without_traceback(
 @pytest.mark.parametrize(
     ("argv_builder", "timeout", "expected_fragment"),
     [
-        (lambda _marker: ["definitely-not-a-real-bootstrap-executable"], 5, "executable"),
+        (
+            lambda _marker: ["definitely-not-a-real-bootstrap-executable"],
+            5,
+            "executable",
+        ),
         (
             lambda marker: [
                 sys.executable,
@@ -412,8 +423,7 @@ def test_repository_without_contract_does_not_auto_detect_justfile_recipe(
     scenario = make_remote_scenario(tmp_path)
     marker = tmp_path / "justfile-must-not-run"
     (scenario.primary / "Justfile").write_text(
-        "worktree-bootstrap:\n"
-        f"    @touch {marker}\n",
+        f"worktree-bootstrap:\n    @touch {marker}\n",
         encoding="utf-8",
     )
     git(scenario.primary, "add", "Justfile")
@@ -666,7 +676,10 @@ def test_bootstrap_terminated_by_signal_fails_and_rolls_back(tmp_path: Path) -> 
     )
 
     assert result.returncode != 0
-    assert any(word in result.stderr.lower() for word in ("signal", "terminated", str(signal.SIGTERM)))
+    assert any(
+        word in result.stderr.lower()
+        for word in ("signal", "terminated", str(signal.SIGTERM))
+    )
     _assert_no_transaction(scenario.primary, name, branch)
 
 
@@ -715,8 +728,8 @@ def test_timeout_kills_delayed_descendant_before_rollback(
 
     assert result.returncode != 0
     assert spawned_marker.read_text(encoding="utf-8") == "spawned"
-    assert "timeout stdout tail" in result.stderr
-    assert "timeout stderr tail" in result.stderr
+    assert escaped_raw_bytes(b"timeout stdout tail") in result.stderr
+    assert escaped_raw_bytes(b"timeout stderr tail") in result.stderr
     immediate_target_exists = target.exists()
     immediate_branch_exists = (
         git(
@@ -871,20 +884,18 @@ def test_noisy_failure_reports_bounded_output_tails(
     assert result.returncode != 0
     assert result.stdout == ""
     assert "exit status 53" in result.stderr
-    assert "useful stdout tail" in result.stderr
-    assert "useful stderr tail" in result.stderr
     assert "\x1b" not in result.stderr
     failure = result.stderr.removesuffix("\n")
     stderr_section, stdout_tail = failure.rsplit("; stdout tail: ", maxsplit=1)
     _prefix, stderr_tail = stderr_section.rsplit("; stderr tail: ", maxsplit=1)
     stdout_suffix = b" useful stdout tail\n"
     stderr_suffix = b"\x1b[31m useful stderr tail\n"
-    expected_stdout = (
+    expected_stdout = escaped_raw_bytes(
         b"o" * (8192 - len(stdout_suffix)) + stdout_suffix
-    ).decode("ascii").encode("unicode_escape").decode("ascii")
-    expected_stderr = (
+    )
+    expected_stderr = escaped_raw_bytes(
         b"e" * (8192 - len(stderr_suffix)) + stderr_suffix
-    ).decode("ascii").encode("unicode_escape").decode("ascii")
+    )
     assert stdout_tail == expected_stdout
     assert stderr_tail == expected_stderr
     _assert_no_transaction(scenario.primary, name, branch)
