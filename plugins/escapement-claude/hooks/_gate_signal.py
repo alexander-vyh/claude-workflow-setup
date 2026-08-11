@@ -28,11 +28,9 @@ Each call appends one JSON line to `.beads/.gate-signal.jsonl`:
 
 ## Failure behavior
 
-The gate's primary job is enforcement; logging is secondary. If the
-`.beads/` directory doesn't exist, or the file isn't writable, or
-disk is full, `record()` silently swallows the error. A failed
-record never blocks a real gate decision — that would invert
-priorities.
+The gate's primary job is enforcement; logging is secondary. If persistence
+fails, `record()` returns ``False`` without raising so callers that need an
+operator-visible diagnostic can emit one without changing the gate decision.
 
 ## Querying
 
@@ -136,7 +134,7 @@ def record(
     reason: str = "",
     event_type: str = "signal",
     **extras: Any,
-) -> None:
+) -> bool:
     """Append one signal record to .beads/.gate-signal.jsonl.
 
     When ``event_type == "waiver"`` the same record is ALSO appended to the
@@ -160,7 +158,8 @@ def record(
             preserve (command excerpt, matched-pattern, target file,
             etc.). Stored under the 'extras' key.
 
-    Fails silently on any I/O error. Never raises.
+    Returns ``True`` when every available target was written and ``False``
+    when no target was available or persistence failed. Never raises.
     """
     try:
         entry: dict[str, Any] = {
@@ -192,10 +191,12 @@ def record(
         if event_type == "waiver":
             targets.append(_resolve_waiver_path())
 
-        for target in targets:
-            if target is None:
-                continue
+        available_targets = [target for target in targets if target is not None]
+        if not available_targets:
+            return False
+        for target in available_targets:
             with open(target, "a", encoding="utf-8") as f:
                 f.write(line + "\n")
+        return True
     except Exception:
-        return  # signal capture must never block a gate decision
+        return False  # signal capture must never block a gate decision

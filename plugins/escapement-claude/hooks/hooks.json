@@ -80,6 +80,15 @@
       {
         "hooks": [
           {
+            "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/harness/bin/delegation_hook.py\"",
+            "type": "command"
+          }
+        ],
+        "matcher": "Agent"
+      },
+      {
+        "hooks": [
+          {
             "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/hooks/beads_worktree_guard.py\"",
             "type": "command"
           }
@@ -497,6 +506,15 @@
         "hooks": [
           {
             "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/hooks/escapement_session_context.py\"",
+            "type": "command"
+          }
+        ],
+        "matcher": ""
+      },
+      {
+        "hooks": [
+          {
+            "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/harness/bin/execution_reconcile.py\"",
             "type": "command"
           }
         ],

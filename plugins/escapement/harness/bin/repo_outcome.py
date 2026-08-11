@@ -16,7 +16,7 @@ NEVER treated as authorization to merge/deploy live (design anti-metric #2).
       "intended_outcome": "committed" | "pr-opened" | "merged" | "merged-and-deployed",
       "auto_merge_on_green": true | false,
       "deploy": { ... informational, surfaced in the agent's report ... },
-      "confirm_class": [ "db-migration", ... ]   # narrow set that still asks (per-repo)
+      "confirm_class": [ "db-migration", ... ]   # reserved metadata; not yet enforced
     }
 """
 from __future__ import annotations
@@ -24,7 +24,7 @@ from __future__ import annotations
 import json
 import pathlib
 import subprocess
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 # Ordered ladder: how far "done" reaches. Index encodes the ordering.
@@ -53,7 +53,6 @@ class RepoOutcome:
     confirm_class: list
     source: str
     warning: Optional[str] = None
-    confirm_class_absolute: bool = True  # False when a non-empty confirm_class is declared
 
 
 def _default(source: str, warning: Optional[str]) -> RepoOutcome:
@@ -159,7 +158,6 @@ def _resolve_text(raw_text: Optional[str], *, declared_source: str) -> RepoOutco
         confirm_class=confirm_class,
         source=declared_source,
         warning=None,
-        confirm_class_absolute=(len(confirm_class) == 0),
     )
 
 

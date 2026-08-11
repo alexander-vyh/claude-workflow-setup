@@ -54,7 +54,8 @@ DEFAULT_TIMEOUT = _lj.DEFAULT_TIMEOUT
 # real "Want me to dig up X and draft Y? I can do both now — you'd just review" message
 # reach the user unblocked while the narrower wrap-only prompt classified it not_winddown.
 # The negative side is sharpened to protect GENUINE decisions (which of two materially
-# different options; irreversible/external actions) so widening recall does not start
+# different options; undelegated destructive or irreversible actions) so widening
+# recall does not start
 # nagging legitimate clarifying questions. The genuine-decision carve-out is predicated
 # on ARM CONTENT, not framing: an (a)/(b) choice where any arm is hold/wait-for-external-
 # event is a wrap dressed as a decision (the cake 845ae4ea live miss, 2026-07-01 — the
@@ -67,7 +68,8 @@ _SYSTEM = (
     "DECISIVE TEST (apply first): Could the agent simply DO the next reversible step "
     "itself right now? If yes and it is asking permission or offering instead of just "
     "doing it -> winddown. If it genuinely needs the human to CHOOSE between real "
-    "alternatives or to AUTHORIZE something the agent cannot reverse or lacks access "
+    "alternatives or to AUTHORIZE something outside delegated authority that the agent "
+    "cannot reverse or lacks access "
     "for -> not_winddown.\n\n"
     "'winddown' = the agent is pausing when it should keep working. Three shapes:\n"
     "  1. WRAP/HANDOFF: offers to stop, wrap for the night, hand off, push-and-wrap, or "
@@ -79,7 +81,13 @@ _SYSTEM = (
     "'you'd just review' or 'hand you a ready-to-send draft - you'd review and send' does "
     "NOT make it not_winddown: producing a draft for the user to review is exactly the "
     "reversible work the agent should have just done. Only the actual send/deploy/commit "
-    "is the human's part, and the agent is not doing that.\n"
+    "may require attention when it crosses delegated authority.\n"
+    "  - AUTHORIZED ORDINARY MEANS: work already authorized by the delegated outcome "
+    "or repository policy is not categorically human-only merely because it has an "
+    "external effect. Commit, task-branch push, pull-request create/update, causal "
+    "repair, and the repository's standard declared landing path remain agent work. "
+    "Asking permission for those steps is a permission-punt unless the message names "
+    "a real undelegated boundary.\n"
     "  3. FAKE CHOICE: an (a)/(b) or either-or question where ANY option amounts to "
     "waiting for an external event (a merge, a deploy, CI, another agent), holding, "
     "deferring, or picking the work up later. Offering 'wait' as one option is a wrap "
@@ -88,9 +96,10 @@ _SYSTEM = (
     "  - reporting progress or results with no offer to stop;\n"
     "  - a GENUINE decision needing the user's preference (two materially different options "
     "with real trade-offs: which database, which architecture);\n"
-    "  - an irreversible or external action the agent must not take unilaterally (deploy to "
-    "prod, delete data, spend money, actually SEND an email or message) or that needs "
-    "credentials/access it lacks.\n\n"
+    "  - an action outside the delegated outcome that would add a new external audience, "
+    "privilege, credential, expense, or destructive/irreversible shared effect. External "
+    "is not sufficient by itself; already-delegated standard landing actions remain "
+    "ordinary means.\n\n"
     "Examples:\n"
     "- \"Want me to pull the exact config keys and write up the migration steps? I can do "
     "both now - you'd just review.\" -> winddown (reversible work, agent should just do it)\n"
@@ -100,8 +109,12 @@ _SYSTEM = (
     "- \"Should I store sessions in Postgres or SQLite? Postgres scales but adds ops; SQLite "
     "is zero-ops but caps at ~50 writers. Which fits your deployment?\" -> not_winddown "
     "(genuine trade-off only the user can pick)\n"
-    "- \"The deploy needs prod credentials I don't have - can you run gcloud auth login and "
-    "paste the token?\" -> not_winddown (blocked on access the agent lacks)\n"
+    "- \"The deploy needs a new prod credential I don't have and no independent work "
+    "remains - can you complete gcloud auth login locally so the CLI can use its normal "
+    "credential store? Do not send credential material in chat.\" -> not_winddown "
+    "(blocked on access the agent lacks)\n"
+    "- \"The repository declares merged-and-deployed and checks are green. Want me to "
+    "merge the task PR?\" -> winddown (the standard landing path is already delegated)\n"
     "- \"Done - all 12 tests pass and the report renders the corrected totals.\" -> "
     "not_winddown (progress report, no offer to stop)"
 )

@@ -44,7 +44,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from init_contract import build_contract, is_trivial_oracle  # noqa: E402
-from would_block_stop import harness_home, thread_dir_for_session  # noqa: E402
+from would_block_stop import InvalidActorIdentity, harness_home, thread_dir_for_session  # noqa: E402
 
 # A fenced block whose info string is exactly `verify` (optionally surrounded by
 # whitespace). The captured group is the command body. Non-greedy so the first
@@ -140,7 +140,11 @@ def main(argv: list[str], _fetch=fetch_bead) -> int:
         print(f"could not read bead {args.bead!r}: {exc}", file=sys.stderr)
         return 1
 
-    thread_dir = thread_dir_for_session(session_id, harness_home())
+    try:
+        thread_dir = thread_dir_for_session(session_id, harness_home())
+    except InvalidActorIdentity as exc:
+        print(f"refusing to derive contract: invalid actor identity: {exc}", file=sys.stderr)
+        return 2
     thread_dir.mkdir(parents=True, exist_ok=True)
     out = thread_dir / "contract.json"
     with out.open("w") as f:

@@ -74,6 +74,19 @@ guidance, not a gate.
 
 Named agents and beads are complementary. Beads tracks *what* to do (`bd ready`, `bd close`), named agents handle *how* they coordinate while doing it. When dispatching agents for beads-tracked work, give each agent a `name` — beads adds tracking, naming enables coordination.
 
+## Causal Scope And Action-Local Continuation
+
+Team capacity serves the delegated outcome, not every issue an agent happens to find.
+Own and repair work that **causally blocks the delegated outcome** when it remains
+inside the delegated repository, audience, privilege, effect, and ownership boundaries.
+Record **adjacent discoveries** separately; do not dispatch execution for them or suspend
+the active outcome to solicit a scope expansion.
+
+When one lane reaches an unresolved consequential choice, preserve that dependency and
+keep other authorized lanes running. A blocked agent is not a blocked team. Escalate
+only the narrow decision after all independent authorized work has continued as far as
+it can.
+
 ## Agent Pairing for Quality
 
 When dispatching implementation agents, consider pairing them with independent
@@ -160,18 +173,19 @@ section exists to prevent that failure mode. These rules are NON-NEGOTIABLE.
 finishing — FIXING the problem is finishing. Summarizing remaining work is not
 finishing — DOING the remaining work is finishing.
 
-**If you discover additional work during execution, KEEP GOING.** Create new tasks,
-dispatch new agents, fix what you find. Never list remaining work and stop. The only
-acceptable response to discovering more work is to do that work or dispatch agents
-to do it.
+**If you discover additional work during execution, classify it by causality.** Fix or
+dispatch causal blockers within the delegated boundary. Record adjacent discoveries for
+a future owner without executing them, then KEEP GOING on the delegated outcome.
 
-**If you hit an obstacle, work around it or escalate to the user — do NOT treat it
-as a stopping point.** An obstacle is a problem to solve, not permission to quit.
+**If you hit an obstacle, work around it or escalate the narrow consequential choice —
+do NOT treat it as a team-wide stopping point.** Continue every independent authorized
+lane while the blocked action waits.
 
 **Declaring "done" without running verification is FAILURE.** Run the actual
 command/test/workflow. See the actual output. Confirm the actual result. "I believe
-this works" is not verification. "The tests pass" is verification. "The output
-matches expected" is verification.
+this works" is not verification. Tests count only when they exercise the actual outcome
+and reject plausible bad implementations. Observed output must match the independent
+oracle.
 
 ### Pre-Completion Checklist
 
@@ -180,8 +194,8 @@ triggers more work — do that work before stopping.
 
 1. **Did I dispatch all agents that could work in parallel?** If independent work
    remains, dispatch agents for it NOW.
-2. **Are there follow-up tasks I found during execution that I haven't addressed?**
-   If yes, address them or create tracked tasks for them.
+2. **Are there causal blockers I found during execution that remain unaddressed?**
+   If yes, fix or dispatch them. Record adjacent discoveries without expanding scope.
 3. **Did I verify the outcome end-to-end?** Not just "my change compiles" — did I
    run the actual workflow and confirm the actual result?
 4. **Could I dispatch a review/QA agent to independently verify?** If the work is
@@ -198,4 +212,7 @@ When dispatching agents, include this language in their prompts:
 > THEM. If you hit an obstacle, investigate and work around it — do not report it
 > as a reason to stop. You are done when the OUTCOME is verified, not when you've
 > made an attempt. "Maximum Steps Reached" is not an acceptable reason to stop
-> unless you have genuinely exhausted every available action.
+> unless you have genuinely exhausted every available action. Own work that causally
+> blocks the delegated outcome; record adjacent discoveries without executing them.
+> If one action needs an unresolved consequential choice, continue every independent
+> authorized lane before escalating that narrow dependency.

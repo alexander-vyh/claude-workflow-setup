@@ -13,13 +13,23 @@
 #
 # Fail-fast.
 set -euo pipefail
+export PYTHONDONTWRITEBYTECODE=1
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CLAUDE_DIR="$HOME/.claude"
 SETTINGS="$CLAUDE_DIR/settings.json"
 PLUGIN_ID="escapement@escapement"
 INSTALLED="$CLAUDE_DIR/plugins/installed_plugins.json"
-TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
+TRANSACTION_HELPER="$REPO_DIR/scripts/plugin-update-transaction.py"
+TRANSACTION_JOURNAL="$CLAUDE_DIR/.plugin-update-transaction.json"
+TRANSACTION_GUARD="$TRANSACTION_JOURNAL.commit-guard"
+TRANSACTION_LOCK="$CLAUDE_DIR/harness/.continuation-supervisor-install.lock"
+SUPERVISOR_LABEL="com.escapement.continuation-supervisor"
+SUPERVISOR_MARKER="$CLAUDE_DIR/harness/continuation-supervisor-installed.json"
+SUPERVISOR_PLIST="$HOME/Library/LaunchAgents/$SUPERVISOR_LABEL.plist"
+SUPERVISOR_DOMAIN="gui/$UID"
+supervisor_installer="$REPO_DIR/scripts/continuation-supervisor-install.sh"
+supervisor_state_helper="$REPO_DIR/scripts/continuation-supervisor-state.py"
 
 DRY_RUN=false
 for arg in "$@"; do
@@ -30,12 +40,16 @@ for arg in "$@"; do
   esac
 done
 
-command -v claude >/dev/null || {
-  echo "FATAL: 'claude' CLI not on PATH" >&2
+[[ -x "$TRANSACTION_HELPER" ]] || {
+  echo "FATAL: plugin cutover transaction helper is missing: $TRANSACTION_HELPER" >&2
   exit 1
 }
-[[ -f "$SETTINGS" ]] || {
-  echo "FATAL: no settings.json at $SETTINGS" >&2
+[[ -x "$supervisor_installer" ]] || {
+  echo "FATAL: continuation supervisor installer is missing: $supervisor_installer" >&2
+  exit 1
+}
+[[ -x "$supervisor_state_helper" ]] || {
+  echo "FATAL: continuation supervisor state helper is missing: $supervisor_state_helper" >&2
   exit 1
 }
 
@@ -137,14 +151,65 @@ validate_wrapper_slot() {
   fi
 }
 
-current_path="$(resolve_install_path)"
-if [[ -z "$current_path" ]]; then
-  echo "FATAL: no valid user-scope $PLUGIN_ID installPath in $INSTALLED" >&2
-  exit 1
+validate_current_deployment() {
+  command -v claude >/dev/null || {
+    echo "FATAL: 'claude' CLI not on PATH" >&2
+    return 1
+  }
+  [[ -f "$SETTINGS" ]] || {
+    echo "FATAL: no settings.json at $SETTINGS" >&2
+    return 1
+  }
+  [[ -f "$INSTALLED" ]] || {
+    echo "FATAL: no valid user-scope $PLUGIN_ID installPath in $INSTALLED" >&2
+    return 1
+  }
+  python3 -B "$TRANSACTION_HELPER" validate-authority \
+    --journal "$TRANSACTION_JOURNAL" \
+    --path "$SETTINGS" \
+    --path "$INSTALLED"
+  current_path="$(resolve_install_path)"
+  if [[ -z "$current_path" ]]; then
+    echo "FATAL: no valid user-scope $PLUGIN_ID installPath in $INSTALLED" >&2
+    return 1
+  fi
+  validate_plugin_root_for_update "$current_path"
+  validate_wrapper_slot "$CLAUDE_DIR/harness/bin" bin
+  validate_wrapper_slot "$CLAUDE_DIR/harness/schemas" schemas
+}
+
+# A clean invalid deployment is rejected before the shared lock creates any
+# compatibility state. Interrupted transactions acquire the lock first because
+# their durable journal, not the half-cut-over live files, is authoritative.
+if [[ "$DRY_RUN" == true ]]; then
+  validate_current_deployment
+elif ! python3 -B "$supervisor_state_helper" lock-held \
+  --path "$TRANSACTION_LOCK" \
+  --fd "${ESCAPEMENT_SUPERVISOR_LOCK_FD:--1}"
+then
+  if [[ ! -e "$TRANSACTION_JOURNAL" && ! -e "$TRANSACTION_GUARD" ]]; then
+    validate_current_deployment
+  fi
+  exec python3 -B "$supervisor_state_helper" lock-run \
+    --path "$TRANSACTION_LOCK" \
+    bash "$0" "$@"
 fi
-validate_plugin_root_for_update "$current_path"
-validate_wrapper_slot "$CLAUDE_DIR/harness/bin" bin
-validate_wrapper_slot "$CLAUDE_DIR/harness/schemas" schemas
+
+if [[ "$DRY_RUN" != true \
+  && ( -e "$TRANSACTION_JOURNAL" || -e "$TRANSACTION_GUARD" ) ]]
+then
+  if ! python3 -B "$TRANSACTION_HELPER" recover \
+    --journal "$TRANSACTION_JOURNAL" \
+    --supervisor-installer "$supervisor_installer"
+  then
+    echo "FATAL: prior plugin cutover could not be recovered" >&2
+    exit 1
+  fi
+  echo "    recovered interrupted plugin cutover"
+fi
+if [[ "$DRY_RUN" != true ]]; then
+  validate_current_deployment
+fi
 
 pre_enabled="$(python3 - "$SETTINGS" "$PLUGIN_ID" <<'PY'
 import json
@@ -168,33 +233,100 @@ with open(sys.argv[1]) as fh:
 PY
 )"
 
+fail_after_refresh() {
+  local message="$1"
+  local rollback_status
+  trap - ERR
+  set +e
+  python3 -B "$TRANSACTION_HELPER" rollback \
+    --journal "$TRANSACTION_JOURNAL" \
+    --supervisor-installer "$supervisor_installer"
+  rollback_status=$?
+  set -e
+  case "$rollback_status" in
+    0)
+      echo "FATAL: $message; prior deployment generation restored" >&2
+      exit 1
+      ;;
+    3)
+      echo "    plugin update committed; interrupted cleanup deferred"
+      exit 0
+      ;;
+    *)
+      echo "FATAL: $message; prior deployment generation rollback FAILED" >&2
+      exit 2
+      ;;
+  esac
+}
+
 echo "==> escapement plugin-update"
 echo "    pre-state: enabled=$pre_enabled  model='${pre_model:-<unset>}'"
 echo "    installed: $current_path"
 
-BK="$CLAUDE_DIR/.cutover-backup-$TIMESTAMP"
 if [[ "$DRY_RUN" == true ]]; then
-  echo "    [dry-run] mkdir -p $BK"
-  echo "    [dry-run] cp $SETTINGS $BK/settings.json"
-  echo "    [dry-run] cp $INSTALLED $BK/installed_plugins.json"
+  echo "    [dry-run] begin recoverable plugin cutover transaction"
   echo "    [dry-run] claude plugin update $PLUGIN_ID"
   new_path="$current_path"
 else
-  mkdir -p "$BK"
-  cp "$SETTINGS" "$BK/settings.json"
-  cp "$INSTALLED" "$BK/installed_plugins.json"
-  echo "    backup: $BK"
-  restore_authority_state() {
-    cp "$BK/settings.json" "$SETTINGS"
-    cp "$BK/installed_plugins.json" "$INSTALLED"
-  }
-  fail_after_refresh() {
-    local message="$1"
-    restore_authority_state
-    echo "FATAL: $message; settings and plugin registry restored" >&2
-    exit 1
-  }
+  set +e
+  launchctl print "$SUPERVISOR_DOMAIN/$SUPERVISOR_LABEL" >/dev/null 2>&1
+  supervisor_status=$?
+  set -e
+  case "$supervisor_status" in
+    0) supervisor_loaded=true ;;
+    113) supervisor_loaded=false ;;
+    *)
+      echo "FATAL: could not determine prior supervisor runtime state (exit $supervisor_status)" >&2
+      exit "$supervisor_status"
+      ;;
+  esac
+  if [[ "$supervisor_loaded" == true ]]; then
+    if [[ ! -e "$SUPERVISOR_PLIST" && ! -L "$SUPERVISOR_PLIST" ]]; then
+      echo "FATAL: loaded continuation supervisor has no trusted plist" >&2
+      exit 1
+    fi
+    python3 -B "$supervisor_state_helper" validate-file --path "$SUPERVISOR_PLIST"
+  fi
+  python3 -B "$TRANSACTION_HELPER" begin \
+    --journal "$TRANSACTION_JOURNAL" \
+    --settings "$SETTINGS" \
+    --registry "$INSTALLED" \
+    --wrapper "$CLAUDE_DIR/harness/bin" \
+    --wrapper "$CLAUDE_DIR/harness/schemas" \
+    --supervisor-marker "$SUPERVISOR_MARKER" \
+    --supervisor-plist "$SUPERVISOR_PLIST" \
+    --supervisor-loaded "$supervisor_loaded"
+  trap 'fail_after_refresh "plugin update transaction failed"' ERR
+  atomic_symlink() {
+    local target="$1"
+    local dest="$2"
+    local parent staging temporary
+    parent="$(dirname "$dest")"
+    mkdir -p "$parent"
+    staging="$(mktemp -d "$parent/.escapement-link.XXXXXX")"
+    temporary="$staging/link"
+    if ! ln -s "$target" "$temporary"; then
+      rmdir "$staging" 2>/dev/null || true
+      return 1
+    fi
+    if ! python3 - "$temporary" "$dest" <<'PY'
+import os
+import sys
 
+os.replace(sys.argv[1], sys.argv[2])
+descriptor = os.open(os.path.dirname(sys.argv[2]), os.O_RDONLY)
+try:
+    os.fsync(descriptor)
+finally:
+    os.close(descriptor)
+PY
+    then
+      rm -f "$temporary"
+      rmdir "$staging" 2>/dev/null || true
+      return 1
+    fi
+    rmdir "$staging"
+  }
   if ! claude plugin update "$PLUGIN_ID" >/dev/null; then
     fail_after_refresh "Claude plugin update failed"
   fi
@@ -281,6 +413,9 @@ fi
 if [[ "$DRY_RUN" == true ]]; then
   echo "    [dry-run] chmod +x $new_path/harness/bin/*"
 else
+  python3 -B "$TRANSACTION_HELPER" record-modes \
+    --journal "$TRANSACTION_JOURNAL" \
+    --root "$new_path/harness/bin"
   chmod +x "$new_path"/harness/bin/*
   echo "    restored +x on vendored harness executables"
 fi
@@ -293,9 +428,9 @@ replace_wrapper() {
     echo "    [dry-run] ln -sfn $target $dest"
     return
   fi
-  mkdir -p "$(dirname "$dest")"
-  [[ -L "$dest" ]] && rm -f "$dest"
-  ln -s "$target" "$dest"
+  if ! atomic_symlink "$target" "$dest"; then
+    fail_after_refresh "could not atomically replace harness wrapper $dest"
+  fi
   echo "    wrapper: $dest -> $target"
 }
 
@@ -346,8 +481,29 @@ remove_plugin_owned_bootstrap_link() {
 replace_wrapper bin
 replace_wrapper schemas
 
-# Native plugin discovery owns these surfaces. Remove only links whose target
-# proves legacy Escapement provenance; preserve real files and unrelated links.
+# The stable harness wrapper is the launchd execution authority. Install only
+# after that wrapper and every plugin-owned surface have converged; dry-run uses
+# the same installer planner without touching launchd or HOME.
+if [[ "$DRY_RUN" == true ]]; then
+  "$supervisor_installer" --dry-run
+elif ! "$supervisor_installer"; then
+  fail_after_refresh "continuation supervisor installation failed"
+fi
+
+if [[ "$DRY_RUN" != true ]]; then
+  python3 -B "$TRANSACTION_HELPER" commit --journal "$TRANSACTION_JOURNAL"
+  trap - ERR
+  if ! python3 -B "$TRANSACTION_HELPER" recover \
+    --journal "$TRANSACTION_JOURNAL" \
+    --supervisor-installer "$supervisor_installer"
+  then
+    echo "WARNING: plugin update committed; cleanup deferred" >&2
+  fi
+fi
+
+# Native plugin discovery owns these surfaces. Defer destructive legacy-link
+# cleanup until the new supervisor and stable wrappers are successfully live,
+# so a failed cutover needs no broad filesystem reconstruction.
 for surface in skills agents commands rules hooks; do
   root="$CLAUDE_DIR/$surface"
   [[ -d "$root" ]] || continue

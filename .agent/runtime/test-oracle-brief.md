@@ -945,70 +945,228 @@ than risk blocking an unrelated command.
 Run `python3 -m pytest claude/hooks/tests/test_beads_worktree_guard.py -q`,
 render and check generated surfaces, then commit and push from the
 Beads-created worktree. Confirm the remote branch points to the new commit.
+# Test Oracle Brief — delegated-work liveness and parent completion (2026-08-09)
 
----
-
-# Test Oracle Brief — oracle-independence human handoff (`escapement-mol-5s2`)
+Scope: `escapement-e3ai`, the parent-open premature-final regression, durable
+native execution attempts, independently firing reconciliation, and optional
+local-judge authentication.
 
 ## Business invariant
 
-The recorded A/B judgments must remain identified as an AI-only pilot. A human
-result exists only after the user supplies distinct Condition A and Condition B
-responses; until then, the human-only outcome is explicitly blocked.
+A managed session does not finish while its claimed/root bead remains unresolved.
+Delegated native work either reaches verified terminal evidence and a verified
+parent outcome, or an installed supervisor performs bounded reconciliation
+without waiting for a user message.
 
 ## Independent source of truth
 
-The committed Condition A and B rows and sealed answer key determine the
-AI-pilot arithmetic. The future user's two responses—not repository prose,
-actor labels, commit authorship, or generated receipts—determine whether a
-human review occurred.
+- `bd show <root> --json` supplies canonical parent work state independently of
+  descendant queue code or the execution ledger.
+- Literal, hand-authored event/timestamp fixtures and a reference transition
+  table determine execution-attempt behavior.
+- The two real incident orderings determine the regression outcomes: the
+  22-hour child-tool stall and the design-session closed-children/open-parent
+  premature final response.
+- Installed `launchctl` state, supervisor health written after a completed scan,
+  and observed recovery without a user prompt prove firing.
+- The actual business verification command proves result application; ledger
+  terminal status alone does not.
 
 ## Solution constraints
 
-- Preserve the six existing cases and the pilot's recorded judgments.
-- Correct the sealed-key timestamp without changing its observed instant.
-- Supply one concise packet that a person can run in order without seeing the
-  prior AI judgments.
-- Do not invent a human response or add signatures, receipts, manifests, or
-  other self-authentication machinery.
+- Beads owns durable work identity, hierarchy, claim, and verified closure.
+- Escapement owns attempt identity, native binding, deadlines, recovery,
+  supervisor health, result application, and completion policy.
+- Python standard library core; atomic trusted state; host parsers outside the
+  state machine; local model optional and advisory.
+- No Stop claim for Codex until an effective installed hook fixture and smoke
+  prove it. SessionStart and external reconciliation remain mandatory.
+- No added responsibility in the already oversized `stop_hook.py`; extract
+  cohesive task/execution checks.
 
 ## Invalid solution classes
 
-Relabeling the AI reviewer as human, implying that the pilot completes the
-human outcome, exposing references before Condition A, copying the AI verdicts
-into a purported human response, or reporting totals that disagree with the
-six recorded rows are invalid.
+- Descendant-only `bd ready`/`bd blocked` checks that ignore root status.
+- Auto-closing a bead from child/native terminal state.
+- Mirroring Beads metadata or task status into `executions.json`.
+- Transcript/file mtime, tool start, polling chatter, or model opinion as
+  semantic progress.
+- Health stamped before a complete useful reconciliation.
+- Exactly-once-spawn assumptions, unfenced retries, or stale-generation result
+  application.
+- Future wakeup files accepted without fresh successful supervisor proof.
+- Public Stop wiring that bypasses otherwise-correct root/execution helpers.
+- Global health stamped after only part of a multi-thread scan succeeds.
+- Unrelated or old-generation future wakeups treated as current recovery proof.
+- Adapter events with missing generation silently relabeled as current.
+- Result-application claims treated as proof that the business result applied.
+- Missing/malformed/untrusted state treated as complete.
 
 ## Fragile implementation to reject
 
-The tempting shortcut is to keep the prior result unchanged and infer human
-authorship from a name, commit author, or prose label. The verification must
-instead require explicit AI disclosure and must not accept a claimed human
-result when no user response exists.
+Check only that all child beads are closed and a future wakeup exists. This
+would pass the child-research happy path while the parent remains `in_progress`,
+and would still fail when the parent has already ended or the waker is inert.
+The parent-open regression plus stale/missing supervisor controls must fail it.
 
 ## Negative control
 
-The unmodified pilot artifacts fail because they omit the AI reviewer identity,
-mislabel a local-offset timestamp as UTC, and provide no runnable human handoff.
-A packet that reveals the planted changes or claims a completed human result
-also fails.
+- Root `in_progress`, `ready=[]`, `blocked=[]` => block
+  `parent_outcome_unresolved`.
+- Root missing/malformed/unreadable => unresolved, never queue-drained.
+- Complete public Stop fixtures reject an open root with empty descendants both
+  without a wake and with a future wake plus missing/stale health.
+- Queued attempt past start deadline; running attempt past idle deadline; noisy
+  attempt past hard deadline => sticky reconciliation due, not terminal.
+- Successful process start plus failed thread scan => no new successful-health
+  timestamp.
+- A due attempt plus failure after planning, during its atomic claim write, or
+  during spawn => neither successful-health time nor completed generation moves.
+- In a two-thread root, success for A followed by load/reconcile/persist failure
+  for B (and the reverse scan order), or scheduled inspection failure, advances
+  diagnostic `reconcile_started_at` but preserves all authoritative prior health
+  fields.
+- Two concurrent public reconciliations contend for one due attempt => one live
+  current-generation claim and at most one spawn until claim expiry.
+- With `reconcile_due=None`, expired accepted activity/idle deadline, and fresh
+  filesystem mtime plus ledger `updated_at` from polling/tool-start, public
+  reconciliation sets idle-due and claims recovery. A paired completed-activity
+  event is the positive renewal control. Static checks reject mtime and ledger
+  `updated_at` as activity oracles.
+- Every terminal-ingress public path receives open child/root beads and a
+  recording Beads runner; none may issue closure mutation. Architecture checks
+  forbid `bd close`, closed-status updates, and closure-helper imports from the
+  ledger, hook, reconciliation, and supervisor modules. Business verification
+  owns task closure and Stop remains blocked while canonical beads are open.
+- Recovery claim persisted then process crash => no immediate duplicate; claim
+  expiry advances generation and permits recovery.
+- Old-generation completion => incident evidence only, never current result
+  application or Beads close.
+- Late generation-one completion delivered through public adapters after a
+  generation-two takeover cannot mutate generation two; missing generation is
+  unresolved, never defaulted.
+- A public application orchestrator must call an injected business verifier;
+  terminal state/digest cannot directly prove application. Missing/negative/
+  exceptional verification stays unapplied. If application succeeds and the
+  process dies before persistence, takeover rechecks the real outcome or reuses
+  a stable idempotency key so the external effect occurs once before fenced
+  completion. Equal digests on distinct executions remain distinct.
+- A future wake must exactly match parent session, watchdog, execution, attempt,
+  and generation; unrelated/mismatched wakeups do not authorize pause.
+- The public wake producer persists those literal identity fields in schema-valid
+  JSON consumed by public Stop; omitting any field fails validation and blocks.
+- HTTP 401/local-model absence => deterministic behavior unchanged.
 
 ## Positive control
 
-The pilot remains publishable as pilot evidence: its six A/B rows join exactly
-to the condition artifacts and still compute 4/6 versus 6/6. A packet covering
-all six cases and both ordered conditions is valid while honestly saying that
-the human response is absent.
+- Closed root, empty descendants, all managed attempts terminal and independently
+  verified => normal completion.
+- Running attempt with accepted completed activity, unexpired hard deadline,
+  valid future wake, and fresh post-reconcile health => bounded pause.
+- Recovery after claim expiry emits exactly one current-generation spawn in the
+  controlled fixture.
+- Both a complete no-op reconciliation and a complete action reconciliation
+  advance useful-work health exactly once.
+- Authenticated local judge annotation is observable but does not change the
+  deterministic decision.
 
 ## Missing/unresolved handling
 
-Missing human responses block the human-only bead. They do not justify
-fabricating provenance, discarding the AI pilot, or treating a negative future
-result as invalid.
+Fail closed on completion and pause authorization. Wake and reconcile rather
+than blindly replay. A specific auditable human release remains the only manual
+override. Model failure is fail-open only for the advisory annotation.
 
 ## Final outcome verification
 
-Run `pytest -q tests/test_oracle_independence_human_probe.py`; inspect the
-pilot labels, scoring packet, diff, and worktree status; then mark
-`escapement-mol-5s2` blocked on the external human response and commit the
-test/brief-only handoff.
+1. Focused parent-state, execution-ledger, supervisor, Stop, host-adapter,
+   installer, security, and local-auth suites pass after verified RED failures.
+2. An independent mutation challenger proves the named bad implementations are
+   killed.
+3. Full `python -m pytest claude/hooks/tests harness/tests tests -q -rs` and
+   generated-surface checks pass.
+4. Merged source is installed for Claude and Codex; launchd runs
+   `wakeup_waker.py --fire` and exposes fresh post-reconcile health.
+5. A disposable short-deadline delegation is automatically reconciled without
+   a user message, and the open-parent/closed-children fixture continues rather
+   than returning a final answer.
+
+---
+
+# Test Oracle Brief — discovery consequence gating
+
+## Business invariant
+Discovery asks the user to co-author load-bearing choices before drafting a
+high-consequence or hard-to-reverse solution, while local reversible work stays
+lightweight.
+
+## Independent source of truth
+The public discovery guidance and its observed conversation order: questions
+before solution commitments, explicit answers reflected in the draft, and no
+heavy interview for low-consequence work.
+
+## Solution constraints
+The canonical skill is the only authority; rendered plugin copies must match.
+Rapid changes ceremony, not consequence calibration.
+
+## Invalid solution classes
+Reject draft-first high-risk responses, keyword-only risk routing, reintroducing
+an earlier owner after an explicit fork answer, reclassifying unknown work instead
+of asking consequences, and over-interviewing local reversible work.
+
+## Fragile implementation to reject
+A direct design request that drafts an architecture before asking the required
+ownership, rollout, compatibility, or rollback choices.
+
+## Negative control
+High-risk work asks 2–4 explicit tradeoff-bearing forks and stops; unknown work
+asks exactly what becomes costly or impossible to undo and who is affected.
+
+## Positive control
+Low-risk reversible work uses lightweight draft-and-react, and a complete answer
+set authorizes a draft that follows the selected authority.
+
+## Missing/unresolved handling
+Unknown consequences require the two-question probe and wait. Partial fork
+answers keep only the unresolved choices gated.
+
+## Final outcome verification
+Run `pytest -q tests/test_discovery_interaction_contract.py`, render/check agent
+surfaces, and exercise one high-, low-, and unknown-consequence conversation.
+
+---
+
+# Test Oracle Brief — oracle-independence human handoff
+
+## Business invariant
+The recorded A/B judgments remain identified as an AI pilot. A human result exists
+only after a person completes both ordered conditions.
+
+## Independent source of truth
+The six committed pilot rows determine pilot arithmetic; the future person's two
+responses—not actor labels or commit metadata—determine human completion.
+
+## Solution constraints
+Preserve the pilot, correct its timestamp, provide one concise blinded scoring
+packet, and do not invent human responses, signatures, or receipt machinery.
+
+## Invalid solution classes
+Reject relabeling AI output as human, exposing Condition B references before
+Condition A, copying pilot verdicts as human answers, or changing the six rows.
+
+## Fragile implementation to reject
+Inferring human authorship from a name, role string, or commit author.
+
+## Negative control
+No human response means the human-only outcome remains explicitly blocked.
+
+## Positive control
+The six pilot rows still reconcile to 4/6 versus 6/6, and the packet covers both
+conditions without revealing planted changes early.
+
+## Missing/unresolved handling
+Missing human responses block only the human conclusion; they do not invalidate the
+AI pilot or justify fabricated provenance.
+
+## Final outcome verification
+Run `pytest -q tests/test_oracle_independence_human_probe.py` and inspect the pilot
+disclosure, scoring packet, timestamp, and bead state.

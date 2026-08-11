@@ -1,0 +1,30 @@
+{
+  "frozen_at": "2026-07-08T06:27:33Z",
+  "source_git_revisions": {
+    "dashboards": "5f290673b38c9c231949da4d3117be021888553b",
+    "escapement": "5d2b43492b81006b289b19f78d81757c39c38529"
+  },
+  "sampling_rule": {
+    "eligible_formula": "mol-feature",
+    "eligible_created_at_or_before": "2026-07-08T06:27:33Z",
+    "rank": "created_at-descending",
+    "closed_root_quota_by_repo": {
+      "dashboards": 4,
+      "escapement": 2
+    }
+  },
+  "files": {
+    "population.jsonl": {
+      "records": 16,
+      "sha256": "414bf59165433cd19b5e1a9ba40922aef5a803909813843be24d7223a03b340b"
+    },
+    "stages.jsonl": {
+      "records": 54,
+      "sha256": "d77819a6dd8d5ef4bbe1cbd9e4188ddaee3cfda2533a3b6e6a95007f764f087f"
+    },
+    "counterfactuals.jsonl": {
+      "records": 2,
+      "sha256": "ed19a35ab99101d994ca231149d73d6ec56b597d3e610c4d99c64edbc6a6ab63"
+    }
+  }
+}
