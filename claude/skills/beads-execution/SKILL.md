@@ -82,8 +82,10 @@ This skill can be invoked in several ways:
 - `"run the beads tasks"` — run all ready tasks
 
 **If a specific task ID is provided as an argument**, skip `bd ready` and go
-directly to that task. Claim it and execute it. After it completes, ask the user
-if they want to continue with the next ready task or stop.
+directly to that task. Claim it, execute it, and carry that task through the
+repository-declared landing and verification outcome. Do not expand a bounded
+invocation to unrelated ready beads; continue only causally in-scope work that
+the completed task unblocks.
 
 **If no task ID is provided**, use `bd ready` to determine what to work on next.
 
@@ -724,12 +726,22 @@ When all tasks are complete:
 
 1. Run `bd list` to confirm everything is closed
 2. Dispatch a final code reviewer for the entire implementation
-3. Finish the branch — **PR-only** (this repo never merges to main directly):
-   - Confirm tests / quality gates pass.
-   - `git push` the feature branch.
-   - Open a PR with `gh pr create` (if it 403s on a read-only account, print the
-     `compare/main...<branch>` URL instead — see the gh-account memory).
-   - Do **not** merge to main locally. If not ready to PR: keep the branch, or discard it.
+3. Resolve the landing policy from `.escapement/repo.json` through
+   `harness/bin/repo_outcome.py`, unless session context already provides the
+   resolved policy. Treat malformed or absent policy as its conservative
+   `pr-opened` default.
+4. Confirm tests and quality gates pass, then follow the resolved outcome:
+   - `committed`: leave the verified task commit on its isolated branch.
+   - `pr-opened`: push the feature branch and create or update its pull request.
+   - `merged`: push, create or update the pull request, repair CI/review failures,
+     verify green status independently, and merge through the remote landing path
+     when repository policy authorizes it.
+   - `merged-and-deployed`: complete the `merged` path, then run the declared
+     deployment or refresh workflow and verify the installed/user-facing outcome.
+5. Never merge a feature branch into the local default-branch checkout. Landing
+   happens through the repository's remote pull-request path. If one consequential
+   authorization is genuinely missing, block only that action and continue every
+   independent authorized verification or repair route.
 
 ## Model Selection
 
@@ -795,12 +807,15 @@ review passes AND the outcome is verified end-to-end.
 - **Summarize remaining work and stop** — that is premature wind-down, not completion
 - **Report "done" without running the actual end-to-end verification**
 
-**If ANY discrepancy exists between the task description, the design doc,
-validation findings, or upstream task results — STOP and ask the user.**
+**If a discrepancy between the task description, design doc, validation findings,
+or upstream results requires a product decision, block only the affected task and
+its dependents. Preserve the decision and continue independent ready tasks.**
 
-This is not optional. This is not "note it and keep going." This is a hard stop.
+Ask the user only when every remaining route to the delegated outcome depends on
+the same unresolved consequential choice. A discrepancy is not permission to guess,
+but it is also not permission to stop unrelated authorized work.
 
-Examples that require stopping:
+Examples that require an action-local decision:
 - Validation gate recommended changes that conflict with the task description
 - Design doc says X but the codebase actually does Y
 - An API doesn't work as the spec assumed
@@ -808,9 +823,10 @@ Examples that require stopping:
 
 **The pattern:**
 1. State the conflict clearly (source A says X, source B says Y)
-2. Ask which to follow
-3. Wait for the answer
-4. Then implement
+2. Identify the affected task and dependent tasks
+3. Continue independent ready tasks, causal verification, and repair
+4. Ask which source governs only if the product decision is still required
+5. Resume the affected branch when the answer arrives
 
 Reasoning through a discrepancy in your thinking and then picking one side
 without asking is the exact failure mode this rule prevents. You are not
@@ -821,7 +837,9 @@ authorized to make product decisions — only implementation decisions.
 **Required workflow setup:**
 - **Isolated workspace** — REQUIRED: use the concrete bundled `escapement-worktree create` transaction injected into session context. It verifies repository, source, location, branch, and shared Beads task state together.
 - **Code review** — use the repo's own review template (the `adversarial-reviewer` agent / the `dispatching-parallel-agents` review prompt) for the quality gate (Step 2f).
-- **Finish** — PR-only branch finish, inline in Step 4 (push + open PR; never merge to main).
+- **Finish** — repository-outcome-driven branch finish, inline in Step 4 (commit,
+  pull request, authorized remote merge, deployment/refresh, and verification as
+  selected by `.escapement/repo.json`).
 
 **Prerequisite skills:**
 - **/discovery** — creates design doc

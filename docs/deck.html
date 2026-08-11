@@ -272,16 +272,15 @@
 <div class="nav-hint">arrows ↑↓ or scroll to navigate</div>
 
 <!-- ============================================================== -->
+<!-- escapement:core-identity:start -->
 <section class="slide" id="s1">
   <div class="slide-number">01</div>
   <h1>escapement</h1>
-  <div class="tagline">OpenSpec, opinionated.</div>
+  <div class="tagline">Authorized capacity. Verified delivery.</div>
   <p class="lede">
-    A shared workflow for Claude Code and Codex. Built on top of
-    <a href="https://github.com/Fission-AI/OpenSpec">OpenSpec</a>,
-    wired to <a href="https://github.com/steveyegge/beads">Beads</a>,
-    enforced through host-specific hooks and instructions. Strong opinions. Take what's useful, ignore the rest.
+    Escapement converts available agent capacity plus delegated authority into verified, delivered outcomes while reserving human attention for consequential choices.
   </p>
+<!-- escapement:core-identity:end -->
   <p class="lede" style="margin-top:0.5rem;">
     <a href="https://github.com/alexander-vyh/escapement">github.com/alexander-vyh/escapement</a>
   </p>
@@ -291,62 +290,72 @@
 <section class="slide" id="s2">
   <div class="slide-number">02</div>
   <h2>What this actually is</h2>
-  <p>A <strong>workflow built on OpenSpec</strong>, not a replacement. Four overlays:</p>
+  <p>A client-neutral workflow and control layer that keeps a bounded outcome moving from intent through delivery.</p>
   <div class="layer-grid">
     <div class="layer-card">
       <div class="num">01</div>
-      <h3>Adversarial discovery</h3>
-      <p>Riskiest-assumption, pre-mortem, red/blue team, walking-skeleton — injected as internal prompts; <em>not</em> visible in the output docs.</p>
+      <h3>Mission command</h3>
+      <p>Human-chosen intent directs available capacity inside explicit delegated authority.</p>
     </div>
     <div class="layer-card">
       <div class="num">02</div>
-      <h3>Bridge to beads</h3>
-      <p>OpenSpec's <code>tasks.md</code> becomes a real task graph via <code>bd create --spec-id …</code>. Agents execute against acceptance criteria linked back to specs.</p>
+      <h3>Closed-loop control</h3>
+      <p>Define the outcome, act, compare with an independent oracle, repair divergence, and land.</p>
     </div>
     <div class="layer-card">
       <div class="num">03</div>
-      <h3>Molecule formula</h3>
-      <p><code>mol-feature</code> orchestrates brainstorm → discovery → skeleton → build → retro as a single <code>bd mol pour</code> command with two human gates.</p>
+      <h3>Flow and constraints</h3>
+      <p>Measure where delivery waits, protect the critical path, and allocate capacity where it changes the outcome.</p>
     </div>
     <div class="layer-card">
       <div class="num">04</div>
-      <h3>Discipline hooks</h3>
-      <p>Tool-call-level enforcement: TDD-first, named-agent teams, outcome verification, spec-ID linkage, never-suppress.</p>
+      <h3>Enabling bureaucracy</h3>
+      <p>Keep only gates that provide repair, transparency, and safe flexibility.</p>
     </div>
   </div>
   <p style="margin-top:1.5rem; font-size:0.95rem; color:var(--muted);">
-    The artifacts on disk — <code>proposal.md</code>, <code>design.md</code>, <code>specs/*.md</code>, <code>tasks.md</code> — are standard OpenSpec. A teammate using bare OpenSpec can read them with zero extra context.
+    Tools can change. The mission, authority boundary, and outcome oracle do not.
   </p>
 </section>
 
 <!-- ============================================================== -->
 <section class="slide" id="s3">
   <div class="slide-number">03</div>
-  <h2>The core loop</h2>
+  <h2>Durable capability chain</h2>
   <div class="flow">
     <div class="flow-step">
-      <div class="label">you say "build X"</div>
-      <div class="hint">A user prompt with feature-intent keywords</div>
+      <div class="label">Intent and authority</div>
+      <div class="hint">Define the bounded outcome and delegated decision space</div>
     </div>
     <div class="flow-arrow">↓</div>
     <div class="flow-step">
-      <div class="label">mol-feature (beads)</div>
-      <div class="hint">Root epic + 9 step tasks (2 are gates) created via <code>bd mol pour</code></div>
+      <div class="label">Design and specification</div>
+      <div class="hint">Make behavior, constraints, risks, and the oracle explicit</div>
     </div>
-    <div class="flow-arrow">↓  step: discovery</div>
+    <div class="flow-arrow">↓</div>
     <div class="flow-step">
-      <div class="label">/discovery skill</div>
-      <div class="hint">Adversarial overlay on OpenSpec CLI → writes <code>openspec/changes/{name}/{proposal,design,specs/*,tasks}.md</code></div>
+      <div class="label">Executable dependency-aware work breakdown</div>
+      <div class="hint">Turn the design into schedulable, verifiable work</div>
     </div>
-    <div class="flow-arrow">↓  step: work-breakdown</div>
+    <div class="flow-arrow">↓</div>
     <div class="flow-step">
-      <div class="label">/work-breakdown skill</div>
-      <div class="hint">Reads openspec/, writes <code>bd spec</code> issues (<code>--acceptance</code>) and <code>bd task</code> issues (<code>--spec-id</code> linked)</div>
+      <div class="label">Capacity allocation → Isolated execution</div>
+      <div class="hint">Match available agents to ready work without owner collisions</div>
     </div>
-    <div class="flow-arrow">↓  step: execute-skeleton → review → execute-full</div>
+    <div class="flow-arrow">↓</div>
     <div class="flow-step">
-      <div class="label">parallel named agents</div>
-      <div class="hint">Implement tasks, reading <code>--acceptance</code> via <code>--spec-id</code>. Each agent gates on a Test Oracle Brief before writing code.</div>
+      <div class="label">Action-local continuation and repair</div>
+      <div class="hint">Keep independent authorized work moving while a dependent choice waits</div>
+    </div>
+    <div class="flow-arrow">↓</div>
+    <div class="flow-step">
+      <div class="label">Independent outcome verification</div>
+      <div class="hint">Prove the actual result against a source outside the implementation</div>
+    </div>
+    <div class="flow-arrow">↓</div>
+    <div class="flow-step">
+      <div class="label">Authorized landing and delivery → Learning and feedback</div>
+      <div class="hint">Land through declared policy and feed evidence into the next cycle</div>
     </div>
   </div>
 </section>
@@ -354,28 +363,27 @@
 <!-- ============================================================== -->
 <section class="slide" id="s4">
   <div class="slide-number">04</div>
-  <h2>The molecule lifecycle</h2>
-  <p>9 steps · 2 gates · 4 phases</p>
+  <h2>Design is part of the mechanism</h2>
+  <p>Design and work breakdown make continued autonomous action possible.</p>
   <div class="timeline">
-    <div class="ts phase-design"><span class="phase-tag">Design</span>brainstorm</div>
-    <div class="ts phase-design"><span class="phase-tag">Design</span>discovery</div>
-    <div class="ts gate phase-design"><span class="phase-tag">Gate</span>review-discovery</div>
-    <div class="ts phase-design"><span class="phase-tag">Design</span>work-breakdown</div>
-    <div class="ts phase-validate"><span class="phase-tag">Validate</span>execute-skeleton</div>
-    <div class="ts gate phase-validate"><span class="phase-tag">Gate</span>review-skeleton</div>
-    <div class="ts phase-build"><span class="phase-tag">Build</span>execute-full</div>
-    <div class="ts phase-learn"><span class="phase-tag">Learn</span>ceremony-retro</div>
-    <div class="ts phase-learn"><span class="phase-tag">Learn</span>outcome-check</div>
+    <div class="ts phase-design"><span class="phase-tag">Intent</span>outcome + authority</div>
+    <div class="ts phase-design"><span class="phase-tag">Design</span>risks + constraints</div>
+    <div class="ts phase-design"><span class="phase-tag">Plan</span>dependency graph</div>
+    <div class="ts phase-validate"><span class="phase-tag">Probe</span>walking skeleton</div>
+    <div class="ts phase-build"><span class="phase-tag">Build</span>ready work</div>
+    <div class="ts phase-learn"><span class="phase-tag">Verify</span>real outcome</div>
+    <div class="ts phase-learn"><span class="phase-tag">Land</span>authorized path</div>
+    <div class="ts phase-learn"><span class="phase-tag">Learn</span>feedback</div>
   </div>
   <div class="phase-legend">
     <span><span class="swatch" style="background:var(--phase-design);"></span> Design</span>
     <span><span class="swatch" style="background:var(--phase-validate);"></span> Validate</span>
     <span><span class="swatch" style="background:var(--phase-build);"></span> Build</span>
     <span><span class="swatch" style="background:var(--phase-learn);"></span> Learn</span>
-    <span style="margin-left:1rem;">⌐ dashed border = human gate</span>
+    <span style="margin-left:1rem;">a decision consumes human attention only when consequential</span>
   </div>
   <p style="margin-top:1.5rem; font-size:0.9rem; color:var(--muted);">
-    Each step is a <code>bd</code> issue with a <code>description</code> that tells Claude what to do — often "run /discovery" or "dispatch named agents via TeamCreate". The formula is the script; the skills are the subroutines.
+    A strong design establishes the valid solution space. A dependency graph exposes work that can continue independently. Neither capability depends on a particular planning or task tool.
   </p>
 </section>
 
@@ -383,73 +391,49 @@
 <!-- ============================================================== -->
 <section class="slide" id="s5">
   <div class="slide-number">05</div>
-  <h2>What a <code>mol-feature</code> pour produces</h2>
-  <p>Five concrete moments, in order.</p>
+  <h2>Delegating an outcome delegates its ordinary means</h2>
+  <p>Routine, proportionate delivery actions inside the named scope are already authorized.</p>
 
   <div class="pour-moments">
 
     <div class="moment">
       <div class="moment-num">1</div>
       <div class="moment-body">
-        <div class="moment-title">You pour the molecule</div>
-        <pre><code>bd mol pour mol-feature \
-  --var name="add-status-cmd" \
-  --var problem="agents need a /status slash command"</code></pre>
+        <div class="moment-title">Isolate and inspect</div>
+        <p>Create the established worktree and inspect the scoped repository state.</p>
       </div>
     </div>
 
     <div class="moment">
       <div class="moment-num">2</div>
       <div class="moment-body">
-        <div class="moment-title">Beads creates an epic + 9 step tasks, with dependencies wired up</div>
-        <pre><code>repo-abc        [epic]    add-status-cmd
-repo-abc.1      [step]    brainstorm           ready
-repo-abc.2      [step]    discovery            blocked
-repo-abc.3      [gate]    review-discovery     blocked
-repo-abc.4      [step]    work-breakdown       blocked
-repo-abc.5      [step]    execute-skeleton     blocked
-repo-abc.6      [gate]    review-skeleton      blocked
-repo-abc.7      [step]    execute-full         blocked
-repo-abc.8      [step]    ceremony-retro       blocked
-repo-abc.9      [step]    outcome-check        blocked</code></pre>
+        <div class="moment-title">Edit and verify</div>
+        <p>Make scoped changes and run the relevant tests, lint, builds, and behavioral checks.</p>
       </div>
     </div>
 
     <div class="moment">
       <div class="moment-num">3</div>
       <div class="moment-body">
-        <div class="moment-title">Next prompt: <code>mol_status_check</code> fires on SessionStart</div>
-        <pre><code>Active molecule: add-status-cmd  (Design phase)
-Current step: brainstorm  [ready]
-Next: run /brainstorm or /discovery to start.</code></pre>
+        <div class="moment-title">Commit and publish the task branch</div>
+        <p>Commit intentionally, push the declared branch, and create or update its pull request.</p>
       </div>
     </div>
 
     <div class="moment">
       <div class="moment-num">4</div>
       <div class="moment-body">
-        <div class="moment-title">Artifacts accumulate as each step completes</div>
-        <pre><code>after discovery        openspec/changes/add-status-cmd/
-                         &#x251C;&#x2500; proposal.md
-                         &#x251C;&#x2500; design.md
-                         &#x251C;&#x2500; specs/{capability}.md
-                         &#x2514;&#x2500; tasks.md
-
-after work-breakdown   repo-abc.spec.*   bd spec issues (--acceptance)
-                       repo-abc.task.*   bd task issues (--spec-id linked)
-
-after execute-full     production code + passing tests
-                       all task issues closed</code></pre>
+        <div class="moment-title">Repair causal blockers</div>
+        <p>Own CI, review, or integration failures that causally prevent the delegated outcome without expanding into adjacent scope.</p>
       </div>
     </div>
 
     <div class="moment">
       <div class="moment-num">5</div>
       <div class="moment-body">
-        <div class="moment-title">Two gates pause for your approval</div>
+        <div class="moment-title">Land and prove the outcome</div>
         <p>
-          <strong>review-discovery</strong> &mdash; design.md and specs are ready: approve, or revise?<br>
-          <strong>review-skeleton</strong> &mdash; walking skeleton validated the riskiest assumption: proceed to full build, or back to design?
+          Follow the repository-declared merge, deployment, and verification path. These ordinary means do not need the product decision to be reconfirmed.
         </p>
       </div>
     </div>
@@ -459,43 +443,43 @@ after execute-full     production code + passing tests
 
 <section class="slide" id="s6">
   <div class="slide-number">06</div>
-  <h2>Six layers — adopt one, some, or all</h2>
+  <h2>Current adapters, not product identity</h2>
   <div class="layer-grid">
     <div class="layer-card">
-      <div class="num">LAYER 1</div>
-      <h3>Formulas</h3>
-      <p>Workflow definitions for <code>bd mol pour</code> — 9-step <code>mol-feature</code> and 2-step <code>mol-rapid</code>.</p>
-      <div class="path">beads/formulas/*.json</div>
+      <div class="num">DESIGN</div>
+      <h3>OpenSpec</h3>
+      <p>Current design, specification, decision, and change-artifact adapter.</p>
+      <div class="path">openspec/changes/</div>
     </div>
     <div class="layer-card">
-      <div class="num">LAYER 2</div>
-      <h3>Skills</h3>
-      <p>The "how" for each step. Discovery, work-breakdown, beads-execution, oracle review, plus parallel-agent dispatch wrappers.</p>
-      <div class="path">claude/skills/*/SKILL.md</div>
+      <div class="num">WORK STATE</div>
+      <h3>Beads</h3>
+      <p>Current task and dependency-state adapter; not Escapement's policy authority.</p>
+      <div class="path">bd ready · bd show · bd update</div>
     </div>
     <div class="layer-card">
-      <div class="num">LAYER 3</div>
-      <h3>Commands</h3>
-      <p>Slash-command shims: <code>/discovery</code>, <code>/work-breakdown</code>, <code>/brainstorm</code>, <code>/review</code>.</p>
-      <div class="path">claude/commands/*.md</div>
+      <div class="num">ISOLATION</div>
+      <h3>Git worktrees</h3>
+      <p>Current isolated-execution adapter, created through Escapement's transaction.</p>
+      <div class="path">escapement-worktree create</div>
     </div>
     <div class="layer-card">
-      <div class="num">LAYER 4</div>
-      <h3>Rules</h3>
-      <p>Global discipline — TDD-first, agent teams, outcome ownership, never-suppress, Serena-first.</p>
-      <div class="path">claude/rules/*.md</div>
+      <div class="num">CAPACITY</div>
+      <h3>Claude Code and Codex</h3>
+      <p>Current host adapters. Each exposes only fixture-proven lifecycle behavior.</p>
+      <div class="path">agent-surfaces/manifest.json</div>
     </div>
     <div class="layer-card">
-      <div class="num">LAYER 5</div>
-      <h3>Hooks</h3>
-      <p>Tool-call-level enforcement. 21 Python/shell scripts grouped into 5 functional families.</p>
-      <div class="path">claude/hooks/*.py</div>
+      <div class="num">ORACLE</div>
+      <h3>Independent checks</h3>
+      <p>Behavioral tests, mutation challenge, and live outcome verification.</p>
+      <div class="path">Outcome → Oracle → Constraints → Tests → Code</div>
     </div>
     <div class="layer-card">
-      <div class="num">LAYER 6</div>
-      <h3>Bootstrap</h3>
-      <p>SessionStart hook that auto-inits openspec, beads, direnv, and Serena per repo.</p>
-      <div class="path">scripts/project-bootstrap.sh</div>
+      <div class="num">LANDING</div>
+      <h3>GitHub and repository policy</h3>
+      <p>Current pull-request, merge, and declared delivery-path adapters.</p>
+      <div class="path">.escapement/repo.json</div>
     </div>
   </div>
 </section>
@@ -503,125 +487,102 @@ after execute-full     production code + passing tests
 <!-- ============================================================== -->
 <section class="slide" id="s7">
   <div class="slide-number">07</div>
-  <h2>The skill stack</h2>
-  <p>Eight skills. Each wraps a step of the workflow.</p>
+  <h2>Capability truth outranks symmetry</h2>
+  <p>One client's hook model is not evidence for another client.</p>
+  <!-- escapement:support-claims:start
+  merge-green-status=unsupported
+  merge-green-status-reason=The merge authorization hook resolves repository-declared merge authority but does not observe pull-request check or green status.
+  confirm-class-enforcement=reserved
+  confirm-class-enforcement-reason=Repository confirmation classes are stored but are not currently enforced by the merge authorization hook.
+  deploy-execution=informational
+  deploy-execution-reason=Repository deploy metadata is surfaced as outcome context and does not execute or independently authorize a deployment command.
+  codex-final-response-interception=guidance-only
+  codex-final-response-interception-reason=The installed Codex adapter exposes no Stop or final-response hook; durable work state and SessionStart guidance support continuation without native interception.
+  -->
+  <!-- escapement:support-claims:end -->
   <ul class="item-list">
-    <li><strong>build</strong> — <span class="desc">front-door router; classifies the work, pours the right molecule</span></li>
-    <li><strong>brainstorming</strong> — <span class="desc">"should we build this at all?" pre-filter with rotating creative lenses</span></li>
-    <li><strong>discovery</strong> — <span class="desc">adversarial wrapper on OpenSpec CLI; injects pre-mortem, red/blue team, walking-skeleton</span></li>
-    <li><strong>work-breakdown</strong> — <span class="desc">reads <code>openspec/changes/{name}/</code>, creates bd spec + task issues with spec-id links</span></li>
-    <li><strong>beads-execution</strong> — <span class="desc">reads <code>bd ready</code>, dispatches named-team subagents per task</span></li>
-    <li><strong>behavioral-test-oracle-review</strong> — <span class="desc">required Test Oracle Brief before any behavioral code change</span></li>
-    <li><strong>dispatching-parallel-agents</strong> — <span class="desc">mandatory TeamCreate + named agents; no anonymous dispatch</span></li>
-    <li><strong>subagent-driven-development</strong> — <span class="desc">two-stage review per task: spec compliance → code quality</span></li>
+    <li><strong>Merge authorization</strong> — <span class="desc">resolves repository authorization; it does not itself observe green status.</span></li>
+    <li><strong><code>confirm_class</code></strong> — <span class="desc">reserved configuration; not currently enforced by the merge gate.</span></li>
+    <li><strong>Deployment metadata</strong> — <span class="desc">informational to the outcome resolver; it does not execute or authorize a deployment command.</span></li>
+    <li><strong>Codex continuation</strong> — <span class="desc">supported startup and tool-use events are fixture-backed, but there is no Stop/final-response hook. Final-response discipline is guidance-only.</span></li>
+    <li><strong>Claude Code continuation</strong> — <span class="desc">uses its own supported lifecycle hooks; support remains version- and fixture-specific.</span></li>
   </ul>
 </section>
 
 <!-- ============================================================== -->
 <section class="slide" id="s8">
   <div class="slide-number">08</div>
-  <h2>The rules — opinions, made explicit</h2>
+  <h2>A question is action-local</h2>
   <ul class="item-list">
-    <li><strong>planning-discipline.md</strong> — <span class="desc">pour <code>mol-feature</code> for any non-trivial work</span></li>
-    <li><strong>tdd-enforcement.md</strong> — <span class="desc">failing test FIRST in any test-capable repo</span></li>
-    <li><strong>agent-teams-default.md</strong> — <span class="desc"><code>TeamCreate</code> + named agents for anything multi-step</span></li>
-    <li><strong>outcome-ownership.md</strong> — <span class="desc">done = verified end-to-end, not "compiles"</span></li>
-    <li><strong>molecule-awareness.md</strong> — <span class="desc">surface active molecules on every session start</span></li>
-    <li><strong>worktree-discipline.md</strong> — <span class="desc">the session-injected <code>escapement-worktree create</code> transaction</span></li>
-    <li><strong>never-suppress.md</strong> — <span class="desc">no <code>#noqa</code>, no <code>--no-verify</code>, no test downgrades</span></li>
-    <li><strong>serena-first.md</strong> — <span class="desc">symbol tools over full-file Read when Serena is onboarded</span></li>
+    <li><strong>One action needs a consequential decision</strong> — <span class="desc">preserve the question and block only that action and its dependents.</span></li>
+    <li><strong>Other work is independent and authorized</strong> — <span class="desc">continue it immediately; do not ask whether to keep working.</span></li>
+    <li><strong>A side question arrives</strong> — <span class="desc">answer it, then resume the delegated workflow unless the user explicitly redirects it.</span></li>
+    <li><strong>No authorized route remains</strong> — <span class="desc">report <code>input_required</code> with the single narrow decision that unlocks progress.</span></li>
   </ul>
   <p style="margin-top:1.5rem; font-size:0.9rem; color:var(--muted);">
-    Read each before installing. Edit to match your philosophy. These are not universally applicable — TDD and never-suppress in particular will feel restrictive in repos with legacy suppression patterns.
+    This is the normative doctrine. Native prompt suppression and action-local scheduling remain adapter capabilities that must be implemented and proven separately.
   </p>
 </section>
 
 <!-- ============================================================== -->
 <section class="slide" id="s9">
   <div class="slide-number">09</div>
-  <h2>The hooks — what the rules can't enforce alone</h2>
-
-  <div class="hook-group openspec">
-    <h3><span class="marker"></span> OpenSpec workflow</h3>
-    <ul>
-      <li><strong>openspec_init_guard</strong> <span class="desc">— block openspec commands when openspec/ missing</span></li>
-      <li><strong>design_doc_location_guard</strong> <span class="desc">— warn on docs/plans/ design docs</span></li>
-      <li><strong>discovery-gate</strong> <span class="desc">— block bd create of features without design doc</span></li>
-      <li><strong>discovery-nudge</strong> <span class="desc">— nudge /discovery on feature-intent prompts</span></li>
-      <li><strong>discovery-close-gate</strong> <span class="desc">— surface proof-of-delivery on bd close</span></li>
-      <li><strong>spec_id_enforcement</strong> <span class="desc">— require --spec-id under mol-feature</span></li>
-      <li><strong>mol_status_check</strong> <span class="desc">— surface active molecules on session start</span></li>
-    </ul>
+  <h2>A gate must earn the attention it consumes</h2>
+  <div class="layer-grid">
+    <div class="layer-card">
+      <div class="num">REPAIR</div>
+      <h3>Can the agent recover?</h3>
+      <p>A denial must name the failed invariant and the authorized route to repair it.</p>
+    </div>
+    <div class="layer-card">
+      <div class="num">TRANSPARENCY</div>
+      <h3>Why does it exist?</h3>
+      <p>The local failure and its place in the delivery system must both be visible.</p>
+    </div>
+    <div class="layer-card">
+      <div class="num">FLEXIBILITY</div>
+      <h3>Can valid work pass?</h3>
+      <p>Exceptions require reasons and evidence; a gate must not make safe work impossible.</p>
+    </div>
+    <div class="layer-card">
+      <div class="num">LEARNING</div>
+      <h3>Will the rule improve?</h3>
+      <p>Replayable evidence must support tuning or removing machinery that no longer helps.</p>
+    </div>
   </div>
-
-  <div class="hook-group tdd">
-    <h3><span class="marker"></span> TDD + test oracle discipline</h3>
-    <ul>
-      <li><strong>tdd-gate</strong> <span class="desc">— require test edits before implementation</span></li>
-      <li><strong>test_oracle_brief_gate</strong> <span class="desc">— require Test Oracle Brief for code changes</span></li>
-      <li><strong>test_reminder</strong> <span class="desc">— PostToolUse nudge to run tests</span></li>
-      <li><strong>implementation_echo_test_gate</strong> <span class="desc">— reject tests that echo implementation</span></li>
-      <li><strong>oracle_downgrade_warning_gate</strong> <span class="desc">— warn on test oracle weakening</span></li>
-      <li><strong>outcome_assertion_gate</strong> <span class="desc">— on PR create, gate on assertion quality</span></li>
-    </ul>
-  </div>
-
-  <div class="hook-group outcome">
-    <h3><span class="marker"></span> Outcome verification + shirking</h3>
-    <ul>
-      <li><strong>validate_no_shirking</strong> <span class="desc">— block "pre-existing failure" evasion</span></li>
-      <li><strong>review_gate</strong> <span class="desc">— soft gate on bd close without review agent</span></li>
-      <li><strong>review_nudge</strong> <span class="desc">— nudge /review on review-intent prompts</span></li>
-    </ul>
-  </div>
-
-  <div class="hook-group agent">
-    <h3><span class="marker"></span> Agent discipline</h3>
-    <ul>
-      <li><strong>enforce_named_agents</strong> <span class="desc">— block anonymous or teamless multi-agent dispatch</span></li>
-      <li><strong>context_burn_detector</strong> <span class="desc">— nudge agent dispatch after excessive inline research</span></li>
-      <li><strong>session_cleanup</strong> <span class="desc">— clean /tmp state from the above</span></li>
-    </ul>
-  </div>
-
-  <div class="hook-group serena">
-    <h3><span class="marker"></span> Serena navigation (silent unless onboarded)</h3>
-    <ul>
-      <li><strong>serena_preference_gate</strong> <span class="desc">— block full-file Read when Serena available</span></li>
-      <li><strong>serena_preference_injection</strong> <span class="desc">— UserPromptSubmit guidance toward symbol tools</span></li>
-      <li><strong>serena_onboarding_check</strong> <span class="desc">— nudge onboarding when missing</span></li>
-    </ul>
-  </div>
+  <p style="margin-top:1.5rem; font-size:0.9rem; color:var(--muted);">
+    Add a gate only for a repeated or high-severity failure with an independent oracle that rejects bad cases and permits good ones.
+  </p>
 </section>
 
 <!-- ============================================================== -->
 <section class="slide" id="s10">
   <div class="slide-number">10</div>
-  <h2>What to borrow</h2>
-  <p>Not interested in the whole stack? Here's the ordered shopping list.</p>
+  <h2>How the current adapters cooperate</h2>
+  <p>The implementation is concrete; the capability boundaries remain replaceable.</p>
   <div class="borrow">
-    <div class="level">If you take ONE thing</div>
+    <div class="level">DESIGN</div>
     <div class="what">
-      <strong>The adversarial discovery overlays</strong> in <code>claude/skills/discovery/SKILL.md</code>.
-      <span class="why">Plain OpenSpec discovery, plus internal prompts for riskiest-assumption, pre-mortem, red/blue team, walking-skeleton. Output looks like normal OpenSpec — only the thinking that produced it changed.</span>
+      <strong>Adversarial discovery writes an OpenSpec change.</strong>
+      <span class="why">Intent, non-goals, risks, requirements, controls, and the walking skeleton become reviewable artifacts.</span>
     </div>
 
-    <div class="level">If you take TWO</div>
+    <div class="level">BREAK DOWN</div>
     <div class="what">
-      <strong>+ the spec-ID linkage</strong> in <code>claude/skills/work-breakdown/SKILL.md</code> and <code>claude/hooks/spec_id_enforcement.py</code>.
-      <span class="why">Connects OpenSpec specs to beads tasks so agents working a task can read its acceptance criteria directly. The hook makes it impossible to forget.</span>
+      <strong>Beads stores the executable dependency graph.</strong>
+      <span class="why">Ready work can be allocated without turning task state into policy authority.</span>
     </div>
 
-    <div class="level">If you take THREE</div>
+    <div class="level">EXECUTE</div>
     <div class="what">
-      <strong>+ never-suppress.md and outcome-ownership.md</strong>.
-      <span class="why">Two short discipline rules. No <code>#noqa</code>, no <code>--no-verify</code>, no test downgrades; "done" means the user's outcome is happening, not "compiles." Drop into <code>~/.claude/rules/</code> and they're live.</span>
+      <strong>Client agents work in isolated Git worktrees.</strong>
+      <span class="why">Independent lanes proceed from explicit ownership and a reviewed outcome oracle.</span>
     </div>
 
-    <div class="level">If you take EVERYTHING</div>
+    <div class="level">VERIFY + LAND</div>
     <div class="what">
-      <strong>Clone the repo, run <code>./INSTALL.sh</code>, merge <code>settings.template.json</code>.</strong>
-      <span class="why">Symlink-based install — <code>git pull</code> updates your live config. Existing files backed up to <code>*.backup-{timestamp}</code> first.</span>
+      <strong>Independent checks prove the user-visible result; repository policy owns landing.</strong>
+      <span class="why">GitHub is today's delivery adapter. Passing unit tests alone is not proof when the outcome lives elsewhere.</span>
     </div>
   </div>
 </section>
@@ -629,58 +590,56 @@ after execute-full     production code + passing tests
 <!-- ============================================================== -->
 <section class="slide" id="s11">
   <div class="slide-number">11</div>
-  <h2>Warnings</h2>
+  <h2>Boundaries matter</h2>
 
   <div class="warn">
-    <strong>This is opinionated.</strong>
-    The rules will feel restrictive if your project lacks test infrastructure or relies on legacy suppression patterns. Read <code>claude/rules/</code> before installing. Edit to match your philosophy.
+    <strong>Ordinary means are bounded.</strong>
+    A causal blocker inside the delegated repository, audience, privilege, and effect boundary is owned. An adjacent opportunity is tracked without silently expanding scope.
   </div>
 
   <div class="warn">
-    <strong>Hooks are load-bearing.</strong>
-    Skills produce guidance. Hooks produce enforcement. Skills without hooks → agents drift. Hooks without skills → blocks without a path forward. Install both, or neither.
+    <strong>A prompt can still appear.</strong>
+    Until a host adapter can express existing semantic authority, its sandbox may still request mechanical approval. That is an enforcement gap, not a new intent decision.
   </div>
 
   <div class="warn">
-    <strong>Bootstrap scope.</strong>
-    Bootstrap runs in any git repo by default. Set <code>ESCAPEMENT_BOOTSTRAP_ROOTS=/path/a:/path/b</code> if you want to constrain machine-wide bootstrap to known roots.
+    <strong>Unsupported means unsupported.</strong>
+    Stored configuration, another client's hook, or prose intent does not prove green-status checks, confirmation enforcement, deployment execution, or final-response interception.
   </div>
-
   <div class="warn">
-    <strong>Personal config not bundled.</strong>
-    <code>~/.claude/settings.json</code> (auth, permissions) and <code>~/.claude/projects/*/memory/</code> are excluded. The installer manages only the workflow files.
+    <strong>Personal state is not bundled.</strong>
+    Authentication, permissions, project memory, and task databases remain user- or repository-owned.
   </div>
 </section>
 
 <!-- ============================================================== -->
 <section class="slide" id="s12">
   <div class="slide-number">12</div>
-  <h2>Try it with Claude Code</h2>
-  <pre><code>mkdir -p "$HOME/src"
-git clone https://github.com/alexander-vyh/escapement "$HOME/src/escapement"
-cd "$HOME/src/escapement"
-./INSTALL.sh
-# then manually merge claude/settings.template.json into ~/.claude/settings.json</code></pre>
-  <h3 style="margin-top:2rem;">Validation prompt for the first session</h3>
-  <p>Open Claude Code in any fresh git repo and say:</p>
-  <pre><code>let's build a small feature to validate the setup — add a /status slash command</code></pre>
-  <p>Claude should pour <code>mol-feature</code> and walk you through brainstorm → discovery → review → breakdown → skeleton → build → retro. If that flow happens end-to-end, you're wired correctly.</p>
-  <h3 style="margin-top:2rem;">Uninstall</h3>
-  <pre><code>./INSTALL.sh --uninstall   # removes symlinks; backups left alone</code></pre>
+  <h2>Install a current adapter</h2>
+  <h3>Codex</h3>
+  <pre><code>codex plugin marketplace add https://github.com/alexander-vyh/escapement
+codex plugin add escapement@escapement</code></pre>
+  <h3 style="margin-top:1.5rem;">Claude Code</h3>
+  <pre><code>/plugin marketplace add alexander-vyh/escapement
+/plugin install escapement@escapement</code></pre>
+  <h3 style="margin-top:1.5rem;">Refresh from a checkout</h3>
+  <pre><code>./scripts/codex-plugin-update.sh  # Codex
+./scripts/plugin-update.sh        # Claude Code</code></pre>
+  <p>The native plugins own workflow surfaces. <code>INSTALL.sh</code> is optional compatibility support for auxiliary assets, not the primary workflow installer.</p>
 </section>
 
 <!-- ============================================================== -->
 <section class="slide" id="s13">
   <div class="slide-number">13</div>
-  <h2>Credits</h2>
-  <p>The substance comes from elsewhere; this repo is the glue.</p>
+  <h2>The mission outlives the tools</h2>
+  <p>Today's adapters and intellectual roots make the mechanism concrete.</p>
   <ul class="item-list">
-    <li><strong>OpenSpec</strong> <span class="desc">— the structured change-management framework this workflow runs on top of</span></li>
-    <li><strong>Beads</strong> <span class="desc">— graph-based task tracker designed for AI agents, with molecule formulas as a templating layer</span></li>
-    <li><strong>Serena</strong> <span class="desc">— LSP-backed semantic code navigation; the rule + hooks make it the default during build</span></li>
-    <li><strong>Walking-skeleton thinking</strong> <span class="desc">— riskiest assumption first, 1–3 tasks, 30–60 min each</span></li>
-    <li><strong>Manager Tools / Radical Candor / Playing to Win</strong> <span class="desc">— the rules' flavor on outcome ownership and feedback</span></li>
-    <li><strong>Lencioni / Grove / Brené Brown</strong> <span class="desc">— outcome-ownership and psychological safety underpinnings</span></li>
+    <li><strong>Mission command and Grove's leverage</strong> <span class="desc">— purpose, decision rights, and capacity directed toward outcomes</span></li>
+    <li><strong>Closed-loop control</strong> <span class="desc">— compare observed behavior with an independent target and repair divergence</span></li>
+    <li><strong>Lean flow and constraint management</strong> <span class="desc">— measure delay and protect the delivery path</span></li>
+    <li><strong>Enabling bureaucracy</strong> <span class="desc">— gates provide repair, transparency, flexibility, and learning</span></li>
+    <li><strong>Walking-skeleton and test-oracle practice</strong> <span class="desc">— probe the riskiest assumption and verify the result independently</span></li>
+    <li><strong>OpenSpec, Beads, Git, and GitHub</strong> <span class="desc">— valuable current adapters, not permanent product identity</span></li>
   </ul>
   <p style="margin-top:2rem;">
     Built by <a href="https://github.com/alexander-vyh">Alexander Vyhmeister</a>. Questions or pairing? Reach out on Slack or open an issue.

@@ -1,10 +1,14 @@
 # Vocabulary
 
-The foundational terms used across this repo's workflow system, each anchored to the
-base principle it derives from. The vocabulary is *modern* (multi-agent orchestration,
-LLM harnesses) but the mechanics are old: division of labor, message-passing
-concurrency, control theory, the test-oracle problem, enabling bureaucracy. Naming the
-root makes a term defensible rather than fashionable.
+<!-- escapement:core-identity:start -->
+Escapement converts available agent capacity plus delegated authority into verified, delivered outcomes while reserving human attention for consequential choices.
+
+This document defines the client-neutral mechanics behind that mission. The vocabulary
+is modern (multi-agent orchestration and agent harnesses), but its roots are older:
+division of labor, message-passing concurrency, mission command, control theory, the
+test-oracle problem, and enabling bureaucracy. Current tools appear only in explicit
+adapter definitions; they do not define the system.
+<!-- escapement:core-identity:end -->
 
 ## How to use this document
 
@@ -30,6 +34,53 @@ a provenance marker (per `claude/rules/evidence-provenance.md`):
 
 ---
 
+## 0. Mission and capability model
+
+- **Mission** — The durable outcome Escapement exists to produce. Mission command and
+  leverage determine *why*: human-chosen intent directs available capacity within
+  delegated authority while consequential choices remain human.
+
+- **Closed-loop control** — The operating model. Escapement records an intended outcome,
+  acts within authority, compares the observed result with an independent oracle,
+  repairs divergence, lands the verified result, and feeds evidence into the next cycle.
+
+- **Durable capability chain** — The stable responsibilities beneath the mission, in
+  execution order:
+
+  1. **Intent and authority**
+  2. **Design and specification**
+  3. **Executable dependency-aware work breakdown**
+  4. **Capacity allocation**
+  5. **Isolated execution**
+  6. **Action-local continuation and repair**
+  7. **Independent outcome verification**
+  8. **Authorized landing and delivery**
+  9. **Learning and feedback**
+
+- **Adapter** — A current implementation of one or more durable capabilities. Replacing
+  an adapter does not change the mission. Today OpenSpec carries design/specification,
+  Beads carries work and dependency state, Git worktrees provide isolation, Claude Code
+  and Codex supply host-specific agent execution, and GitHub plus repository policy
+  provide the current landing path.
+
+- **Delegated outcome authority** — Delegating a bounded outcome includes its ordinary,
+  proportionate means within the named repository, systems, and constraints: isolated
+  worktree creation, scoped inspection and editing, tests/lint/builds, commit, task-branch
+  push, pull-request creation or update, causal CI/review repair, and the repository's
+  declared landing and verification path. These means are not new product decisions.
+
+- **Consequential choice** — A decision that changes intent or non-goals, selects among
+  materially different valid outcomes, crosses into an undelegated repository/account/
+  audience, expands privilege or credentials, creates destructive or irreversible shared
+  effects, invokes an actually enforced confirmation class, overlaps unsafely with another
+  owner, or lacks a standard landing path. Human attention is reserved for these choices.
+
+- **Action-local continuation** — An unresolved consequential choice blocks only the
+  action and dependents that need it. Independent authorized work continues. A session is
+  `input_required` only when no authorized route to the delegated outcome remains runnable.
+
+---
+
 ## 1. Multi-agent organization
 
 The core modern idea: instead of one agent doing everything serially, dispatch several
@@ -37,31 +88,31 @@ specialized agents that work in parallel and coordinate. The base principle is t
 one in management — **division of labor** (Smith, Babbage) — combined with
 **message-passing concurrency** (the actor model) for how the agents talk.
 
-- **Agent / subagent** — An independent Claude instance dispatched to do a scoped piece
-  of work, with its own context window. A *subagent* is one dispatched by another agent
-  (the "main" or "parent" agent). Its final message is returned to the parent as a result;
-  it is not shown to the user.
+- **Agent / subagent** — An independent agent execution dispatched to do a scoped piece
+  of work, with its own context. A *subagent* is dispatched by another agent (the parent).
+  The host adapter determines how results and intermediate messages are surfaced.
   *Roots:* the actor model (Hewitt, 1973) — independent computational entities that
   process work and communicate only by messages.
 
-- **Named agent** — An agent dispatched with an explicit `name`, making it addressable.
-  Only named agents can be sent messages or coordinate. Anonymous agents
-  (`Agent(prompt=...)` with no name) are fire-and-forget and cannot be addressed.
-  *In repo:* `claude/hooks/enforce_named_agents.py` blocks anonymous agent dispatch.
+- **Addressable agent** — An agent execution with a stable host-provided identity so it
+  can receive scoped follow-up work and coordinate with peers. The exact name/id field and
+  messaging primitive belong to the host adapter.
+  *In repo:* current client rules and fixtures define the supported identity fields.
 
-- **Implicit Team** — The session has a single implicit team; all named agents are
-  automatically on it. `TeamCreate` and `team_name` are deprecated and ignored by the
-  current Claude Code runtime. `name` is the only parameter needed for coordination.
-  *In repo:* `claude/rules/agent-teams-default.md`.
+- **Agent group** — The addressable agents cooperating on one bounded outcome. The group
+  is a logical coordination scope, not a dependency on any client's team-construction
+  API. Shared filesystem state and explicit messages form its working blackboard.
+  *In repo:* `claude/rules/agent-teams-default.md` describes the current adapters.
   *Roots:* a team is a shared communication channel — a *blackboard* / shared workspace
   in classic AI architecture [analytical mapping].
 
-- **`SendMessage`** — The primitive by which agents on a team exchange findings, argue, or
-  hand off work. Coordination happens here, not in the main agent's head.
+- **Agent message** — A host-provided primitive by which agents exchange findings, argue,
+  or hand off work. Coordination should be explicit rather than reconstructed only in the
+  parent agent's private context.
   *Roots:* message-passing concurrency (actor model); cf. Erlang/OTP, which the harness
   design doc cites by name.
 
-- **Roundtable** — A team of named agents that *argue* with each other via `SendMessage`,
+- **Roundtable** — A group of addressable agents that *argue* with each other via messages,
   each holding a persona/position. Critically: a roundtable is **never** simulated dialogue
   written in the main agent's output — it is always real dispatched agents.
   *In repo:* `claude/skills/dispatching-parallel-agents/SKILL.md:208` and
@@ -107,9 +158,9 @@ When the *control flow* between agents should be deterministic (loops, fan-out,
 conditionals) rather than decided turn-by-turn by a model, it is encoded as a **workflow**
 — a script that spawns agents programmatically.
 
-- **Workflow** — A script (`Workflow` tool) that orchestrates many agents
-  deterministically: it decides what runs in parallel, what verifies what, what
-  synthesizes. Runs in the background and returns a structured result.
+- **Workflow** — A deterministic orchestration that decides what runs in parallel, what
+  verifies what, and what synthesizes. A host may implement it as a script, a native
+  workflow primitive, or another scheduler.
 
 - **Fan-out** — Spawning many agents at once over a work-list (one per file, dimension,
   channel). Each is blind to the others.
@@ -174,9 +225,9 @@ A **molecule** is a composed, multi-step workflow instantiated from a reusable t
 (a **formula**). The chemistry metaphor: a formula is the recipe, pouring it creates the
 molecule (a connected graph of bead tasks + gates).
 
-- **Formula** — A reusable template defining the steps, gates, and dependencies of a
-  workflow. Two ship today: `mol-rapid` (bug/chore, 2 steps, no gates) and `mol-feature`
-  (feature, gated pipeline).
+- **Formula** — A reusable template defining the work nodes, decisions, and dependencies
+  of a workflow. Current examples include `mol-rapid` for bounded work and `mol-feature`
+  for a feature pipeline.
   *In repo:* `beads/formulas/*.formula.json`. *Roots:* templating / scaffolding —
   capturing a proven process so it isn't re-derived each time.
 
@@ -190,8 +241,10 @@ molecule (a connected graph of bead tasks + gates).
   *In repo:* phase strings in `beads/formulas/mol-feature.formula.json`; user-facing
   mapping in `claude/rules/molecule-awareness.md`.
 
-- **Gate (molecule gate)** — A decision point in a molecule where progress pauses for a
-  human approve/revise/stop decision. Distinct from a *hook gate* (§6).
+- **Gate (molecule gate)** — A decision node in a molecule. It requires human attention
+  only when an unresolved consequential choice remains; ordinary progression already
+  included in the delegated outcome must continue. A blocked decision node does not stop
+  independent authorized branches. Distinct from a *hook gate* (§6).
   *Roots:* stage-gate process (Cooper) — go/no-go checkpoints between phases.
 
 - **Walking skeleton** — The first deliverable of any feature: the minimum end-to-end
@@ -208,11 +261,25 @@ molecule (a connected graph of bead tasks + gates).
 
 ---
 
-## 5. The continuation-harness
+## 5. The continuation harness
 
-A deterministic system that enforces **outcome-bias over action-bias**: an agent may not
-*stop* until it has proven completion, scheduled its own resumption, or been released by
-the user. It exists because agents sincerely report "done" when they are not.
+<!-- escapement:support-claims:start
+merge-green-status=unsupported
+merge-green-status-reason=The merge authorization hook resolves repository-declared merge authority but does not observe pull-request check or green status.
+confirm-class-enforcement=reserved
+confirm-class-enforcement-reason=Repository confirmation classes are stored but are not currently enforced by the merge authorization hook.
+deploy-execution=informational
+deploy-execution-reason=Repository deploy metadata is surfaced as outcome context and does not execute or independently authorize a deployment command.
+codex-final-response-interception=guidance-only
+codex-final-response-interception-reason=The installed Codex adapter exposes no Stop or final-response hook; durable work state and SessionStart guidance support continuation without native interception.
+-->
+<!-- escapement:support-claims:end -->
+
+A control system that favors verified outcomes over activity summaries. Its mechanical
+enforcement is adapter-specific: clients with a proven final-response lifecycle hook can
+gate premature stopping, while clients without that primitive rely on durable work state
+and explicit continuation guidance. The capability is shared; the enforcement level is
+not assumed to be symmetrical.
 
 - **Contract (`contract.json`)** — A declaration, made before implementation, of what
   "done" means (`--goal`) and the shell command whose exit 0 proves it
@@ -230,16 +297,18 @@ the user. It exists because agents sincerely report "done" when they are not.
   with the same code. Exit 0 within the turn window permits Stop.
   *In repo:* `harness/bin/verify`.
 
-- **Stop gate** — The deterministic hook that blocks an agent from ending its turn unless
-  one of three paths holds: verification passed this turn, a wakeup is registered, or the
-  user released. The block is *noise, not work-halting* — the turn ends, the user sees a
-  resumption prompt, the conversation continues.
-  *In repo:* `harness/bin/stop_hook.py`, `would_block_stop.py`.
+- **Final-response gate** — An adapter-specific hook that can reject a final response
+  when the client exposes and fixtures prove the relevant lifecycle event. The current
+  Claude Code adapter can use the continuation harness at this point of effect. Codex
+  exposes no Stop/final-response hook, so its equivalent discipline is guidance-only and
+  cannot mechanically prevent the turn from ending.
+  *In repo:* `harness/bin/stop_hook.py`, `would_block_stop.py`, and the host capability
+  manifest.
 
-- **`ScheduleWakeup`** — Registering a future check-in when work genuinely waits on an
-  external event (CI, a merge, a DAG run). The structured alternative to writing "I'll
-  check back" as prose and stopping — *prose-as-polling* is the largest measured stall
-  class.
+- **Scheduled wakeup** — Registering a future check-in when work genuinely waits on an
+  external event (CI, a merge, a DAG run) and the current adapter exposes a supported
+  wakeup primitive. It is the structured alternative to writing "I'll check back" as
+  prose and stopping.
   *In repo:* `scheduled.json` in the session thread dir.
 
 - **Outcome-bias (vs action-bias)** — The governing principle: more tool calls, more
@@ -248,9 +317,10 @@ the user. It exists because agents sincerely report "done" when they are not.
   *In repo:* `claude/rules/continuation-harness.md`, `outcome-ownership.md`.
 
 - **Level-triggered vs edge-triggered** — A level-triggered gate re-evaluates state on
-  *every* Stop attempt (the queue is empty or it isn't); an edge-triggered gate fires once
-  on a transition and is bypassable by missing the edge. The Stop gate is level-triggered,
-  so it is stateless and idempotent.
+  every supported final-response attempt (the queue is empty or it is not); an
+  edge-triggered gate fires once on a transition and is bypassable by missing the edge.
+  Where installed, the current final-response gate is level-triggered, stateless, and
+  idempotent.
   *Repo cites:* `openspec/changes/continuation-harness/design.md:152` — borrowed from the
   Kubernetes reconciler architecture.
 
@@ -445,7 +515,7 @@ implementation. Sequence: **Outcome → Oracle → Constraints → Tests → Cod
 | Fan-out / barrier / pipeline | MapReduce; parallel-computing primitives | Roots |
 | Adversarial verify | Falsificationism (Popper) | analytical mapping |
 | Contract + verify oracle | The test-oracle problem | Roots |
-| Stop gate (level-triggered) | Kubernetes reconciler; control theory | Repo cites (design.md) |
+| Final-response gate (where supported) | Kubernetes reconciler; control theory | Repo cites (design.md) |
 | Resumption paths | Erlang/OTP supervisor strategies | Repo cites (design.md) |
 | Safety/liveness trade | Lamport | Repo cites (design.md) |
 | Enabling vs coercive bureaucracy | Adler & Borys (1996) | Repo cites |

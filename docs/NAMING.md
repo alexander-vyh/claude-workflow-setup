@@ -2,17 +2,24 @@
 
 ## Escapement
 
-`Escapement` is named for the clock mechanism that turns stored energy into measured motion. It restrains runaway movement, gives the oscillator enough impulse to continue, and advances the train one tick at a time.
+<!-- escapement:core-identity:start -->
+Escapement converts available agent capacity plus delegated authority into verified, delivered outcomes while reserving human attention for consequential choices.
 
-That model fits this repo better than the earlier descriptive name, `claude-workflow-setup`, because the repo is not tied to a single agent host. Claude Code and Codex are supported adapters over the same base workflow model, with host-specific enforcement surfaces where their capabilities differ.
+The name comes from the mechanical escapement: the part of a clock that turns available energy into controlled, measurable motion. It alternately releases and restrains the train, gives the oscillator enough impulse to continue, and makes useful progress possible without allowing the stored energy to run free.
 
-The repo's core job is to convert model effort into controlled, outcome-verified progress:
+That is a close mechanical analogue for Escapement's job:
 
-- OpenSpec preserves intent and behavioral requirements.
-- Beads carries task state and dependency structure.
-- Named agents divide work and keep independent review lanes.
-- Test-oracle briefs define what correctness means before implementation.
-- Hooks and deterministic gates prevent premature stopping and invalid workflow shortcuts.
-- Verification and wakeups make completion or resumption explicit.
+- available agent capacity supplies the energy;
+- intent and delegated authority determine the permitted motion;
+- design and specification establish the shape of the result;
+- dependency-aware work breakdown meters and coordinates execution;
+- isolation prevents one work stream from disturbing another;
+- continuation and repair keep authorized work moving;
+- an independent oracle regulates progress against the intended result;
+- authorized landing converts verified work into delivery; and
+- learning feeds evidence back into the next cycle.
 
-This is the clockwork sense of an escapement: not a lock, not a judge, and not a passive reference mark. It is the mechanism that meters motion, injects continuation energy, and keeps the train from running free.
+The earlier name, `claude-workflow-setup`, described one host and one implementation era. The current name describes the durable mechanism. Clients, planning formats, task stores, source-control hosts, and hooks may be replaced without changing what Escapement is.
+
+The metaphor also sets a boundary. An escapement is not a lock, a judge, or a passive checklist. Its purpose is controlled progress. Gates and rules are justified only when they help repair problems, expose why a decision exists, and preserve safe flexibility. Routine actions already included in a delegated outcome should advance without consuming human attention; only consequential choices should interrupt the dependent path.
+<!-- escapement:core-identity:end -->

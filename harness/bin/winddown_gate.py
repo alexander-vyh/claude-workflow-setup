@@ -22,14 +22,17 @@ from __future__ import annotations
 from typing import Optional, Tuple
 
 # The denial. Per gate-design Rule 1 the escape path is IN the message: proceed with the
-# reversible work + async-flag the human-only items; and the user's release valve ("stop")
-# is preserved so the gate is not a trap.
+# reversible work + async-flag only unresolved consequential boundaries; and the user's
+# release valve ("stop") is preserved so the gate is not a trap.
 RECOVERY_PROMPT = (
     "You ended your turn by offering to wind down (wrap / pause / 'which way?') while "
     "reversible in-scope work remains. Do NOT offer to wrap or ask which way — just "
-    "PROCEED now with the next reversible task. If something is genuinely human-only or "
-    "irreversible (a merge, a branch-protection toggle, a deploy), async-FLAG it as a "
-    "note and KEEP WORKING the rest; one blocked item does not block the session. The "
+    "PROCEED now with the next reversible task. Work already authorized by the delegated outcome "
+    "is not categorically human-only merely because it is external: commit, task-branch "
+    "push, pull-request work, and the repository's standard declared landing path remain "
+    "ordinary means. If an unresolved consequential choice genuinely crosses that "
+    "authority, async-FLAG only that action and its dependents and KEEP WORKING every "
+    "independent authorized path; one blocked item does not block the session. The "
     "user can still release you by saying 'stop'."
 )
 
@@ -49,8 +52,8 @@ def winddown_decision(
     if not offer:
         return ("allow", "no_winddown_offer")
     if not reversible_work_remains:
-        # Genuinely blocked on a human-only/irreversible item with nothing reversible
-        # left: a legitimate stop. Nagging it is the over-correction the research warns
-        # against (selective-quitting-improves-safety).
+        # Genuinely blocked on an unresolved consequential boundary with nothing
+        # reversible left: a legitimate stop. Nagging it is the over-correction the
+        # research warns against (selective-quitting-improves-safety).
         return ("allow", "winddown_but_no_reversible_work")
     return ("block", "winddown_offer_work_remains")
