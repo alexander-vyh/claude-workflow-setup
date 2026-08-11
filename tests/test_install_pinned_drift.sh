@@ -40,7 +40,55 @@ cat > "$BIN/claude" <<'STUB'
 #!/usr/bin/env bash
 exit 0
 STUB
-chmod +x "$BIN/claude"
+cat > "$BIN/uname" <<'STUB'
+#!/usr/bin/env bash
+printf 'Darwin\n'
+STUB
+cat > "$BIN/launchctl" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$HOME/launchctl.log"
+state="$HOME/launchctl.loaded"
+label="com.escapement.continuation-supervisor"
+touch "$state"
+if [[ "${1:-}" == print ]]; then
+  grep -Fxq "$label" "$state" && exit 0
+  exit 113
+fi
+if [[ "${1:-}" == bootout ]]; then
+  grep -Fxq "$label" "$state" || exit 3
+  grep -Fvx "$label" "$state" > "$state.next" || true
+  mv -f "$state.next" "$state"
+  exit 0
+fi
+if [[ "${1:-}" == bootstrap ]]; then
+  grep -Fxq "$label" "$state" && exit 72
+  printf '%s\n' "$label" >> "$state"
+fi
+exit 0
+STUB
+chmod +x "$BIN/claude" "$BIN/uname" "$BIN/launchctl"
+launchctl() {
+  local state="$HOME/launchctl.loaded"
+  local label="com.escapement.continuation-supervisor"
+  touch "$state"
+  printf '%s\n' "$*" >> "$HOME/launchctl.log"
+  if [[ "${1:-}" == print ]]; then
+    grep -Fxq "$label" "$state" && return 0
+    return 113
+  fi
+  if [[ "${1:-}" == bootout ]]; then
+    grep -Fxq "$label" "$state" || return 3
+    grep -Fvx "$label" "$state" > "$state.next" || true
+    mv -f "$state.next" "$state"
+    return 0
+  fi
+  if [[ "${1:-}" == bootstrap ]]; then
+    grep -Fxq "$label" "$state" && return 72
+    printf '%s\n' "$label" >> "$state"
+  fi
+  return 0
+}
+export -f launchctl
 ENV=(HOME="$T" PATH="$BIN:$PATH" ESCAPEMENT_PIN_REMOTE="$REPO" ESCAPEMENT_PIN_REF="$BASE_REF")
 
 # Initial install creates the pinned checkout.

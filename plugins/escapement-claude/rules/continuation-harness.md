@@ -10,7 +10,19 @@ You may Stop iff one of these is true:
 2. **Wakeup registered.** You called `ScheduleWakeup` for a future-dated check-in. The wakeup entry exists in your session's thread dir (`~/.claude/harness/threads/{session_id}/scheduled.json`, keyed by `CLAUDE_CODE_SESSION_ID`).
 3. **User released.** The user typed `stop`, `end here`, `done for now`, `that's enough`, `we're done`, `halt`, etc.
 
-If none of these holds, Stop is blocked with a constructive resumption prompt. The block is *noise, not work-halting* — your turn ends, the user sees the prompt, and the conversation continues. But repeated blocks on the same turn waste tokens and user attention.
+If none of these holds, Stop is blocked with a constructive resumption prompt. This is
+a real control transition: the attempted turn ends and the agent must resume through a
+new turn. It can therefore consume time, tokens, and user attention; do not describe it
+as harmless noise or use repeated blocks as a continuation strategy.
+
+## Action-local waits
+
+An unresolved consequential choice **blocks only that action and its dependents**;
+**independent authorized work continues**. Preserve the blocked dependency, run other
+ready work, and return to the decision only when it becomes the last remaining route.
+The session is `input_required` only when no authorized path toward the delegated
+outcome remains runnable. Informational side questions do not cancel the active outcome;
+answer them and resume unless the user explicitly redirects or stops the work.
 
 ## How to declare a contract
 
@@ -22,7 +34,11 @@ python3 ~/.claude/harness/bin/init_contract.py \
   --verify "<shell command whose exit 0 proves done>"
 ```
 
-The `--verify` command is the **oracle**. It must be something whose exit code mechanically demonstrates the outcome — `pytest path/to/test.py`, `bd close <id>`, `gh pr view <n> --json state -q '.state == \"OPEN\"'`, etc. Sloppy contracts (`--verify "true"`) get caught at first-run human review for novel/`agent-declared` sources.
+The `--verify` command is the **oracle**. It must be something whose exit code
+mechanically demonstrates the outcome — an end-to-end behavioral check, a report/query
+assertion, or a public workflow state check. Task closure such as `bd close <id>` is
+tracking state, not an independent outcome oracle. Sloppy contracts (`--verify "true"`)
+get caught at first-run human review for novel/`agent-declared` sources.
 
 ### Contracts for config work (you still owe one)
 
@@ -46,7 +62,12 @@ When you consider the task done:
 ~/.claude/harness/bin/verify
 ```
 
-The script runs your contract's `verification_command`, captures the result back to `contract.json#/last_run`, and exits with the same code. If exit 0 and within the current-turn window, the gate allows Stop next time. If it fails, you fix the underlying issue or file a blocker bead documenting why you cannot — *documented failure is also an outcome*. Don't keep flailing.
+The script runs your contract's `verification_command`, captures the result back to
+`contract.json#/last_run`, and exits with the same code. If exit 0 and within the
+current-turn window, the gate allows Stop next time. If it fails, fix the underlying
+issue. If an unresolved consequential choice blocks that action, persist the dependency
+and continue independent authorized work; documenting a failure is durable state, not
+completion.
 
 ## How to schedule resumption
 
@@ -94,11 +115,26 @@ end-to-end — merged and deployed where the change actually runs — not "PR op
 "committed locally." A cap that stopped an agent below live delivery contradicted the
 outcome-ownership rule (done = the real result is happening), so the ceiling machinery
 (`ceiling_push_cap.py`, `repo-policy.json`, `set-repo-ceiling`) was removed. Drive work
-all the way to a verified live outcome; if a step genuinely requires a human (a
-credential, an irreversible external action), name the exact blocker and continue the
-rest — do not treat "PR opened" as done.
+all the way to a verified live outcome. Authorized ordinary external actions such as
+commits, task-branch pushes, pull-request updates, and a repository's standard declared
+landing path are not categorically human-only. If an action genuinely crosses delegated
+authority (for example, it needs a new credential or creates an undelegated irreversible
+shared effect), name that exact dependency and continue the rest — do not treat "PR
+opened" as done.
 
 ### Per-repo outcome authorization — the durable authorization the base prompt defers to
+
+<!-- escapement:support-claims:start
+merge-green-status=unsupported
+merge-green-status-reason=The merge authorization hook resolves repository-declared merge authority but does not observe pull-request check or green status.
+confirm-class-enforcement=reserved
+confirm-class-enforcement-reason=Repository confirmation classes are stored but are not currently enforced by the merge authorization hook.
+deploy-execution=informational
+deploy-execution-reason=Repository deploy metadata is surfaced as outcome context and does not execute or independently authorize a deployment command.
+codex-final-response-interception=guidance-only
+codex-final-response-interception-reason=The installed Codex adapter exposes no Stop or final-response hook; durable work state and SessionStart guidance support continuation without native interception.
+-->
+<!-- escapement:support-claims:end -->
 
 The base Claude Code system prompt says: *confirm before hard-to-reverse or
 outward-facing actions — unless durably authorized.* A repo's committed
@@ -107,7 +143,8 @@ authorization. Read it before deciding whether to merge (`harness/bin/repo_outco
 resolves it):
 
 - `intended_outcome` at or above `merged` **and** `auto_merge_on_green: true` →
-  **you are pre-authorized.** When your change reaches green verification, **merge it
+  **you are pre-authorized for the standard declared landing path.** When independent
+  evidence shows the change has reached green verification, **merge it
   and ship it live. Do NOT ask "want me to merge it now, or review the PR first?"** —
   that solicitation is the exact anti-pattern this authorization exists to remove. If
   the repo also declares a `deploy` surface, name it in your report ("now live at X")
@@ -121,11 +158,23 @@ auto-deploy.** That carve-out is for steps you genuinely *cannot* perform withou
 human — typing a credential, clicking an external approval. A `gh pr merge` you have
 the ability to run is not such a step; a repo that declared `merged-and-deployed`
 authorized exactly that outcome. Merging-to-auto-deploy is the *point*, not a blocker
-— do not stretch the carve-out to re-introduce the ask the declaration removed. The
-one exception is a change matching the repo's declared `confirm_class` (a narrow,
-per-repo danger list), which still draws one confirm.
+— do not stretch the carve-out to re-introduce the ask the declaration removed.
 
-**Always attempt the merge — do not pre-judge authorization in conversation.**
+The current support boundary is narrower than the configuration vocabulary:
+
+- The merge authorization hook reads the repository declaration and proposed merge
+  command. It **does not itself observe green status**; green must come from the actual
+  check/merge surface.
+- `confirm_class` is **reserved and not currently enforced**. Storing a value does not
+  create a live confirmation gate.
+- `deploy` metadata is informational. It identifies the standard declared landing and
+  verification path; the merge gate neither executes it nor treats arbitrary deploy
+  commands as authorized ordinary means.
+
+Do not claim stronger enforcement until a point-of-effect fixture proves it.
+
+**After independently verifying green, attempt the merge — do not pre-judge repository
+authorization in conversation.**
 A real incident (2026-07-04, simplifi/cro-reporting PR #262) showed the failure
 mode this closes: an agent reasoned in prose about whether it was authorized to
 merge, decided it wasn't, and — because no repo.json existed to name as the real
@@ -137,8 +186,9 @@ PR, **run `gh pr merge <PR> --squash` and let `merge_authorization_gate.py` (a
 the same `.escapement/repo.json` `repo_outcome.py` resolves, deterministically. If
 it denies, its `permissionDecisionReason` names the true cause (no declaration,
 or a malformed one) — report *that*, verbatim in substance, never a guess dressed
-up as an external constraint. If the repo genuinely should be configured, offer to
-run `harness/bin/set_repo_outcome.py` (the validated authoring helper — replaces
+up as an external constraint. This gate's verdict is about the declared authorization,
+not PR check status, `confirm_class`, or deploy execution. If the repo genuinely should
+be configured, offer to run `harness/bin/set_repo_outcome.py` (the validated authoring helper — replaces
 hand-editing `.escapement/repo.json`) rather than asking the user to write JSON by
 hand.
 

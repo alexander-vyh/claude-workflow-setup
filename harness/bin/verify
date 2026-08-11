@@ -4,28 +4,18 @@
 # runs verification_command, writes the result back as last_run, exits with
 # the same code as the verification command.
 #
-# v0.1: thread dir is keyed by CLAUDE_CODE_SESSION_ID so concurrent sessions /
-# named subagents working the same repo don't collide on a shared contract.
-# Resolution must match would_block_stop.thread_dir_for_session():
-#   1. HARNESS_THREAD_DIR override
-#   2. sanitized CLAUDE_CODE_SESSION_ID -> threads/{session_id}
-#   3. fallback                          -> threads/current
+# Resolution is delegated to the canonical Python actor/session resolver used by
+# every hook, so this shell entrypoint cannot drift into parent-state fallback.
 
 set -u
 
 # Standard per-user state root (env-overridable); never a repo path.
 HARNESS_ROOT="${HARNESS_ROOT:-${CONTINUATION_HARNESS_HOME:-$HOME/.claude/harness}}"
-if [[ -n "${HARNESS_THREAD_DIR:-}" ]]; then
-  THREAD_DIR="$HARNESS_THREAD_DIR"
-elif [[ -n "${CLAUDE_CODE_SESSION_ID:-}" ]]; then
-  SID="$(printf '%s' "$CLAUDE_CODE_SESSION_ID" | tr -cd 'A-Za-z0-9_-' | cut -c1-128)"
-  if [[ -n "$SID" ]]; then
-    THREAD_DIR="$HARNESS_ROOT/threads/$SID"
-  else
-    THREAD_DIR="$HARNESS_ROOT/threads/current"
-  fi
-else
-  THREAD_DIR="$HARNESS_ROOT/threads/current"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if ! THREAD_DIR="$(python3 "$SCRIPT_DIR/thread_identity.py" \
+    --session-id "${CLAUDE_CODE_SESSION_ID:-}" --harness-root "$HARNESS_ROOT")"; then
+  echo "verify: invalid actor identity; refusing parent-state fallback" >&2
+  exit 2
 fi
 CONTRACT="$THREAD_DIR/contract.json"
 

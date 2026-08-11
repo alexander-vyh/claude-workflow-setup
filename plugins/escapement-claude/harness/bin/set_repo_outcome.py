@@ -91,7 +91,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         "--confirm-class",
         action="append",
         default=None,
-        help="a change kind that still draws one confirm even under auto-merge (repeatable)",
+        help="reserved change-kind metadata; stored but not currently enforced (repeatable)",
     )
     parser.add_argument("--force", action="store_true", help="overwrite an existing declaration")
     return parser.parse_args(argv)

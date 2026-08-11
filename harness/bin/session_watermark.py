@@ -25,7 +25,8 @@ import sys
 import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from would_block_stop import thread_dir_for_session, harness_home  # noqa: E402
+from would_block_stop import InvalidActorIdentity, thread_dir_for_session, harness_home  # noqa: E402
+from thread_identity import state_identity  # noqa: E402
 import session_isolation  # noqa: E402  (per-session isolation steer, bead e9v.4)
 
 HARNESS_ROOT = harness_home()
@@ -53,9 +54,14 @@ def main() -> int:
     # may omit session_id (the existing SessionStart hooks read only cwd), so fall
     # back to CLAUDE_CODE_SESSION_ID — what init_contract keys on (E-3 robustness,
     # flagged by the 858 panel's adversary + implementer). thread_dir_for_session
-    # also honors HARNESS_THREAD_DIR (rung 1) for subagents.
+    # also honors HARNESS_THREAD_DIR (rung 1) and actor-scopes subagents.
     session_id = payload.get("session_id") or os.environ.get("CLAUDE_CODE_SESSION_ID") or ""
-    thread_dir = thread_dir_for_session(session_id, HARNESS_ROOT)
+    try:
+        thread_dir = thread_dir_for_session(session_id, HARNESS_ROOT)
+        checkout_id = state_identity(session_id)
+    except InvalidActorIdentity as exc:
+        print(f"session watermark denied: invalid actor identity: {exc}", file=sys.stderr)
+        return 2
     ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     write_session_watermark(thread_dir, session_id, ts)
 
@@ -66,9 +72,9 @@ def main() -> int:
     try:
         cwd = payload.get("cwd") or os.getcwd()
         now = _dt.datetime.now(_dt.timezone.utc)
-        session_isolation.write_checkout(thread_dir, session_id, cwd, now)
+        session_isolation.write_checkout(thread_dir, checkout_id, cwd, now)
         steer = session_isolation.isolation_steer_for_thread(
-            HARNESS_ROOT, session_id, thread_dir, now
+            HARNESS_ROOT, checkout_id, thread_dir, now
         )
         if steer:
             print("continuation-harness [isolation]:" + steer)

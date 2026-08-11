@@ -945,317 +945,232 @@ than risk blocking an unrelated command.
 Run `python3 -m pytest claude/hooks/tests/test_beads_worktree_guard.py -q`,
 render and check generated surfaces, then commit and push from the
 Beads-created worktree. Confirm the remote branch points to the new commit.
+# Test Oracle Brief — delegated-work liveness and parent completion (2026-08-09)
 
----
-
-# Test Oracle Brief — committed oracle-downgrade detection (`escapement-gdf`)
+Scope: `escapement-e3ai`, the parent-open premature-final regression, durable
+native execution attempts, independently firing reconciliation, and optional
+local-judge authentication.
 
 ## Business invariant
 
-When a feature branch weakens a test oracle, both supported policy boundaries
-must still surface the downgrade after the weakening has been committed: a
-landing command receives the existing advisory `ask`, and the Stop hook emits
-its non-blocking advisory. A clean working tree must not erase the branch's
-committed evidence. Genuine strengthening, no-op churn, and changes outside the
-feature branch must remain silent.
+A managed session does not finish while its claimed/root bead remains unresolved.
+Delegated native work either reaches verified terminal evidence and a verified
+parent outcome, or an installed supervisor performs bounded reconciliation
+without waiting for a user message.
 
 ## Independent source of truth
 
-Correctness is determined by two sources independent of the hook's change-scope
-implementation: (1) Git's merge-base/landing-ref-to-final-tree comparison in
-disposable repositories with real commits, and (2) the adjudicated portable
-oracle-strength corpus, whose expected WARN/NONE decisions predate this change.
-The public hook subprocess output—not a private helper call—is the observable
-decision boundary.
+- `bd show <root> --json` supplies canonical parent work state independently of
+  descendant queue code or the execution ledger.
+- Literal, hand-authored event/timestamp fixtures and a reference transition
+  table determine execution-attempt behavior.
+- The two real incident orderings determine the regression outcomes: the
+  22-hour child-tool stall and the design-session closed-children/open-parent
+  premature final response.
+- Installed `launchctl` state, supervisor health written after a completed scan,
+  and observed recovery without a user prompt prove firing.
+- The actual business verification command proves result application; ledger
+  terminal status alone does not.
 
 ## Solution constraints
 
-- Preserve the corpus-backed advisory-only decision: PreToolUse may `ask`; Stop
-  may emit a `systemMessage`; neither path may hard-deny or block.
-- Preserve staged, unstaged, deletion, rename, and untracked-test behavior while
-  adding committed branch scope.
-- Compare the landing baseline to the final candidate tree. If a file has both
-  committed and uncommitted edits, evaluate its net branch result once rather
-  than summing intermediate diffs.
-- Resolve the declared/default landing ref without assuming branch name `main`;
-  keep hook execution repository-relative and host-surface parity intact.
-- Reuse the existing per-function strength evaluator and its fail-open parse
-  behavior. Do not revive the refuted negative-control hard-block tier.
+- Beads owns durable work identity, hierarchy, claim, and verified closure.
+- Escapement owns attempt identity, native binding, deadlines, recovery,
+  supervisor health, result application, and completion policy.
+- Python standard library core; atomic trusted state; host parsers outside the
+  state machine; local model optional and advisory.
+- No Stop claim for Codex until an effective installed hook fixture and smoke
+  prove it. SessionStart and external reconciliation remain mandatory.
+- No added responsibility in the already oversized `stop_hook.py`; extract
+  cohesive task/execution checks.
 
 ## Invalid solution classes
 
-- Looking only at `HEAD` versus the working tree, index, or untracked files.
-- Looking only at the last commit rather than the full landing range.
-- Warning on every committed test-file change or on assertion-count decreases.
-- Hard-blocking a negative-control removal that the adjudicated corpus cannot
-  mechanically distinguish from legitimate red-to-green TDD cleanup.
-- Comparing against a hard-coded `main`, analyzing pre-branch history, or
-  double-counting committed plus worktree versions of the same file.
-- Testing only a change-scope helper while the public PreToolUse/Stop hook still
-  silently allows a clean committed weakening.
+- Descendant-only `bd ready`/`bd blocked` checks that ignore root status.
+- Auto-closing a bead from child/native terminal state.
+- Mirroring Beads metadata or task status into `executions.json`.
+- Transcript/file mtime, tool start, polling chatter, or model opinion as
+  semantic progress.
+- Health stamped before a complete useful reconciliation.
+- Exactly-once-spawn assumptions, unfenced retries, or stale-generation result
+  application.
+- Future wakeup files accepted without fresh successful supervisor proof.
+- Public Stop wiring that bypasses otherwise-correct root/execution helpers.
+- Global health stamped after only part of a multi-thread scan succeeds.
+- Unrelated or old-generation future wakeups treated as current recovery proof.
+- Adapter events with missing generation silently relabeled as current.
+- Result-application claims treated as proof that the business result applied.
+- Missing/malformed/untrusted state treated as complete.
 
 ## Fragile implementation to reject
 
-The tempting shortcut is to retain `changed_files()` and `_head_src()` exactly
-as they are. That implementation catches an uncommitted weakening but returns
-an empty change set immediately after `git commit`, which is the reported bug.
-The same disposable feature branch must warn before and after commit.
+Check only that all child beads are closed and a future wakeup exists. This
+would pass the child-research happy path while the parent remains `in_progress`,
+and would still fail when the parent has already ended or the waker is inert.
+The parent-open regression plus stale/missing supervisor controls must fail it.
 
 ## Negative control
 
-From a repository whose default branch contains a strong outcome assertion,
-create a feature branch, commit a weakening, leave the working tree clean, and
-invoke both public hooks. Stop must emit an advisory naming the test file, and a
-landing-shaped PreToolUse payload must return `permissionDecision=ask`. A second
-fixture with two feature commits must prove the comparison reaches the landing
-base rather than only `HEAD^`.
+- Root `in_progress`, `ready=[]`, `blocked=[]` => block
+  `parent_outcome_unresolved`.
+- Root missing/malformed/unreadable => unresolved, never queue-drained.
+- Complete public Stop fixtures reject an open root with empty descendants both
+  without a wake and with a future wake plus missing/stale health.
+- Queued attempt past start deadline; running attempt past idle deadline; noisy
+  attempt past hard deadline => sticky reconciliation due, not terminal.
+- Successful process start plus failed thread scan => no new successful-health
+  timestamp.
+- A due attempt plus failure after planning, during its atomic claim write, or
+  during spawn => neither successful-health time nor completed generation moves.
+- In a two-thread root, success for A followed by load/reconcile/persist failure
+  for B (and the reverse scan order), or scheduled inspection failure, advances
+  diagnostic `reconcile_started_at` but preserves all authoritative prior health
+  fields.
+- Two concurrent public reconciliations contend for one due attempt => one live
+  current-generation claim and at most one spawn until claim expiry.
+- With `reconcile_due=None`, expired accepted activity/idle deadline, and fresh
+  filesystem mtime plus ledger `updated_at` from polling/tool-start, public
+  reconciliation sets idle-due and claims recovery. A paired completed-activity
+  event is the positive renewal control. Static checks reject mtime and ledger
+  `updated_at` as activity oracles.
+- Every terminal-ingress public path receives open child/root beads and a
+  recording Beads runner; none may issue closure mutation. Architecture checks
+  forbid `bd close`, closed-status updates, and closure-helper imports from the
+  ledger, hook, reconciliation, and supervisor modules. Business verification
+  owns task closure and Stop remains blocked while canonical beads are open.
+- Recovery claim persisted then process crash => no immediate duplicate; claim
+  expiry advances generation and permits recovery.
+- Old-generation completion => incident evidence only, never current result
+  application or Beads close.
+- Late generation-one completion delivered through public adapters after a
+  generation-two takeover cannot mutate generation two; missing generation is
+  unresolved, never defaulted.
+- A public application orchestrator must call an injected business verifier;
+  terminal state/digest cannot directly prove application. Missing/negative/
+  exceptional verification stays unapplied. If application succeeds and the
+  process dies before persistence, takeover rechecks the real outcome or reuses
+  a stable idempotency key so the external effect occurs once before fenced
+  completion. Equal digests on distinct executions remain distinct.
+- A future wake must exactly match parent session, watchdog, execution, attempt,
+  and generation; unrelated/mismatched wakeups do not authorize pause.
+- The public wake producer persists those literal identity fields in schema-valid
+  JSON consumed by public Stop; omitting any field fails validation and blocks.
+- HTTP 401/local-model absence => deterministic behavior unchanged.
 
 ## Positive control
 
-A clean feature branch that only strengthens the assertion must be silent at
-both boundaries. A baseline-only weakening that predates the feature branch
-must also be silent, proving the range is scoped rather than repository-wide.
-Existing uncommitted weakening controls must continue to warn.
+- Closed root, empty descendants, all managed attempts terminal and independently
+  verified => normal completion.
+- Running attempt with accepted completed activity, unexpired hard deadline,
+  valid future wake, and fresh post-reconcile health => bounded pause.
+- Recovery after claim expiry emits exactly one current-generation spawn in the
+  controlled fixture.
+- Both a complete no-op reconciliation and a complete action reconciliation
+  advance useful-work health exactly once.
+- Authenticated local judge annotation is observable but does not change the
+  deterministic decision.
 
 ## Missing/unresolved handling
 
-This gate remains advisory and fail-open. If a landing ref, merge base, file, or
-language cannot be resolved confidently, it must never manufacture a deny.
-The unresolved branch-range path must retain any independently observable
-working-tree advisory rather than discarding it; diagnostics/signals may record
-the lost committed-range coverage.
+Fail closed on completion and pause authorization. Wake and reconcile rather
+than blindly replay. A specific auditable human release remains the only manual
+override. Model failure is fail-open only for the advisory annotation.
 
 ## Final outcome verification
 
-Run the canonical Claude and rendered Codex hook entrypoints as subprocesses in
-fresh disposable Git repositories. For a clean feature branch with a committed
-weakening, verify Stop emits the advisory and landing emits exactly one `ask`;
-for a committed strengthening and baseline-only change, verify both are silent.
-Then run the portable strength corpus, focused hook suites, generated-surface
-parity, renderer check, and Ruff.
+1. Focused parent-state, execution-ledger, supervisor, Stop, host-adapter,
+   installer, security, and local-auth suites pass after verified RED failures.
+2. An independent mutation challenger proves the named bad implementations are
+   killed.
+3. Full `python -m pytest claude/hooks/tests harness/tests tests -q -rs` and
+   generated-surface checks pass.
+4. Merged source is installed for Claude and Codex; launchd runs
+   `wakeup_waker.py --fire` and exposes fresh post-reconcile health.
+5. A disposable short-deadline delegation is automatically reconciled without
+   a user message, and the open-parent/closed-children fixture continues rather
+   than returning a final answer.
 
-### Hostile-verification addendum — Git path and object semantics
+---
 
-#### Business invariant
+# Test Oracle Brief — discovery consequence gating
 
-The five public oracle-downgrade entrypoints must evaluate the semantic test
-change from the immutable feature-branch base to the final candidate tree for
-every Git-valid path. A byte-identical rename must stay silent; a weakening
-must still surface when its path contains control characters or quotes, when
-its final entry is a symlink, and when local changes are split across staged,
-unstaged, and untracked states.
+## Business invariant
+Discovery asks the user to co-author load-bearing choices before drafting a
+high-consequence or hard-to-reverse solution, while local reversible work stays
+lightweight.
 
-#### Independent source of truth
+## Independent source of truth
+The public discovery guidance and its observed conversation order: questions
+before solution commitments, explicit answers reflected in the draft, and no
+heavy interview for low-consequence work.
 
-Disposable repositories provide the oracle: Git's raw NUL-delimited
-name-status records, immutable commit OIDs and tree-entry modes/content. The
-tests construct real commits, renames, unusual filenames, symlinks, index
-states, and a deterministic `origin/HEAD` movement, then assert only the public
-hook output. The expected decision comes from the hand-labeled semantic old
-and final contents, not from the production parser.
+## Solution constraints
+The canonical skill is the only authority; rendered plugin copies must match.
+Rapid changes ceremony, not consequence calibration.
 
-#### Solution constraints
+## Invalid solution classes
+Reject draft-first high-risk responses, keyword-only risk routing, reintroducing
+an earlier owner after an explicit fork answer, reclassifying unknown work instead
+of asking consequences, and over-interviewing local reversible work.
 
-- Git filename parsing must be NUL-delimited end to end; newline/tab/quote and
-  non-UTF-8 bytes are filename data, never record syntax, a Unicode crash, or
-  human C-quoted output.
-- The non-UTF-8 oracle is constructed with byte-mode `hash-object`, `mktree -z`,
-  `commit-tree`, and a skip-worktree index entry. Its positive fixture control
-  first proves Git's raw NUL record contains the exact path bytes; macOS is
-  never asked to check out an illegal filename.
-- Rename identity must be preserved as `(old_path, new_path)` so the baseline
-  source and candidate source are compared as one change.
-- Rename identity and NUL-safe byte identity compose: paired inexact raw-byte
-  renames whose `0xfe` / `0xff` paths collide under replacement decoding must
-  remain distinct and report only their destination paths.
-- Candidate reads must not follow absolute or relative symlinks outside the
-  repository. Git entry type/mode and the symlink blob/link target are
-  evidence; external target contents are not. A changed symlink is not itself
-  a downgrade: absolute and relative new symlinks or weak-baseline-to-symlink
-  changes stay silent in committed, staged, and unstaged states, as do staged
-  symlinks followed by strong final regular-file worktree candidates.
-- External ancestry is subject to the same boundary: a regular leaf reached
-  through an absolute or relative symlinked parent directory cannot borrow
-  external oracle strength. A stronger regular file beneath an ordinary
-  in-repo directory remains valid.
-- Resolve and verify `origin/HEAD` once to an immutable commit OID. Merge-base
-  and range operations must use that OID even if its selected remote-tracking
-  target ref later moves.
-- The deterministic ref-move wrapper triggers after any successful Git command
-  whose stdout contains the exact original landing OID as a token, then moves
-  the selected target ref. It does not inspect argv or pin one `rev-parse`
-  shape, so direct verification and symbolic-ref plus broad `for-each-ref`
-  exact-row immutable-resolution commands remain allowed.
-- Preserve repository-neutral configuration, net-tree evaluation,
-  advisory-only decisions, missing/dangling-ref local fallback, and the
-  adjudicated strength corpus.
+## Fragile implementation to reject
+A direct design request that drafts an architecture before asking the required
+ownership, rollout, compatibility, or rollback choices.
 
-#### Invalid solution classes and fragile implementations to reject
+## Negative control
+High-risk work asks 2–4 explicit tradeoff-bearing forks and stops; unknown work
+asks exactly what becomes costly or impossible to undo and who is affected.
 
-- `--no-renames` followed by independent deletion/addition evaluation: falsely
-  warns on a pure move.
-- Parsing rename records but skipping every `R` status: misses a real weakening
-  performed during an inexact rename.
-- `splitlines()` or C-quoted `--name-only` parsing: drops or corrupts valid Git
-  paths containing newline, tab, or quote.
-- UTF-8 replacement decoding: collapses distinct raw paths such as `0xfe` and
-  `0xff` onto the same replacement-character key and loses an advisory.
-- Handling raw paths and rename records in separate parsers: corrupts the two
-  paths in an `Rnnn\0old\0new\0` record or reports the removed source name.
-- `Path.read_text()` on a symlink: follows untrusted external content and lets
-  it impersonate the candidate oracle.
-- Absolute-target-only symlink guards and warn-on-every-test-symlink shortcuts:
-  miss relative escapes or create false advisories without a removed oracle.
-- Final-component-only symlink checks: follow a regular leaf through an
-  external symlinked ancestor and let outside assertions launder the loss.
-- Resolving a ref name, verifying it, then using the mutable name later: a ref
-  move changes the selected baseline after validation.
-- Unioning intermediate diffs or evaluating the same path once per Git state:
-  duplicates warnings and can miss a final net restore.
-- Fixing only the canonical hook while rendered Codex/Claude entrypoints retain
-  the bug.
+## Positive control
+Low-risk reversible work uses lightweight draft-and-react, and a complete answer
+set authorizes a draft that follows the selected authority.
 
-#### Negative controls
+## Missing/unresolved handling
+Unknown consequences require the two-question probe and wait. Partial fork
+answers keep only the unresolved choices gated.
 
-- Commit a byte-identical `git mv` between two test paths while repository
-  config disables rename detection and constrains `diff.renameLimit`: all five
-  public entrypoints remain silent with exit 0, proving the hook requests its
-  own rename semantics.
-- Commit three edited (non-exact) test renames with inherited
-  `diff.renames=false` and `diff.renameLimit=1`: a fixture proves ordinary
-  `--find-renames -l1` finds zero while unlimited detection finds all three;
-  all five hooks remain silent.
-- Commit an inexact rename with retained context and a strong-to-weak edit: a
-  fixture proves Git emits `R095`, and all five hooks emit exactly one advisory
-  naming the destination path. Together with the silent byte-identical and
-  edited-still-strong rename controls, this requires semantic old-to-new
-  evaluation rather than treating every rename as safe or as delete-plus-add.
-- Genuine strengthening, pre-branch weakening, landing-tip-only changes, and a
-  committed weakening restored in the worktree remain silent.
-- Absolute/relative new symlinks and weak-baseline-to-symlink changes remain
-  silent in committed, staged, and unstaged states. A staged symlink replaced
-  by either the exact strong baseline or a non-byte-identical stronger regular
-  file in the unstaged worktree is evaluated as one final candidate and stays
-  silent, rejecting intermediate-union and exact-byte-only suppression.
-- With a valid landing ref, a staged deletion followed by a same-path untracked
-  nonidentical stronger replacement remains silent. Raw cached and untracked
-  NUL records both contain the path, proving the final overlay wins over the
-  intermediate deletion rather than being evaluated as two changes.
-- A stronger local candidate beneath a normal in-repo directory remains silent,
-  rejecting blanket failure for every ancestor traversal.
-- Missing and dangling `origin/HEAD` each continue scanning independently observable
-  local staged, unstaged, and untracked changes without guessing a branch.
-  Staged and unstaged strong-to-weak edits, plus staged deletion followed by an
-  untracked weak replacement, at a real newline-containing path first prove
-  their respective raw `--name-only -z` / `ls-files -z` records contain the
-  exact path bytes, then require all five hooks to name that path once. This
-  prevents any fallback collector from retaining a line-based parser after the
-  committed range becomes NUL-safe.
+## Final outcome verification
+Run `pytest -q tests/test_discovery_interaction_contract.py`, render/check agent
+surfaces, and exercise one high-, low-, and unknown-consequence conversation.
 
-#### Positive controls
+---
 
-- Commit a strong-to-weak change at filenames containing newline, tab, quote,
-  and a raw-plumbing-only non-UTF-8 byte: all five public entrypoints surface
-  that exact path.
-- Weaken two distinct raw paths whose invalid bytes collide under replacement
-  decoding: Git's NUL records contain both byte keys and every public message
-  reports both independently exactly once.
-- Inexactly rename paired strong `0xfe` / `0xff` raw paths to weakened raw
-  destinations: Git emits exact `Rnnn`, old, and new byte fields, and every
-  public message reports each surrogateescaped destination exactly once without
-  reporting either source.
-- Change a raw-path Git object from strong to still-strong while its index entry
-  remains skip-worktree and absent from the filesystem: all five hooks remain
-  silent, proving absent checkout is not misclassified as deletion.
-- Rename a raw-byte strong oracle inexactly to a still-strong destination: all
-  five hooks remain silent while the NUL fixture proves a real `Rnnn` record.
-- Replace a strong test with absolute and relative external symlinks whose
-  target file contains strong-looking assertions, independently as committed,
-  staged, and unstaged final entries. Fixture controls prove the baseline blob
-  is strong, the candidate mode/link target contains no oracle, and only the
-  followed external file is strong; all five entrypoints surface the lost
-  repository-owned oracle exactly once in every state.
-- Replace the tracked `tests/` directory with absolute and relative external
-  directory symlinks whose regular leaf contains strong-looking assertions:
-  all five entrypoints surface the lost tracked oracle exactly once even though
-  the leaf itself is not a symlink.
-- With a valid landing ref, staged-only weakening, committed-delete plus
-  untracked weak replacement, and a mixed staged/unstaged/untracked candidate
-  all surface every weakened path exactly once.
-- Move the remote-tracking target selected by `origin/HEAD` immediately after
-  its OID is resolved: all five entrypoints still evaluate against the
-  originally selected immutable base.
+# Test Oracle Brief — final-tree oracle downgrade scope
 
-#### Missing and unresolved handling
+## Business invariant
+All public landing and Stop hooks report meaningful test-oracle loss once at the
+final path, including a rename out of test discovery.
 
-An absent or unverifiable landing target retains the prior HEAD-to-local
-fail-open fallback. Unreadable entries, unsupported modes, parse failures, and
-malformed Git output never hard-deny; they may conservatively emit the existing
-advisory when repository-owned oracle evidence was removed. External symlink
-target contents are always unresolved and never counted as candidate proof.
+## Independent source of truth
+Fresh Git repositories provide immutable landing OIDs plus committed, index, and
+worktree states. Hand-written strong, weak, and strengthening tests define the
+expected advisory independently of hook internals.
 
-#### Final outcome verification
+## Solution constraints
+Use literal NUL-delimited Git paths, resolve the landing ref once, bound candidate
+reads below 1 MiB, never follow external symlinks, group findings once per path,
+and preserve canonical/rendered parity.
 
-Run the full five-surface subprocess matrix over rename, unusual paths,
-symlink, index-state union, and ref-move fixtures. Then rerun all committed-
-scope and oracle-downgrade suites, the adjudicated private corpus, the
-implementation-echo change-scope suite, full hook tests, renderer/parity,
-Ruff/format, and `git diff --check` from the clean fix commit.
+## Invalid solution classes
+Reject HEAD-only scope, mutable-ref reuse, newline path parsing, Git pathspec
+interpretation, separate per-state warnings, symlink target reads, and one row per
+reason.
 
-### Minimal verified GDF delivery
+## Fragile implementation to reject
+Scanning only the worktree misses clean committed and staged-only weakening.
 
-#### Business invariant
+## Negative control
+Committed, staged, and unstaged weakening at literal and unusual paths warns;
+renaming a strong test out of discovery warns at the destination.
 
-Every public landing and Stop hook compares the immutable landing base with the
-final committed/index/worktree candidate tree. A meaningful test-oracle loss is
-reported once at its current path, including a rename out of test discovery.
+## Positive control
+Strengthening, weak/pass-only moves, within-discovery renames, and final stronger
+worktree overlays remain silent.
 
-#### Independent source of truth
+## Missing/unresolved handling
+The advisory fails open. Missing landing refs use local scope; malformed or
+unreadable candidates do not hard-deny or import external content.
 
-Fresh real Git repositories provide the remote-default OID, merge base, NUL
-name-status records, index, and worktree states. Hand-written strong, weak, and
-strengthening test sources label the expected advisory outcome independently of
-the hook implementation.
-
-#### Solution constraints
-
-- Git paths remain raw/NUL-delimited and are always interpreted literally.
-- The selected landing ref is resolved to an OID once; later ref movement cannot
-  change the comparison base.
-- Regular Git blobs and no-follow worktree files are read through the same
-  bounded source contract. The implementation uses a 256 KiB prefix, below the
-  1 MiB ceiling, and never follows a symlink leaf or ancestor.
-- Findings are deterministic and grouped once per path, with at most 12 paths
-  and eight distinct reasons per path in the public warning.
-- Canonical and rendered Claude/plugin surfaces stay byte-identical.
-
-#### Invalid solution classes and fragile implementation to reject
-
-Reject HEAD-only or last-commit scope, mutable-ref reuse after OID resolution,
-newline path parsing, pathspec interpretation of names beginning `:(`, separate
-committed/staged/unstaged warnings for one net path, symlink target reads, and
-one output row per reason. The named tempting shortcut is scanning only the
-current worktree: it misses clean committed and staged-only weakening.
-
-#### Negative and positive controls
-
-The compact public matrix covers committed, staged, and unstaged weakening at a
-literal pathspec-looking name; exact strong-test renames out of discovery; one
-path with multiple independent reasons; raw/non-UTF-8 and newline names; missing
-and dangling landing refs; immutable-ref movement; and a multi-megabyte ordinary
-source whose returned content stays below 1 MiB while the early weakening still
-warns. Strengthening, a weak/pass-only discovery move, a within-discovery rename,
-and a final stronger worktree overlay remain silent.
-
-#### Missing and unresolved handling
-
-This advisory remains fail-open. Missing landing refs fall back to HEAD/local
-scope. Malformed Git output, unreadable entries, unsupported file modes, and
-source beyond the bounded prefix never hard-deny or import external content.
-
-#### Final outcome verification
-
-Run `test_oracle_downgrade_public_matrix.py`, the existing committed-scope and
-hostile-edge suites, warning/Stop legacy regressions, the implementation-echo
-change-scope suite, renderer check, Ruff, and `git diff --check`; then verify all
-five rendered entrypoints remain in parity and commit the clean worktree.
+## Final outcome verification
+Run the compact five-surface public matrix, existing downgrade regressions,
+renderer/parity, Ruff, and `git diff --check`.
