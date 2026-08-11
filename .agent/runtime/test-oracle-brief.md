@@ -1089,3 +1089,46 @@ override. Model failure is fail-open only for the advisory annotation.
 5. A disposable short-deadline delegation is automatically reconciled without
    a user message, and the open-parent/closed-children fixture continues rather
    than returning a final answer.
+
+---
+
+# Test Oracle Brief — discovery consequence gating
+
+## Business invariant
+Discovery asks the user to co-author load-bearing choices before drafting a
+high-consequence or hard-to-reverse solution, while local reversible work stays
+lightweight.
+
+## Independent source of truth
+The public discovery guidance and its observed conversation order: questions
+before solution commitments, explicit answers reflected in the draft, and no
+heavy interview for low-consequence work.
+
+## Solution constraints
+The canonical skill is the only authority; rendered plugin copies must match.
+Rapid changes ceremony, not consequence calibration.
+
+## Invalid solution classes
+Reject draft-first high-risk responses, keyword-only risk routing, reintroducing
+an earlier owner after an explicit fork answer, reclassifying unknown work instead
+of asking consequences, and over-interviewing local reversible work.
+
+## Fragile implementation to reject
+A direct design request that drafts an architecture before asking the required
+ownership, rollout, compatibility, or rollback choices.
+
+## Negative control
+High-risk work asks 2–4 explicit tradeoff-bearing forks and stops; unknown work
+asks exactly what becomes costly or impossible to undo and who is affected.
+
+## Positive control
+Low-risk reversible work uses lightweight draft-and-react, and a complete answer
+set authorizes a draft that follows the selected authority.
+
+## Missing/unresolved handling
+Unknown consequences require the two-question probe and wait. Partial fork
+answers keep only the unresolved choices gated.
+
+## Final outcome verification
+Run `pytest -q tests/test_discovery_interaction_contract.py`, render/check agent
+surfaces, and exercise one high-, low-, and unknown-consequence conversation.
