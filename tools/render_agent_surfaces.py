@@ -45,6 +45,13 @@ SHARED_HOOK_SUPPORT = {
     "claude/hooks/_gate_signal.py",
     "claude/hooks/_local_judge_client.py",
     "claude/hooks/_gh_command.py",
+    # Landing-time gates share repository-neutral origin/HEAD + merge-base
+    # authority. Omitting this sibling makes installed hooks fail open.
+    "claude/hooks/git_change_scope.py",
+    # Both advisory boundaries use the corpus-backed per-function strength
+    # differ; its parser is a required transitive sibling in installed hosts.
+    "claude/hooks/oracle_strength_diff.py",
+    "claude/hooks/oracle_strength_parse.py",
     # implementation_echo_test_gate imports this policy helper in both hosts.
     # Omitting it makes the defensive import fallback hard-deny fixture echoes.
     "claude/hooks/data_fixture_echo.py",
@@ -60,6 +67,7 @@ SHARED_HOOK_SUPPORT = {
 SHARED_RUNTIME_SUPPORT = {
     "bin/escapement-worktree",
     "bin/escapement_worktree.py",
+    "bin/escapement_worktree_bootstrap.py",
     "bin/escapement_worktree_git.py",
 }
 CODEX_HOOK_SUPPORT = {
@@ -77,12 +85,6 @@ CODEX_HOOK_SUPPORT = {
 }
 CLAUDE_EXTRA_HOOK_SUPPORT = {
     "claude/hooks/local_judge_health.py",
-    # oracle_downgrade_stop.py imports this differ at runtime; it is a library
-    # (no events), so it ships as a companion rather than a manifest hook.
-    # The differ in turn loads its parser sibling — ship the whole closure or
-    # the Stop hook silently no-ops in the flat plugin layout.
-    "claude/hooks/oracle_strength_diff.py",
-    "claude/hooks/oracle_strength_parse.py",
 }
 
 # SessionStart rules-injection script for the Claude plugin. Emits the bundled

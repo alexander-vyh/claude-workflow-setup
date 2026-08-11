@@ -1133,5 +1133,89 @@ answers keep only the unresolved choices gated.
 Run `pytest -q tests/test_discovery_interaction_contract.py`, render/check agent
 surfaces, and exercise one high-, low-, and unknown-consequence conversation.
 
+---
+
+# Test Oracle Brief — final-tree oracle downgrade scope
+
+## Business invariant
+All public landing and Stop hooks report meaningful test-oracle loss once at the
+final path, including a rename out of test discovery.
+
+## Independent source of truth
+Fresh Git repositories provide immutable landing OIDs plus committed, index, and
+worktree states. Hand-written strong, weak, and strengthening tests define the
+expected advisory independently of hook internals.
+
+## Solution constraints
+Use literal NUL-delimited Git paths, resolve the landing ref once, bound candidate
+reads below 1 MiB, never follow external symlinks, group findings once per path,
+and preserve canonical/rendered parity.
+
+## Invalid solution classes
+Reject HEAD-only scope, mutable-ref reuse, newline path parsing, Git pathspec
+interpretation, separate per-state warnings, symlink target reads, and one row per
+reason.
+
+## Fragile implementation to reject
+Scanning only the worktree misses clean committed and staged-only weakening.
+
+## Negative control
+Committed, staged, and unstaged weakening at literal and unusual paths warns;
+renaming a strong test out of discovery warns at the destination.
+
+## Positive control
+Strengthening, weak/pass-only moves, within-discovery renames, and final stronger
+worktree overlays remain silent.
+
+## Missing/unresolved handling
+The advisory fails open. Missing landing refs use local scope; malformed or
+unreadable candidates do not hard-deny or import external content.
+
+## Final outcome verification
+Run the compact five-surface public matrix, existing downgrade regressions,
+renderer/parity, Ruff, and `git diff --check`.
+
+---
+
+# Test Oracle Brief — repository-declared worktree bootstrap
+
+## Business invariant
+`escapement-worktree create` succeeds only after the new worktree completes its
+repository-declared bootstrap; repositories without a declaration behave as before.
+
+## Independent source of truth
+Arbitrary repository executables record exact argv, cwd, and source revision. Git's
+worktree registry and administrative-directory identity determine rollback ownership.
+
+## Solution constraints
+Execute only a nonempty JSON argv directly, after validation, inside the verified
+target. Reverify afterward. Bound raw diagnostic tails, contain descendants on
+failure/timeout, preserve replacements, remain stdlib-only, and render all surfaces.
+
+## Invalid solution classes
+Reject convention inference, hardcoded repository/tool names, shell execution,
+bootstrap before validation, unbounded output, process-group-only cleanup, lossy
+tail decoding, and rollback based only on path/branch/SHA equality.
+
+## Fragile implementation to reject
+Running a guessed setup command and deleting any same-path worktree during rollback.
+
+## Negative control
+Malformed declarations, missing executables, nonzero exits, signals, and timeouts
+fail; same-path replacement worktrees survive; escaped descendants cannot recreate
+the rolled-back target; arbitrary raw-byte tails remain exact.
+
+## Positive control
+An arbitrary repository's declared argv runs exactly once at the source revision,
+while an undeclared repository runs no inferred bootstrap and still succeeds.
+
+## Missing/unresolved handling
+Missing bootstrap is allowed. A present but malformed declaration and uncertain
+rollback ownership fail safely without deleting ambiguous user state.
+
+## Final outcome verification
+Run the public bootstrap, safety, transaction, validation, and parity suites, then
+exercise the installed command against a disposable arbitrary repository.
+
 The independently labeled gate replay brief is maintained at
 [`test-oracle-briefs/gate-decision-replay.md`](test-oracle-briefs/gate-decision-replay.md).
