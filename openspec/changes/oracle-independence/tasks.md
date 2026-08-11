@@ -1,7 +1,7 @@
 ## 1. Walking Skeleton — validate human-gate independence (riskiest assumption / Risk B)
 
-- [ ] 1.1 Assemble a blinded probe set: collect 5–8 real already-merged refactor diffs the reviewer has not closely reviewed; inject ≥1 planted transcription error (e.g. `>`→`>=` in a moved body); record the planted set out of the reviewer's view (spec: human-gate-independence / Empirical validation before build-out)
-- [ ] 1.2 Run the gate review in two conditions — agent-framing-only, then with an independent reference (pre-move behavior / spec) added — and record catch vs. miss per condition; interpret with the contamination caveat noted (spec: human-gate-independence / Empirical validation before build-out)
+- [x] 1.1 Assemble a blinded probe set: collect 5–8 real already-merged refactor diffs the reviewer has not closely reviewed; inject ≥1 planted transcription error (e.g. `>`→`>=` in a moved body); record the planted set out of the reviewer's view (spec: human-gate-independence / Empirical validation before build-out)
+- [x] 1.2 Run the gate review in two conditions — agent-framing-only, then with an independent reference (pre-move behavior / spec) added — and record catch vs. miss per condition; interpret with the contamination caveat noted (spec: human-gate-independence / Empirical validation before build-out)
 
 ## 2. Future increments — NOT yet designed (gated on the skeleton result)
 

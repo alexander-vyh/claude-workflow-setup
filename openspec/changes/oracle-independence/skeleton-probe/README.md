@@ -1,5 +1,9 @@
 # Oracle-Independence Skeleton Probe
 
+> **Current status:** the recorded A/B result is an AI-only pilot. It is not a
+> human result. The ready-to-run human handoff is
+> [`human-scoring-packet.md`](human-scoring-packet.md).
+
 This probe tests the riskiest assumption behind oracle-independence: **does
 having the independent reference (the original pre-extraction code) actually
 change a reviewer's ability to catch a behavior-changing transcription error in
