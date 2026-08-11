@@ -1,16 +1,11 @@
+"""Secondary rendered-surface checks; behavioral transcripts remain authoritative."""
+
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
 CANONICAL = ROOT / "claude" / "skills" / "discovery" / "SKILL.md"
-GENERATED = (
-    ROOT
-    / "plugins"
-    / "escapement-claude"
-    / "skills"
-    / "discovery"
-    / "SKILL.md"
-)
+GENERATED = ROOT / "plugins" / "escapement-claude" / "skills" / "discovery" / "SKILL.md"
 
 
 def _normalized(path: Path) -> str:
@@ -84,8 +79,47 @@ def test_high_path_requires_explicit_tradeoffs_and_no_post_draft_blocker():
 
     assert "Bare option labels, generic catch-alls" in text
     assert "State each alternative's material benefit and cost or risk" in text
-    assert "no load-bearing or skeleton-blocking question may appear after drafting begins" in text
+    assert (
+        "no load-bearing or skeleton-blocking question may appear after drafting begins"
+        in text
+    )
     assert "Do not promote a detail the user explicitly marked deferrable" in text
+
+
+def test_secondary_surface_names_latest_answer_authority_precedence():
+    text = _normalized(CANONICAL)
+
+    _assert_in_order(
+        text,
+        (
+            "Later explicit fork answers are binding",
+            "supersede conflicting solution authority in the earlier framing",
+            "Do not layer or reintroduce the earlier owner",
+        ),
+    )
+
+
+def test_secondary_surface_names_the_two_part_unknown_probe():
+    text = _normalized(CANONICAL)
+
+    _assert_in_order(
+        text,
+        (
+            "Ask exactly these two questions and nothing else",
+            "What specifically becomes costly or impossible to undo if this is wrong?",
+            "Who or what would be affected?",
+            "Wait for both answers",
+        ),
+    )
+
+
+def test_secondary_surface_names_rapid_calibration_preconditions():
+    text = _normalized(CANONICAL)
+
+    assert "Rapid requires a stated observable problem and outcome" in text
+    assert "An explicit `--schema rapid` selects artifact ceremony only" in text
+    assert "does not bypass consequence calibration" in text
+    assert "For rapid, the stated observable problem and outcome are confirmed" in text
 
 
 def test_low_path_retains_lightweight_draft_and_react():
@@ -99,4 +133,6 @@ def test_low_path_retains_lightweight_draft_and_react():
 
 
 def test_renderer_keeps_discovery_skill_copy_in_sync():
-    assert CANONICAL.read_text(encoding="utf-8") == GENERATED.read_text(encoding="utf-8")
+    assert CANONICAL.read_text(encoding="utf-8") == GENERATED.read_text(
+        encoding="utf-8"
+    )

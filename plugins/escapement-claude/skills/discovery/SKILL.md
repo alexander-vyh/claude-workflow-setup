@@ -152,8 +152,9 @@ framing does not resolve the solution's ownership, compatibility, enforcement, o
 failure-policy forks.
 
 **Unknown blast radius or reversibility:** fail closed to one short consequence
-probe and wait. Ask what becomes costly or impossible to undo if the change is
-wrong and who would be affected. This probe calibrates interaction depth; it does
+probe and wait. Ask exactly these two questions and nothing else: "What specifically
+becomes costly or impossible to undo if this is wrong?" and "Who or what would be
+affected?" Wait for both answers. This probe calibrates interaction depth; it does
 not re-ask the six framing fields.
 
 **High blast radius OR hard to reverse — co-authoring gate.** The high-risk path is
@@ -175,7 +176,9 @@ expecting the user to infer it. Across the set, cover at least two of:
 Wait for explicit answers to every fork. Silence, "use your judgment," or an
 answer to only one fork does not clear the gate. If the user answers only some
 forks, acknowledge those choices and ask only the unresolved forks; do not draft.
-Once all are resolved, summarize the selected decision set. Run one load-bearing
+Once all are resolved, summarize the selected decision set. Later explicit fork
+answers are binding and supersede conflicting solution authority in the earlier
+framing. Do not layer or reintroduce the earlier owner. Run one load-bearing
 completeness pass before composing: if another fork would materially change the
 system boundary or a selected category, ask it next and wait. When the pass finds
 none, reflect those decisions in the draft's ownership, compatibility, rollout,
@@ -198,6 +201,10 @@ change merely because it shares vocabulary with a high-risk domain.
 **Precondition: the Input Gate has passed.** Draft-and-react operates on a
 *confirmed* framing. High-risk work must also clear the co-authoring gate above.
 If either applicable gate is uncleared, do not draft.
+
+Rapid requires a stated observable problem and outcome. An explicit `--schema rapid`
+selects artifact ceremony only; it does not bypass consequence calibration. For
+rapid, the stated observable problem and outcome are confirmed before drafting.
 
 **NOT interrogation.** Be resourceful before asking (SOUL.md principle). Instead:
 
