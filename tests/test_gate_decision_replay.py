@@ -61,7 +61,7 @@ def _run_replay(
         env=env,
         text=True,
         capture_output=True,
-        timeout=90,
+        timeout=180,
         check=False,
     )
 

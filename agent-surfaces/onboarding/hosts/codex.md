@@ -11,6 +11,13 @@ fixture proves the current Codex payload shape exercises the intended behavior.
 Unsupported Claude-only behavior stays explicit rather than being copied into a
 Codex surface as prose.
 
+The installed Codex adapter currently exposes no Stop or final-response hook.
+SessionStart can remind the agent to resume from durable work, Git, OpenSpec, and
+verification state, but that behavior is guidance-only: it cannot mechanically
+intercept a final answer or persist an action-local wait. Mark stronger behavior
+ready only after the installed Codex version exposes the lifecycle primitive and
+a fixture proves the payload and point-of-effect behavior.
+
 Informational or diagnostic questions about Beads are bounded read-only work.
 Answer them directly with only the inspection needed for the question. Do not
 invoke `beads-execution` merely because a prompt mentions Beads, `bd`, a bead, or

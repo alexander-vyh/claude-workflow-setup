@@ -62,7 +62,7 @@ def test_confirm_class_round_trips(tmp_path: Path) -> None:
     set_repo_outcome.write_declaration(tmp_path, declaration)
     resolved = repo_outcome.resolve(tmp_path)
     assert resolved.confirm_class == ["db-migration"]
-    assert resolved.confirm_class_absolute is False
+    assert not hasattr(resolved, "confirm_class_absolute")
 
 
 def test_refuses_to_overwrite_without_force(tmp_path: Path) -> None:

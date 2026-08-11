@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "mission": "Escapement converts available agent capacity plus delegated authority into verified, delivered outcomes while reserving human attention for consequential choices.",
+  "short_description": "A client-neutral control layer for directing agent capacity within delegated authority, verifying outcomes independently, and completing authorized delivery.",
+  "operating_model": [
+    "Intent and delegated authority",
+    "Design",
+    "Executable work graph",
+    "Allocate capacity",
+    "Isolated execution",
+    "Continue and repair",
+    "Independent verification",
+    "Authorized landing",
+    "Learning"
+  ],
+  "capabilities": [
+    "Intent and authority",
+    "Design and specification",
+    "Executable dependency-aware work breakdown",
+    "Capacity allocation",
+    "Isolated execution",
+    "Action-local continuation and repair",
+    "Independent outcome verification",
+    "Authorized landing and delivery",
+    "Learning and feedback"
+  ],
+  "principles": [
+    "Outcome over activity",
+    "Delegating an outcome delegates its ordinary means",
+    "Independent oracle before implementation",
+    "Action-local waits",
+    "Enabling bureaucracy",
+    "Client-neutral core with capability-honest adapters"
+  ],
+  "current_adapters": {
+    "Design and specification": [
+      "OpenSpec"
+    ],
+    "Executable dependency-aware work breakdown": [
+      "Beads"
+    ],
+    "Isolated execution": [
+      "Git worktrees"
+    ],
+    "Capacity allocation": [
+      "Claude Code",
+      "Codex"
+    ],
+    "Authorized landing and delivery": [
+      "GitHub"
+    ]
+  }
+}

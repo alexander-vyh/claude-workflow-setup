@@ -20,23 +20,23 @@ from validate_corpus import DECISIONS, EVAL_DIR, ROOT, ValidationError, validate
 
 VALID_BRIEF = """# Replay brief
 ## Business invariant
-behavior is independently verified
+user behavior must remain independently verified
 ## Independent source of truth
-the labeled source event
+public source evidence determines the correct decision
 ## Solution constraints
-stdlib and public hooks
+public hooks must preserve the declared policy
 ## Invalid solution classes
-vacuous runners
+invalid bypass behavior must be denied
 ## Fragile implementation to reject
-copying labels
+the shortcut of copying labels must fail
 ## Negative control
-always allow
+missing evidence must reject the invalid change
 ## Positive control
-specific outcomes
+a complete valid brief must allow the change
 ## Missing/unresolved handling
-fail closed
+missing or unresolved evidence must block landing
 ## Final outcome verification
-run replay.py
+run the public replay verification command
 """
 
 

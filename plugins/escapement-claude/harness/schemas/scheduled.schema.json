@@ -19,6 +19,26 @@
         "then": {
           "required": ["command"]
         }
+      },
+      {
+        "if": {
+          "properties": {
+            "created_by": { "const": "execution-supervisor" }
+          },
+          "required": ["created_by"]
+        },
+        "then": {
+          "required": [
+            "parent_session_id",
+            "watchdog_id",
+            "execution_id",
+            "attempt",
+            "generation",
+            "registered_at",
+            "supervisor_installation_id",
+            "supervisor_generation"
+          ]
+        }
       }
     ],
     "properties": {
@@ -26,6 +46,11 @@
         "type": "string",
         "format": "date-time",
         "description": "ISO-8601 timestamp; gate counts only future-dated entries."
+      },
+      "registered_at": {
+        "type": "string",
+        "format": "date-time",
+        "description": "Durable managed-proof registration timestamp; a qualifying supervisor pass must start strictly later."
       },
       "prompt": {
         "type": "string",
@@ -78,6 +103,34 @@
         "type": "string",
         "minLength": 1,
         "description": "For kind='check': optional model for the fresh handoff session. Defaults to the harness cheap model."
+      },
+      "parent_session_id": {
+        "type": "string",
+        "minLength": 1
+      },
+      "watchdog_id": {
+        "type": "string",
+        "minLength": 1
+      },
+      "execution_id": {
+        "type": "string",
+        "minLength": 1
+      },
+      "attempt": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "generation": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "supervisor_installation_id": {
+        "type": "string",
+        "minLength": 1
+      },
+      "supervisor_generation": {
+        "type": "integer",
+        "minimum": 1
       }
     }
   }

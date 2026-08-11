@@ -4,6 +4,7 @@
   "documents": {
     "shared_fragments": [
       "agent-surfaces/onboarding/shared.md",
+      "agent-surfaces/onboarding/authority.md",
       "agent-surfaces/onboarding/vocabulary.md",
       "agent-surfaces/onboarding/beads.md",
       "agent-surfaces/onboarding/outcome-oracle.md",
@@ -27,6 +28,28 @@
       }
     }
   },
+  "support_claims": [
+    {
+      "id": "merge-green-status",
+      "status": "unsupported",
+      "reason": "The merge authorization hook resolves repository-declared merge authority but does not observe pull-request check or green status."
+    },
+    {
+      "id": "confirm-class-enforcement",
+      "status": "reserved",
+      "reason": "Repository confirmation classes are stored but are not currently enforced by the merge authorization hook."
+    },
+    {
+      "id": "deploy-execution",
+      "status": "informational",
+      "reason": "Repository deploy metadata is surfaced as outcome context and does not execute or independently authorize a deployment command."
+    },
+    {
+      "id": "codex-final-response-interception",
+      "status": "guidance-only",
+      "reason": "The installed Codex adapter exposes no Stop or final-response hook; durable work state and SessionStart guidance support continuation without native interception."
+    }
+  ],
   "hooks": [
     {
       "id": "escapement_session_context",
@@ -154,6 +177,63 @@
           "fixtures": [
             "harness/tests/test_gate.py",
             "harness/tests/test_winddown_stop_integration.py"
+          ]
+        }
+      }
+    },
+    {
+      "id": "delegation_hook",
+      "description": "Require an explicitly prepared Beads execution before Claude Agent dispatch.",
+      "source": "harness/bin/delegation_hook.py",
+      "hosts": {
+        "codex": {
+          "status": "unsupported",
+          "unsupported_reason": "Codex does not expose the verified Claude Agent PreToolUse payload and matcher contract used by this adapter."
+        },
+        "claude": {
+          "status": "ready",
+          "events": [
+            {
+              "event": "PreToolUse",
+              "matcher": "Agent",
+              "command": "python3 -B ~/.claude/harness/bin/delegation_hook.py"
+            }
+          ],
+          "fixtures": [
+            "harness/tests/test_delegation_hook.py::test_complete_claude_agent_fixture_registers_dispatch_before_allow"
+          ]
+        }
+      }
+    },
+    {
+      "id": "execution_reconcile",
+      "description": "Surface unresolved delegated Beads work and due execution attempts at SessionStart.",
+      "source": "harness/bin/execution_reconcile.py",
+      "hosts": {
+        "codex": {
+          "status": "ready",
+          "events": [
+            {
+              "event": "SessionStart",
+              "matcher": "",
+              "command": "python3 -B harness/bin/execution_reconcile.py"
+            }
+          ],
+          "fixtures": [
+            "harness/tests/test_execution_reconcile.py::test_codex_sessionstart_uses_the_same_reconciliation_without_stop_claims"
+          ]
+        },
+        "claude": {
+          "status": "ready",
+          "events": [
+            {
+              "event": "SessionStart",
+              "matcher": "",
+              "command": "python3 -B ~/.claude/harness/bin/execution_reconcile.py"
+            }
+          ],
+          "fixtures": [
+            "harness/tests/test_execution_reconcile.py::test_unresolved_parent_emits_actionable_continuation_context"
           ]
         }
       }

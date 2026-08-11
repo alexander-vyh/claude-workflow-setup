@@ -1,147 +1,168 @@
 # Escapement
 
-Escapement is an agentic workflow system built **on top of [OpenSpec](https://github.com/Fission-AI/OpenSpec)**, adding:
+<!-- escapement:core-identity:start -->
+> Escapement converts available agent capacity plus delegated authority into verified, delivered outcomes while reserving human attention for consequential choices.
 
-- **Adversarial overlays** on OpenSpec's discovery step (riskiest-assumption, pre-mortem, red/blue team, walking-skeleton sections injected as internal prompts — not visible in the output docs).
-- **A bridge to [Beads](https://github.com/steveyegge/beads)** so OpenSpec's `tasks.md` becomes a real task graph (`bd create --spec-id ...`) that agents can execute against.
-- **A molecule formula** (`mol-feature`) that orchestrates the full brainstorm → discovery → skeleton → build → retro lifecycle with two human gates.
-- **Hooks, rules, and skills** that enforce the workflow at the tool-call level: TDD-first, named-agent teams, outcome-verification, OpenSpec init checks, spec-ID linkage, never-suppress discipline, Serena-first navigation. **Claude Code and Codex are supported adapters** over the same workflow core (see [Hosts](#supported-hosts)).
+Escapement is a client-neutral workflow and control layer for agentic delivery. It keeps a bounded outcome moving from intent through design, execution, verification, and landing. The tools used at each stage are adapters: useful today, replaceable tomorrow.
 
-**This does not replace OpenSpec — it uses it.** The `/discovery` skill calls `openspec init`, `openspec instructions`, and `openspec status` under the hood. The `proposal.md` / `design.md` / `specs/*.md` files written are standard OpenSpec artifacts. Engineers comfortable with bare OpenSpec can read the changes a teammate produced through this workflow with no extra context.
-
-> ⚠️ This is a snapshot of one working setup, not a product. Read, adapt, cherry-pick. The opinions are strong.
+> This repository is a snapshot of a working system, not a universal product. Its opinions are strong; its claims are limited to behavior that the current adapters can prove.
 
 ## Why "Escapement"?
 
-`Escapement` is named for the clock mechanism that turns stored energy into measured motion. It restrains runaway movement, gives the oscillator enough impulse to continue, and advances the train one tick at a time. This repo applies that model to agentic work: OpenSpec, Beads, hooks, test oracles, verification, and wakeups convert model effort into controlled, outcome-verified progress.
+An escapement turns available energy into controlled motion. It gives the mechanism enough impulse to continue, meters progress, and prevents the train from running free.
 
-See [docs/NAMING.md](docs/NAMING.md) for the naming rationale.
+The software analogy is deliberate. Agent capacity is the available energy; delegated authority defines where it may act; design and independent verification regulate the motion; landing turns progress into a delivered result. Escapement is not a lock or a judge. It is the control mechanism that keeps authorized work moving toward its intended outcome.
 
----
+See [docs/NAMING.md](docs/NAMING.md) for the full naming rationale.
+<!-- escapement:core-identity:end -->
 
-## What you get
+## Durable capability chain
 
-### The core pattern
+These capabilities define Escapement independently of any current tool or client:
 
+1. **Intent and authority**
+2. **Design and specification**
+3. **Executable dependency-aware work breakdown**
+4. **Capacity allocation**
+5. **Isolated execution**
+6. **Action-local continuation and repair**
+7. **Independent outcome verification**
+8. **Authorized landing and delivery**
+9. **Learning and feedback**
+
+Design and work breakdown are not ceremony around the “real” work. They make intent, constraints, dependencies, and the independent oracle explicit enough that capacity can be allocated safely and parallel work can continue without repeatedly returning product decisions to the user.
+
+## Operating model
+
+Escapement uses mission command and leverage to define its purpose: human-chosen intent directs available agent capacity within delegated authority. Its operating loop is closed-loop control:
+
+```text
+intent and authority
+  → design and specification
+  → executable work graph
+  → capacity allocation
+  → isolated execution
+  → continuation and repair
+  → independent verification
+  → authorized landing
+  → learning
 ```
-you say "build X"
-        │
-        ▼
-┌───────────────────────────┐
-│ mol-feature (beads)       │  root epic + 9 step tasks (2 are gates)
-└──────────┬────────────────┘
-           │ step: discovery
-           ▼
-┌───────────────────────────┐
-│ /discovery skill          │  adversarial overlay on OpenSpec CLI
-│   └─ writes ──────────────┼──▶ openspec/changes/{name}/
-│                           │     ├─ proposal.md   ← standard OpenSpec
-│                           │     ├─ design.md     ← + adversarial sections
-│                           │     ├─ specs/*.md    ← requirement IDs
-│                           │     └─ tasks.md
-└──────────┬────────────────┘
-           │ step: work-breakdown
-           ▼
-┌───────────────────────────┐
-│ /work-breakdown skill     │  reads openspec, writes beads
-│   └─ creates ─────────────┼──▶ bd spec issues (--acceptance fields)
-│                           │    bd task issues (--spec-id links)
-└──────────┬────────────────┘
-           │ step: execute-skeleton → review → execute-full
-           ▼
-       parallel named agents implement tasks,
-       reading --acceptance via --spec-id
-```
 
-### Layers (adopt one, some, or all)
+Flow and constraint measures show where delivery stalls. Enabling-bureaucracy principles determine whether a rule or gate supplies repair, transparency, and flexibility—or merely consumes attention.
 
-The paths below are the source and Claude Code adapter paths. The [host mapping](#supported-hosts) shows the equivalent Codex surfaces.
+## Delegated outcomes include their ordinary means
 
-| Layer | Files | What it buys you |
-|------|------|------------------|
-| **1. Formulas** | `beads/formulas/*.json` | 10-step workflow definition for `bd mol pour` |
-| **2. Skills** | `claude/skills/*/` | The "how" for each step — discovery, work-breakdown, execution, oracle review |
-| **3. Commands** | `claude/commands/*.md` | Slash-command shims (`/discovery`, `/work-breakdown`, `/brainstorm`, `/review`) |
-| **4. Rules** | `claude/rules/*.md` | Global discipline — TDD, agent teams, outcome ownership, never-suppress, Serena-first |
-| **5. Hooks** | `claude/hooks/*.py` | Tool-call-level enforcement (see below) |
-| **6. Bootstrap** | `scripts/project-bootstrap.sh` | SessionStart hook auto-inits openspec/beads/serena per repo |
+Delegating a bounded build, fix, change, execution, delivery, or shipping outcome delegates the routine, proportionate actions needed to achieve and verify it within the named repository, systems, and constraints. That normally includes:
 
-Each layer adds value without requiring the ones above. You can install just the skills, or skills + formulas without hooks. Start small.
+- creating the established isolated worktree;
+- scoped inspection and editing;
+- running tests, lint, builds, and other verification;
+- committing and pushing the declared task branch;
+- creating or updating its pull request;
+- repairing causally necessary CI or review failures; and
+- following the repository-declared merge, deployment, and outcome-verification path.
 
----
+Those are ordinary delivery means, not fresh product decisions. A client may still present a mechanical approval prompt when its sandbox or hook model cannot express the existing authority; that is an adapter limitation, not a request for new intent.
 
-## Supported hosts
+Authority remains bounded. Escapement requests human attention when progress requires changed intent or non-goals, a material trade-off between valid outcomes, an undelegated repository/account/audience, new privilege or credentials, destructive or irreversible shared effects, an actually enforced confirmation class, unsafe overlap with another owner, or a missing standard landing path.
 
-Escapement is **host-neutral at the core** — beads, OpenSpec, test-oracle discipline, and outcome verification don't depend on which agent runs them. The host-specific surfaces are *generated* from one neutral manifest (`agent-surfaces/manifest.json`) by `tools/render_agent_surfaces.py`, and a `--check` mode fails CI if they drift, so the two hosts stay in sync:
+An unresolved consequential choice blocks only the dependent action. Independent authorized work continues. A session is genuinely `input_required` only when no authorized route toward the delegated outcome remains runnable.
+
+## Current adapters
+
+The current implementation maps replaceable tools to the durable capabilities:
+
+<!-- escapement:adapter-mapping:start -->
+| Durable capability | Current adapter |
+|---|---|
+| Design and specification | OpenSpec |
+| Executable dependency-aware work breakdown | Beads |
+| Isolated execution | Git worktrees |
+| Capacity allocation | Claude Code, Codex |
+| Authorized landing and delivery | GitHub |
+<!-- escapement:adapter-mapping:end -->
+
+Independent verification currently uses test-oracle briefs, behavioral checks,
+mutation challenge, and live outcome checks. Continuation and learning use durable
+work state, supported lifecycle hooks, wakeups where available, and retrospective
+signals.
+
+The current mapping uses OpenSpec artifacts and change contracts; Beads for task
+state only; Escapement-created Git worktrees; Claude Code and Codex host adapters;
+and GitHub plus repository policy for landing.
+
+The supported isolated-creation transaction is `escapement-worktree create`;
+session context supplies its concrete bundled path and repository-scoped
+arguments. Direct Git or Beads worktree creation is not an equivalent adapter.
+
+Replacing an adapter must not require changing the mission or capability chain. A formal adapter framework should be added only when a real replacement creates a concrete interface to generalize.
+
+## Supported hosts and truthful limits
+
+Host-specific surfaces are rendered from authored sources under `agent-surfaces/` by `tools/render_agent_surfaces.py`. Generated `AGENTS.md`, `CLAUDE.md`, plugin metadata, and compatibility surfaces must not be edited directly.
 
 | Surface | Claude Code | Codex |
-|---------|-------------|-------|
-| Instructions | `CLAUDE.md` | `AGENTS.md` *(generated)* |
-| Project hooks | Escapement Claude plugin | Escapement Codex plugin |
-| Skills | `claude/skills/` | `.agents/skills/` |
-| Plugin packaging | `.claude-plugin/plugin.json` | `plugins/escapement/.codex-plugin/` *(generated)* |
+|---|---|---|
+| Instructions | `CLAUDE.md` | `AGENTS.md` |
+| Installed hooks | Escapement Claude plugin | Escapement Codex plugin |
+| Skills | Claude plugin skill tree | `.agents/skills/` and Codex plugin skills |
+| Package metadata | Claude plugin manifest | Codex plugin manifest |
 
-The portable core runs on both: Escapement-owned task-state and landing-policy
-context and the verified test-oracle and outcome gates are packaged in each
-host's plugin and fixture-tested against that host's payload shape. For Codex,
-the plugin is the sole hook owner; the generated repo `.codex/hooks.json` is
-intentionally empty so the same hook cannot fire once from the checkout and
-again from the installed plugin. The write/edit TDD gate remains Claude
-Code-specific because its Serena tool matching is not portable to Codex.
+<!-- escapement:support-claims:start
+merge-green-status=unsupported
+merge-green-status-reason=The merge authorization hook resolves repository-declared merge authority but does not observe pull-request check or green status.
+confirm-class-enforcement=reserved
+confirm-class-enforcement-reason=Repository confirmation classes are stored but are not currently enforced by the merge authorization hook.
+deploy-execution=informational
+deploy-execution-reason=Repository deploy metadata is surfaced as outcome context and does not execute or independently authorize a deployment command.
+codex-final-response-interception=guidance-only
+codex-final-response-interception-reason=The installed Codex adapter exposes no Stop or final-response hook; durable work state and SessionStart guidance support continuation without native interception.
+-->
+<!-- escapement:support-claims:end -->
 
-The adapters expose different native capabilities. Per the `agent-surface-parity` spec, Claude Code-specific features — multi-agent `TeamCreate` teams and `ScheduleWakeup` continuation — are *excluded* from Codex surfaces rather than faked: a Codex hook is marked blocking only when a fixture proves it works against the current Codex payload. New shared behavior is added to the manifest first, then rendered to whichever host surface can actually enforce it.
+Capabilities are enabled only where the adapter and a fixture prove the current payload and point-of-effect behavior. Current limitations are explicit:
 
----
+- merge authorization resolves repository policy; it does not itself observe whether a pull request is green;
+- `confirm_class` is reserved configuration and is not currently enforced by the merge gate;
+- deployment metadata is informational to the outcome resolver and does not itself execute or authorize a deployment command; and
+- Codex exposes supported startup and tool-use lifecycle events, but no Stop/final-response hook. Its final-response continuation discipline is guidance-only and relies on explicit durable work state.
 
-## Prerequisites
+Support in one host is never inferred from another host's lifecycle model.
 
-| Tool | Install | Verify |
-|------|---------|--------|
-| `openspec` | `brew install openspec` (or `npm i -g @fission-ai/openspec`) | `openspec --version` |
-| `bd` (beads) | [github.com/steveyegge/beads](https://github.com/steveyegge/beads) | `bd --version` |
-| `direnv` | `brew install direnv` | `direnv version` |
-| `python3` | usually present | `python3 --version` (3.9+) |
-| `jq` | `brew install jq` | `jq --version` |
-| `git`, `bash` | usually present | — |
+## Install current adapters
 
-Install either supported host: Claude Code or Codex. The Claude steps below
-configure Claude Code machine-wide. Codex uses the Escapement plugin for hooks
-and packaged skills while still reading a checkout's generated `AGENTS.md`.
-[Serena MCP](https://github.com/oraios/serena) is optional but the navigation
-hooks are silent unless `.serena/memories` exists in a project.
+### Prerequisites
 
-## Install the Codex adapter
+Install the tools used by the capabilities you intend to adopt. The current complete workflow expects `openspec`, `bd`, `git`, `python3`, and `jq`; `direnv` and Serena are optional integrations.
+
+### Codex
+
+Install the Escapement plugin from its marketplace:
 
 ```bash
 codex plugin marketplace add https://github.com/alexander-vyh/escapement
 codex plugin add escapement@escapement
 ```
 
-For later upgrades, update the checkout and run the authoritative updater:
+For an existing checkout, update it and refresh the effective plugin source:
 
 ```bash
 git pull --ff-only
 ./scripts/codex-plugin-update.sh
 ```
 
-The updater refreshes the plugin, then backs up and replaces only exact known
-Escapement legacy versions of
-`~/.agents/skills/beads-execution/SKILL.md`. It refuses to overwrite an
-unrecognized or customized user-authored skill, and verifies the effective
-installed source before reporting success.
+The updater refuses to overwrite unrecognized user-authored skill content and verifies the effective installed source before reporting success.
 
----
+### Claude Code
 
-## Install the Claude Code adapter
-
-First install the native plugin from inside Claude Code:
+Install the native plugin from inside Claude Code:
 
 ```text
 /plugin marketplace add alexander-vyh/escapement
 /plugin install escapement@escapement
 ```
 
-Then clone the repository and run the authoritative updater:
+Then use the authoritative updater from a checkout:
 
 ```bash
 mkdir -p "$HOME/src"
@@ -150,195 +171,68 @@ cd "$HOME/src/escapement"
 ./scripts/plugin-update.sh
 ```
 
-The plugin is the sole owner of Claude workflow surfaces: hooks, skills,
-agents, commands, rules, bootstrap, and harness code. The updater refreshes the
-versioned plugin cache, preserves the configured model and enabled state,
-removes recognized legacy Escapement symlinks, prunes duplicate settings hooks,
-and maintains the stable `~/.claude/harness/{bin,schemas}` wrappers. It refuses
-to replace unknown user-owned files or unrelated symlinks.
+The native plugin owns workflow hooks, skills, agents, commands, rules, bootstrap, and harness code. Restart Claude Code after an upgrade because an already-running process may retain an older versioned plugin root.
 
-For later upgrades, land or pull the desired revision and rerun:
+`INSTALL.sh` is an optional compatibility installer only for assets the native plugin cannot install, including Beads formulas and selected stable auxiliary wrappers. It is not the primary workflow installer.
 
-```bash
-git pull --ff-only
-./scripts/plugin-update.sh
+## What the current workflow looks like
+
+For non-trivial work, the present adapters commonly follow this path:
+
+```text
+bounded outcome
+  → adversarial discovery and OpenSpec change
+  → dependency-aware Beads graph
+  → isolated task worktree
+  → independent test-oracle review and mutation challenge
+  → walking skeleton, then remaining implementation
+  → outcome verification
+  → repository-declared landing and delivery
+  → retrospective learning
 ```
 
-Restart Claude Code after an upgrade. Already-running processes may retain the
-old versioned plugin root.
+The molecule formulas encode reusable work graphs. Skills explain how to perform work; rules state policy; hooks enforce only the lifecycle events their host actually exposes. Each layer can evolve independently as long as the capability contract and user-visible outcome remain intact.
 
-### Optional compatibility auxiliaries
+## Repository anatomy
 
-```bash
-./INSTALL.sh
-```
+| Area | Purpose |
+|---|---|
+| `agent-surfaces/` | Authored identity, onboarding, host capability evidence, and render manifest |
+| `openspec/changes/` | Current design, requirements, decisions, and implementation artifacts |
+| `beads/formulas/` | Reusable task-graph templates |
+| `claude/skills/`, `.agents/skills/` | Current workflow procedures exposed to supported clients |
+| `claude/rules/` | Escapement policy and operating doctrine |
+| `claude/hooks/`, `harness/` | Fixture-backed enforcement and continuation machinery |
+| `tools/render_agent_surfaces.py` | Generated-surface renderer and consistency validator |
 
-`INSTALL.sh` remains only for assets the native plugin cannot install:
-`~/.claude/bin`, Beads formulas, and `~/.beads/mol-status.sh`. Those auxiliaries
-point into a branch-safe pinned checkout by default. The script delegates
-workflow convergence to `scripts/plugin-update.sh` first, so a later
-`INSTALL.sh --update` cannot restore legacy pin-owned hooks, skills, commands,
-agents, bootstrap, or harness code. `--dev` changes only the auxiliary links.
+See [docs/VOCABULARY.md](docs/VOCABULARY.md) for the client-neutral mechanics behind these terms.
 
----
+## Warnings
 
-## First run with Claude Code
+### Gates must enable the work
 
-After installing:
+A gate is useful only when the failure is repeated or severe, the oracle is replayable, valid work can pass, and the denial explains repair. Stored configuration and prose are not enforcement evidence.
 
-1. Open Claude Code in a fresh git repo anywhere on disk.
-2. On SessionStart, the bootstrap script runs (idempotent, fail-open):
-   - `direnv allow` on any `.envrc`
-   - `openspec init --tools claude` if `openspec/` is missing
-   - `bd init --prefix <repo-name>` if `.beads/` is missing
-   - Prompts for Serena onboarding (interactive)
-3. Say: *"let's build a small feature to validate the setup — add a /status slash command"*
-4. Claude should respond by pouring `mol-feature` and walking you through: brainstorm → discovery → review → breakdown → skeleton → build → retro.
+### Hooks are capability-specific
 
-If that flow happens end-to-end, everything is wired correctly.
-
----
-
-## Anatomy
-
-### The molecule formula (`beads/formulas/mol-feature.formula.json`)
-
-Nine steps, two human gates, four phases (Design / Validate / Build / Learn):
-
-```
-brainstorm ──▶ discovery ──▶ [GATE: review-discovery] ──▶ work-breakdown
-                                                                │
-                                                                ▼
-                              execute-skeleton ──▶ [GATE: review-skeleton]
-                                                                │
-                                                                ▼
-                              execute-full ──▶ ceremony-retro ──▶ outcome-check
-```
-
-Each step's `description` tells Claude what to do — often "run /discovery" or "dispatch named agents via TeamCreate". The formula is the script; the skills are the subroutines.
-
-### The skills
-
-```
-build                              ← front-door router; pours the right molecule
-  └─ brainstorming                 ← "should we build this at all?" pre-filter
-       └─ discovery                ← adversarial wrapper on openspec CLI
-            └─ work-breakdown      ← openspec → beads spec+task issues
-                 └─ beads-execution  ← dispatches agents for bd ready
-                      ├─ behavioral-test-oracle-review  ← brief before each code change
-                      ├─ dispatching-parallel-agents
-                      └─ subagent-driven-development
-```
-
-### The hooks (what the rules can't enforce alone)
-
-Grouped by what they protect:
-
-**OpenSpec workflow**
-- `openspec_init_guard.py` — blocks `openspec` commands when `openspec/` doesn't exist
-- `design_doc_location_guard.py` — warns when design docs go to `docs/plans/` instead of `openspec/changes/`
-- `discovery-gate.py` — blocks `bd create` of features/epics without a design doc
-- `discovery-nudge.py` — nudges `/discovery` when a prompt looks like feature work
-- `discovery-close-gate.py` — on `bd close`, surfaces proof-of-delivery + anti-metrics
-- `spec_id_enforcement.py` — blocks `bd create --type task` under `mol-feature` without `--spec-id`
-- `mol_status_check.py` — SessionStart, surfaces active molecules
-
-**TDD + test oracle discipline**
-- `tdd-gate.py` — requires test file modification before implementation
-- `test_oracle_brief_gate.py` — requires `.agent/runtime/test-oracle-brief.md` for behavioral code changes
-- `test_reminder.py` — PostToolUse nudge to run tests after edits
-- `implementation_echo_test_gate.py` — rejects tests that echo the implementation
-- `oracle_downgrade_warning_gate.py` — warns on test-oracle weakening in diffs
-- `outcome_assertion_gate.py` — on `gh pr create`, blocks tests with only structural assertions
-
-**Outcome verification + shirking**
-- `validate_no_shirking.py` — blocks "pre-existing failure" evasion at commit/PR/Stop
-- `review_gate.py` — soft gate on `bd close` if no review agent was dispatched
-- `review_nudge.py` — UserPromptSubmit, nudges `/review` on review-intent prompts
-
-**Agent discipline**
-- `enforce_named_agents.py` — blocks anonymous agents and multi-agent dispatch without `TeamCreate`
-- `context_burn_detector.py` — nudges agent dispatch after excessive inline research
-- `session_cleanup.py` — SessionStart, cleans /tmp state from the above
-
-**Serena navigation discipline** (silent unless `.serena/memories` exists)
-- `serena_preference_gate.py` — blocks full-file Read on code when Serena is available
-- `serena_preference_injection.py` — UserPromptSubmit, steers toward Serena symbol tools
-- `serena_onboarding_check.sh` — SessionStart, nudges Serena onboarding when missing
-
-Each hook's docstring at the top of the file is authoritative — read it before editing.
-
----
-
-## ⚠️ Warnings
-
-### This is opinionated
-
-The `rules/` directory encodes strong opinions:
-
-- **`planning-discipline.md`** — `mol-feature` on any non-trivial work
-- **`tdd-enforcement.md`** — failing test FIRST in any test-capable repo
-- **`agent-teams-default.md`** — `TeamCreate` + named agents for anything multi-step
-- **`outcome-ownership.md`** — done = verified end-to-end, not "my change compiles"
-- **`molecule-awareness.md`** — surface active molecules on every session start
-- **`worktree-discipline.md`** — the session-injected `escapement-worktree create` transaction
-- **`never-suppress.md`** — no `# noqa`, no `--no-verify`, no test downgrades — fix the underlying issue
-- **`serena-first.md`** — symbol tools over full-file Read when Serena is onboarded
-
-Read the rules BEFORE installing. Edit to match your philosophy. These are not universally applicable — the TDD and never-suppress rules in particular will feel restrictive if your project has no test infrastructure or relies on legacy suppression patterns.
-
-### Hooks are load-bearing
-
-Skills produce guidance. Hooks produce enforcement. If you install skills without hooks, Claude can and will drift from the workflow. If you install hooks without skills, the hooks will block things without offering a path forward.
-
-Install both, or neither.
+Skills and rules can guide behavior; hooks can mechanically constrain only events that the current client exposes. Install and evaluate each adapter as a capability bundle rather than assuming symmetry.
 
 ### Bootstrap scope
 
-The bootstrap script runs in any git repo by default. To constrain machine-wide bootstrap to known roots, set `ESCAPEMENT_BOOTSTRAP_ROOTS` to a colon-separated allowlist, for example:
+The bootstrap script runs in any Git repository by default. Set `ESCAPEMENT_BOOTSTRAP_ROOTS` to a colon-separated allowlist when machine-wide bootstrap should be constrained:
 
 ```bash
 ESCAPEMENT_BOOTSTRAP_ROOTS="$HOME/src:$HOME/work"
 ```
 
-Some maintenance utilities still default to scanning `~/GitHub/` unless their own root variables are set, such as `BEADS_BACKUP_ROOTS` for beads backup discovery.
+### Personal state is not bundled
 
-### Not shared
-
-Deliberately excluded from this bundle:
-- `~/.claude/settings.json` (personal auth + permissions) — only the `hooks` block is templated
-- `~/.claude/projects/*/memory/` (per-project memory)
-- General-utility hooks unrelated to the workflow (statusline, transcript backup, IDE wrappers, context injection)
-- `~/.beads/` databases
-
----
-
-## Uninstall
-
-```bash
-./INSTALL.sh --uninstall
-```
-
-Removes all symlinks. Your `.backup-<timestamp>` files are left alone — rename them back manually to restore your previous config.
-
----
+Authentication, permissions, per-project memory, and Beads databases remain user- or repository-owned state. The plugin must not replace unrelated personal configuration.
 
 ## Credits
 
-The substance comes from elsewhere; this repo is the glue.
-
-- **[OpenSpec](https://github.com/Fission-AI/OpenSpec)** — the structured change-management framework this workflow runs on top of. The discovery skill is an opinionated wrapper, not a replacement.
-- **[Beads](https://github.com/steveyegge/beads)** — graph-based task tracker designed for AI agents, with molecule formulas as a workflow templating layer.
-- **[Serena](https://github.com/oraios/serena)** — LSP-backed semantic code navigation; the Serena rule + hooks make it the default during the build phase.
-- **Walking-skeleton thinking** (Steven Gong et al.) — riskiest assumption first, 1–3 tasks, 30–60 min each.
-- **Manager Tools, Radical Candor, Playing to Win, Lencioni, Grove, Brené Brown** — the rules' flavor on outcome ownership, feedback, and psychological safety.
-
-The glue — molecule formulas, skill overlays, hook enforcement, settings template — is my own iteration, not a product. Expect to modify before adopting.
+The current adapters build on [OpenSpec](https://github.com/Fission-AI/OpenSpec), [Beads](https://github.com/steveyegge/beads), Git, GitHub, and optional [Serena](https://github.com/oraios/serena). The operating doctrine draws from mission command, Grove's leverage, closed-loop control, Lean flow, constraint management, enabling bureaucracy, walking-skeleton development, and independent test-oracle practice.
 
 ## License
 
-Escapement is licensed under the **GNU General Public License v3.0 or later**
-(`GPL-3.0-or-later`). See [`LICENSE`](LICENSE) for the full text. You may
-redistribute and/or modify it under the terms of the GPL as published by the
-Free Software Foundation, either version 3 of the License, or (at your option)
-any later version.
+Escapement is licensed under the **GNU General Public License v3.0 or later** (`GPL-3.0-or-later`). See [`LICENSE`](LICENSE).

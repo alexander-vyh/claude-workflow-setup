@@ -52,6 +52,45 @@ exit 0
 STUB
 chmod +x "$BIN/claude"
 
+# Isolate the supervisor installer that plugin-update owns. The dedicated
+# installer test executes plist argv; this integration stub records only that
+# deployment reached launchd after the stable wrapper was converged.
+cat > "$BIN/uname" <<'STUB'
+#!/usr/bin/env bash
+printf 'Darwin\n'
+STUB
+cat > "$BIN/launchctl" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$HOME/launchctl.log"
+exit 0
+STUB
+chmod +x "$BIN/uname" "$BIN/launchctl"
+export ESCAPEMENT_TEST_LAUNCHCTL_STUB="$BIN/launchctl"
+launchctl() (
+  state="$HOME/launchctl.loaded"
+  label="com.escapement.continuation-supervisor"
+  printf '%s\n' "$*" >> "$HOME/launchctl.log"
+  [[ -e "$state" ]] || : > "$state"
+  case "${1:-}" in
+    print)
+      while IFS= read -r loaded; do
+        [[ "$loaded" != "$label" ]] || return 0
+      done < "$state"
+      return 113
+      ;;
+    bootout)
+      : > "$state"
+      return 0
+      ;;
+    bootstrap)
+      printf '%s\n' "$label" > "$state"
+      return 0
+      ;;
+  esac
+  return 0
+)
+export -f launchctl
+
 setup_claude_home() {
   local home_dir="$1"
   local cache="$home_dir/.claude/plugins/cache/escapement/escapement/sha-current"
@@ -172,6 +211,27 @@ else
 fi
 assert_plugin_owned "$T1" "default install"
 assert_auxiliary_owned "$T1" "$PIN" "default install"
+
+SUPERVISOR_PLIST="$T1/Library/LaunchAgents/com.escapement.continuation-supervisor.plist"
+if [ -f "$SUPERVISOR_PLIST" ] && python3 - "$SUPERVISOR_PLIST" "$T1/.claude/harness/bin/wakeup_waker.py" <<'PY'
+import plistlib
+import sys
+
+with open(sys.argv[1], "rb") as fh:
+    job = plistlib.load(fh)
+argv = job.get("ProgramArguments", [])
+assert argv == [sys.argv[2], "--fire"]
+assert job.get("RunAtLoad") is True
+assert type(job.get("StartInterval")) is int and job["StartInterval"] == 60
+PY
+then
+  ok "default deployment installs supervisor against the stable harness wrapper"
+else
+  bad "default deployment did not install a stable --fire supervisor job"
+fi
+grep -q '^bootstrap ' "$T1/launchctl.log" 2>/dev/null \
+  && ok "default deployment loads the supervisor after wrapper convergence" \
+  || bad "default deployment never loaded the supervisor"
 
 # Sequential regression: a later legacy update may refresh the auxiliary pin,
 # but it must leave plugin ownership intact.
@@ -355,6 +415,10 @@ cmp -s "$T5/.beads/formulas/mol-feature.formula.json" "$ROOT/invalid-formula.bef
 cmp -s "$T5/.claude/settings.json" "$ROOT/invalid-settings.before" \
   && ok "failed installer preserves settings byte-for-byte" \
   || bad "failed installer changed settings before aborting"
+[ ! -e "$T5/Library/LaunchAgents/com.escapement.continuation-supervisor.plist" ] \
+  && [ ! -s "$T5/launchctl.log" ] \
+  && ok "plugin authority failure occurs before supervisor deployment" \
+  || bad "plugin authority failure partially installed the supervisor"
 
 # Unknown auxiliary symlinks are user-owned. A valid plugin does not authorize
 # clobbering them, and the whole plan must validate before the first link moves.
@@ -419,7 +483,10 @@ fi
 find "$T8" ! -name out.log -print | sort > "$ROOT/t8.after"
 cmp -s "$ROOT/t8.after" "$ROOT/t8.before" \
   && ok "authority failure leaves complete home tree unchanged" \
-  || bad "authority failure added pin, backup, wrapper, or deployment residue"
+  || {
+    diff -u "$ROOT/t8.before" "$ROOT/t8.after" || true
+    bad "authority failure added pin, backup, wrapper, or deployment residue"
+  }
 
 echo
 if [ "$fail" -eq 0 ]; then
