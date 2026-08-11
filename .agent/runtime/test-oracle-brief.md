@@ -1216,3 +1216,6 @@ rollback ownership fail safely without deleting ambiguous user state.
 ## Final outcome verification
 Run the public bootstrap, safety, transaction, validation, and parity suites, then
 exercise the installed command against a disposable arbitrary repository.
+
+The independently labeled gate replay brief is maintained at
+[`test-oracle-briefs/gate-decision-replay.md`](test-oracle-briefs/gate-decision-replay.md).
