@@ -945,111 +945,232 @@ than risk blocking an unrelated command.
 Run `python3 -m pytest claude/hooks/tests/test_beads_worktree_guard.py -q`,
 render and check generated surfaces, then commit and push from the
 Beads-created worktree. Confirm the remote branch points to the new commit.
+# Test Oracle Brief — delegated-work liveness and parent completion (2026-08-09)
 
----
-
-# Test Oracle Brief — repository-declared worktree bootstrap (`escapement-dbhb`)
+Scope: `escapement-e3ai`, the parent-open premature-final regression, durable
+native execution attempts, independently firing reconciliation, and optional
+local-judge authentication.
 
 ## Business invariant
 
-`escapement-worktree create` returns success only when the newly verified
-worktree has completed that repository's exact declared bootstrap command.
-Repositories without a declaration retain the existing creation behavior.
+A managed session does not finish while its claimed/root bead remains unresolved.
+Delegated native work either reaches verified terminal evidence and a verified
+parent outcome, or an installed supervisor performs bounded reconciliation
+without waiting for a user message.
 
 ## Independent source of truth
 
-The transaction is judged by arbitrary repository-owned executables whose
-sentinels record exact argv, cwd, source revision, and ordering relative to
-Beads validation. Git's registry and administrative-directory identity are the
-independent authority for rollback ownership.
+- `bd show <root> --json` supplies canonical parent work state independently of
+  descendant queue code or the execution ledger.
+- Literal, hand-authored event/timestamp fixtures and a reference transition
+  table determine execution-attempt behavior.
+- The two real incident orderings determine the regression outcomes: the
+  22-hour child-tool stall and the design-session closed-children/open-parent
+  premature final response.
+- Installed `launchctl` state, supervisor health written after a completed scan,
+  and observed recovery without a user prompt prove firing.
+- The actual business verification command proves result application; ledger
+  terminal status alone does not.
 
 ## Solution constraints
 
-- The optional contract lives in `.escapement/repo.json` as
-  `worktree.bootstrap.argv` (a non-empty JSON array of non-empty, NUL-free
-  strings) and an explicit positive `timeout_seconds`; execute argv directly
-  with no shell.
-- Absence means provisioning is not applicable and preserves existing behavior.
-  Any malformed declaration fails closed before Git creates a worktree.
-- Execute only after Git identity and Beads identity validation, inside the
-  verified target, at the exact resolved source revision. Re-verify transaction
-  identity after bootstrap before reporting success.
-- Timeout, missing executable, signal, or non-zero exit makes the overall create
-  fail and invokes the existing identity-guarded rollback. Rollback may remove
-  only the exact worktree/ref created by this transaction and must preserve a
-  replaced path, moved branch, or foreign registration, including a valid
-  same-path/same-branch worktree whose HEAD differs from the source SHA and a
-  foreign-path worktree that owns the same branch at the same source SHA. A
-  same-path/same-branch/same-SHA worktree with a different Git-admin creation
-  instance is also a replacement and must survive.
-- On timeout Escapement contains the bootstrap and all descendants observed
-  from it, including descendants that start a new session, before rollback.
-- Child output capture is memory-bounded. Failure and timeout errors expose
-  exactly the final 8192 bytes per stream as lowercase fixed-width `\\xNN`
-  tokens, preserving arbitrary raw bytes without decoding loss.
-- Keep policy generic and stdlib-only. Do not hard-code CAKE, `uv`, `.env`,
-  pytest, testmon, or a `worktree-bootstrap` naming convention in Escapement.
-- Render the complete runtime sibling closure into both plugin distributions.
+- Beads owns durable work identity, hierarchy, claim, and verified closure.
+- Escapement owns attempt identity, native binding, deadlines, recovery,
+  supervisor health, result application, and completion policy.
+- Python standard library core; atomic trusted state; host parsers outside the
+  state machine; local model optional and advisory.
+- No Stop claim for Codex until an effective installed hook fixture and smoke
+  prove it. SessionStart and external reconciliation remain mandatory.
+- No added responsibility in the already oversized `stop_hook.py`; extract
+  cohesive task/execution checks.
 
 ## Invalid solution classes
 
-- Delegating to `bd worktree create`, copying a stale `.venv` or `.testmondata`,
-  or assuming Beads owns repository provisioning.
-- Hard-coding `uv sync --all-extras`, CAKE paths, or `just` in Escapement.
-- Running bootstrap before Beads validation, from the primary checkout, at the
-  wrong revision, through `shell=True`, or only on the first named repository.
-- Ignoring timeout/non-zero status, accepting malformed JSON types, or silently
-  treating a configured missing executable as no bootstrap.
-- Killing only the bootstrap process group, retaining unbounded `PIPE` output
-  in memory, decoding raw tails, or discarding all child diagnostics.
-- Destructive rollback that deletes a target/ref/registration replaced during a
-  failed or timed-out bootstrap.
-- Tests that merely assert a subprocess mock was called instead of observing a
-  sentinel and the real final worktree artifacts.
+- Descendant-only `bd ready`/`bd blocked` checks that ignore root status.
+- Auto-closing a bead from child/native terminal state.
+- Mirroring Beads metadata or task status into `executions.json`.
+- Transcript/file mtime, tool start, polling chatter, or model opinion as
+  semantic progress.
+- Health stamped before a complete useful reconciliation.
+- Exactly-once-spawn assumptions, unfenced retries, or stale-generation result
+  application.
+- Future wakeup files accepted without fresh successful supervisor proof.
+- Public Stop wiring that bypasses otherwise-correct root/execution helpers.
+- Global health stamped after only part of a multi-thread scan succeeds.
+- Unrelated or old-generation future wakeups treated as current recovery proof.
+- Adapter events with missing generation silently relabeled as current.
+- Result-application claims treated as proof that the business result applied.
+- Missing/malformed/untrusted state treated as complete.
 
 ## Fragile implementation to reject
 
-The tempting shortcut copies the primary checkout's current `.testmondata` and
-runs a bare environment sync. Testmon's database is path/revision sensitive and
-the copied cache may be empty or stale; this also omits CAKE's authoritative
-broad warm-up. A CAKE disposable-worktree oracle must therefore inspect a cache
-created in the target and exercise the real affected-test hook, not only check
-that a file named `.testmondata` exists.
+Check only that all child beads are closed and a future wakeup exists. This
+would pass the child-research happy path while the parent remains `in_progress`,
+and would still fail when the parent has already ended or the waker is inert.
+The parent-open regression plus stale/missing supervisor controls must fail it.
 
 ## Negative control
 
-Configure an arbitrary bootstrap script that writes an external sentinel and
-would succeed, then force Beads identity validation to fail. Creation must fail
-without any sentinel, proving bootstrap did not run early. Parameterized
-malformed declarations, missing executable, timeout, and non-zero exits must
-leave no transaction-owned target/ref; race fixtures that replace or move those
-identities must remain intact after rollback. A delayed descendant must be dead
-before rollback and remain unable to recreate the target after its planned write
-time. A valid registered replacement at the same path and branch but a different
-HEAD must also survive intact. A valid foreign-path registration owning the
-same branch and source SHA must preserve its path, marker, registration, and ref.
-A same-SHA replacement with a different Git-admin inode must survive. A timed-out
-new-session descendant must be dead before it can recreate the rolled-back target.
+- Root `in_progress`, `ready=[]`, `blocked=[]` => block
+  `parent_outcome_unresolved`.
+- Root missing/malformed/unreadable => unresolved, never queue-drained.
+- Complete public Stop fixtures reject an open root with empty descendants both
+  without a wake and with a future wake plus missing/stale health.
+- Queued attempt past start deadline; running attempt past idle deadline; noisy
+  attempt past hard deadline => sticky reconciliation due, not terminal.
+- Successful process start plus failed thread scan => no new successful-health
+  timestamp.
+- A due attempt plus failure after planning, during its atomic claim write, or
+  during spawn => neither successful-health time nor completed generation moves.
+- In a two-thread root, success for A followed by load/reconcile/persist failure
+  for B (and the reverse scan order), or scheduled inspection failure, advances
+  diagnostic `reconcile_started_at` but preserves all authoritative prior health
+  fields.
+- Two concurrent public reconciliations contend for one due attempt => one live
+  current-generation claim and at most one spawn until claim expiry.
+- With `reconcile_due=None`, expired accepted activity/idle deadline, and fresh
+  filesystem mtime plus ledger `updated_at` from polling/tool-start, public
+  reconciliation sets idle-due and claims recovery. A paired completed-activity
+  event is the positive renewal control. Static checks reject mtime and ledger
+  `updated_at` as activity oracles.
+- Every terminal-ingress public path receives open child/root beads and a
+  recording Beads runner; none may issue closure mutation. Architecture checks
+  forbid `bd close`, closed-status updates, and closure-helper imports from the
+  ledger, hook, reconciliation, and supervisor modules. Business verification
+  owns task closure and Stop remains blocked while canonical beads are open.
+- Recovery claim persisted then process crash => no immediate duplicate; claim
+  expiry advances generation and permits recovery.
+- Old-generation completion => incident evidence only, never current result
+  application or Beads close.
+- Late generation-one completion delivered through public adapters after a
+  generation-two takeover cannot mutate generation two; missing generation is
+  unresolved, never defaulted.
+- A public application orchestrator must call an injected business verifier;
+  terminal state/digest cannot directly prove application. Missing/negative/
+  exceptional verification stays unapplied. If application succeeds and the
+  process dies before persistence, takeover rechecks the real outcome or reuses
+  a stable idempotency key so the external effect occurs once before fenced
+  completion. Equal digests on distinct executions remain distinct.
+- A future wake must exactly match parent session, watchdog, execution, attempt,
+  and generation; unrelated/mismatched wakeups do not authorize pause.
+- The public wake producer persists those literal identity fields in schema-valid
+  JSON consumed by public Stop; omitting any field fails validation and blocks.
+- HTTP 401/local-model absence => deterministic behavior unchanged.
 
 ## Positive control
 
-An unrelated temporary repository configures a non-CAKE argv command. The
-sentinel must show the target cwd and expected source SHA, and successful
-creation must retain the verified worktree. A repository with no bootstrap
-declaration must still create successfully without executing anything extra.
+- Closed root, empty descendants, all managed attempts terminal and independently
+  verified => normal completion.
+- Running attempt with accepted completed activity, unexpired hard deadline,
+  valid future wake, and fresh post-reconcile health => bounded pause.
+- Recovery after claim expiry emits exactly one current-generation spawn in the
+  controlled fixture.
+- Both a complete no-op reconciliation and a complete action reconciliation
+  advance useful-work health exactly once.
+- Authenticated local judge annotation is observable but does not change the
+  deterministic decision.
 
 ## Missing/unresolved handling
 
-Missing `worktree.bootstrap` is explicitly allowed. Once the key is present,
-missing/empty argv, non-string items, unknown fields that make the contract
-ambiguous, embedded NUL bytes, booleans/non-numeric/non-positive timeout values,
-launch errors, timeouts, and non-zero exits fail closed. Rollback uncertainty
-fails safe by preserving ambiguous residue and reporting it rather than deleting
-user state.
+Fail closed on completion and pause authorization. Wake and reconcile rather
+than blindly replay. A specific auditable human release remains the only manual
+override. Model failure is fail-open only for the advisory annotation.
 
 ## Final outcome verification
 
-Run the public bootstrap boundary and existing worktree transaction suites, then
-render and verify canonical/Codex/Claude byte parity. Exercise the public command
-against a disposable arbitrary repository for the declared-command, no-contract,
-post-bootstrap identity, failure-tail, replacement, and escaped-descendant cases.
+1. Focused parent-state, execution-ledger, supervisor, Stop, host-adapter,
+   installer, security, and local-auth suites pass after verified RED failures.
+2. An independent mutation challenger proves the named bad implementations are
+   killed.
+3. Full `python -m pytest claude/hooks/tests harness/tests tests -q -rs` and
+   generated-surface checks pass.
+4. Merged source is installed for Claude and Codex; launchd runs
+   `wakeup_waker.py --fire` and exposes fresh post-reconcile health.
+5. A disposable short-deadline delegation is automatically reconciled without
+   a user message, and the open-parent/closed-children fixture continues rather
+   than returning a final answer.
+
+---
+
+# Test Oracle Brief — discovery consequence gating
+
+## Business invariant
+Discovery asks the user to co-author load-bearing choices before drafting a
+high-consequence or hard-to-reverse solution, while local reversible work stays
+lightweight.
+
+## Independent source of truth
+The public discovery guidance and its observed conversation order: questions
+before solution commitments, explicit answers reflected in the draft, and no
+heavy interview for low-consequence work.
+
+## Solution constraints
+The canonical skill is the only authority; rendered plugin copies must match.
+Rapid changes ceremony, not consequence calibration.
+
+## Invalid solution classes
+Reject draft-first high-risk responses, keyword-only risk routing, reintroducing
+an earlier owner after an explicit fork answer, reclassifying unknown work instead
+of asking consequences, and over-interviewing local reversible work.
+
+## Fragile implementation to reject
+A direct design request that drafts an architecture before asking the required
+ownership, rollout, compatibility, or rollback choices.
+
+## Negative control
+High-risk work asks 2–4 explicit tradeoff-bearing forks and stops; unknown work
+asks exactly what becomes costly or impossible to undo and who is affected.
+
+## Positive control
+Low-risk reversible work uses lightweight draft-and-react, and a complete answer
+set authorizes a draft that follows the selected authority.
+
+## Missing/unresolved handling
+Unknown consequences require the two-question probe and wait. Partial fork
+answers keep only the unresolved choices gated.
+
+## Final outcome verification
+Run `pytest -q tests/test_discovery_interaction_contract.py`, render/check agent
+surfaces, and exercise one high-, low-, and unknown-consequence conversation.
+
+---
+
+# Test Oracle Brief — repository-declared worktree bootstrap
+
+## Business invariant
+`escapement-worktree create` succeeds only after the new worktree completes its
+repository-declared bootstrap; repositories without a declaration behave as before.
+
+## Independent source of truth
+Arbitrary repository executables record exact argv, cwd, and source revision. Git's
+worktree registry and administrative-directory identity determine rollback ownership.
+
+## Solution constraints
+Execute only a nonempty JSON argv directly, after validation, inside the verified
+target. Reverify afterward. Bound raw diagnostic tails, contain descendants on
+failure/timeout, preserve replacements, remain stdlib-only, and render all surfaces.
+
+## Invalid solution classes
+Reject convention inference, hardcoded repository/tool names, shell execution,
+bootstrap before validation, unbounded output, process-group-only cleanup, lossy
+tail decoding, and rollback based only on path/branch/SHA equality.
+
+## Fragile implementation to reject
+Running a guessed setup command and deleting any same-path worktree during rollback.
+
+## Negative control
+Malformed declarations, missing executables, nonzero exits, signals, and timeouts
+fail; same-path replacement worktrees survive; escaped descendants cannot recreate
+the rolled-back target; arbitrary raw-byte tails remain exact.
+
+## Positive control
+An arbitrary repository's declared argv runs exactly once at the source revision,
+while an undeclared repository runs no inferred bootstrap and still succeeds.
+
+## Missing/unresolved handling
+Missing bootstrap is allowed. A present but malformed declaration and uncertain
+rollback ownership fail safely without deleting ambiguous user state.
+
+## Final outcome verification
+Run the public bootstrap, safety, transaction, validation, and parity suites, then
+exercise the installed command against a disposable arbitrary repository.

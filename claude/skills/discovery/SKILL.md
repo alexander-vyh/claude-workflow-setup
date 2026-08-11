@@ -131,19 +131,80 @@ content is *good*. A riskiest assumption that reads only "we will succeed" passe
 the hook. Content quality is the interview's job (brainstorming's forcing check)
 and the human's job — never treat a passing hook as a confirmed-quality framing.
 
-### Echo-back before drafting
+### Echo-back before interaction-depth calibration
 
-Once the framing is confirmed, before writing any artifact, echo back the
-constraints you are treating as binding: "Designing against: [problem], owned by
-[authority], betting [riskiest assumption]. The skeleton will test that
-assumption. Proceeding." This makes a bad framing visible at the handoff, not at
-audit.
+Once the framing is confirmed, echo back the constraints you are treating as
+binding: "Framed against: [problem], owned by [authority], betting [riskiest
+assumption]. Next I will calibrate how much co-authoring this decision needs."
+This makes a bad framing visible before either interaction path begins.
+
+## Interaction Depth: Blast Radius and Reversibility
+
+After the Input Gate passes, classify the consequences of a wrong design. Do not
+classify from topic words, schema tier, or requested document size. Take the
+high-risk path when any one of these consequence tests is true: the change
+requires coordinated behavior or acceptance beyond the immediate author; it
+changes a shared meaning, contract, access decision, or persisted state that
+others depend on; or the prior user-visible and data-visible state cannot be
+restored quickly and completely without coordinated consumer work or data repair.
+Only take the low path when none is true. A named decision authority in the problem
+framing does not resolve the solution's ownership, compatibility, enforcement, or
+failure-policy forks.
+
+**Unknown blast radius or reversibility:** fail closed to one short consequence
+probe and wait. Ask exactly these two questions and nothing else: "What specifically
+becomes costly or impossible to undo if this is wrong?" and "Who or what would be
+affected?" Wait for both answers. This probe calibrates interaction depth; it does
+not re-ask the six framing fields.
+
+**High blast radius OR hard to reverse — co-authoring gate.** The high-risk path is
+a hard conversational stop before solution content, even when the user asked
+directly for a design. The next response may neutrally echo the framing. Before
+architecture, recommendations, rollout plans, tasks, or other solution commitments,
+ask 2-4 load-bearing forks in one conversational turn and stop; a walking skeleton
+also counts as a solution commitment. Each fork presents 2-3 explicit, mutually
+exclusive alternatives. Format each option as `Choice — benefit; cost or risk.`
+Bare option labels, generic catch-alls such as "another model," and yes/no questions
+do not count. State each alternative's material benefit and cost or risk rather than
+expecting the user to infer it. Across the set, cover at least two of:
+
+- authority or ownership
+- migration or compatibility
+- enforcement or rollout
+- rollback or failure policy
+
+Wait for explicit answers to every fork. Silence, "use your judgment," or an
+answer to only one fork does not clear the gate. If the user answers only some
+forks, acknowledge those choices and ask only the unresolved forks; do not draft.
+Once all are resolved, summarize the selected decision set. Later explicit fork
+answers are binding and supersede conflicting solution authority in the earlier
+framing. Do not layer or reintroduce the earlier owner. Run one load-bearing
+completeness pass before composing: if another fork would materially change the
+system boundary or a selected category, ask it next and wait. When the pass finds
+none, reflect those decisions in the draft's ownership, compatibility, rollout,
+and failure behavior. Once composition starts, no load-bearing or skeleton-blocking
+question may appear after drafting begins. Ask a true blocker before the draft;
+record implementation parameters that do not change the boundary or selected
+categories as assumptions or deferrable details. Do not promote a detail the user
+explicitly marked deferrable into a post-draft blocker unless it contradicts the
+selected boundary or policy; metadata shape, adapter selection, exact thresholds,
+and first integration targets are normally placeholders rather than new forks. If
+later evidence exposes another load-bearing fork, return to this gate; high-risk
+work has no one-question cap.
+
+**Low blast radius + easy to reverse.** Use the normal lightweight draft-and-react
+path below. Do not force the co-authoring interview onto a local, cheaply reversible
+change merely because it shares vocabulary with a high-risk domain.
 
 ## Interaction Model: Draft-and-React
 
 **Precondition: the Input Gate has passed.** Draft-and-react operates on a
-*confirmed* framing. If you have not cleared the Input Gate, you are not in
-draft-and-react yet — you are in the gate.
+*confirmed* framing. High-risk work must also clear the co-authoring gate above.
+If either applicable gate is uncleared, do not draft.
+
+Rapid requires a stated observable problem and outcome. An explicit `--schema rapid`
+selects artifact ceremony only; it does not bypass consequence calibration. For
+rapid, the stated observable problem and outcome are confirmed before drafting.
 
 **NOT interrogation.** Be resourceful before asking (SOUL.md principle). Instead:
 
@@ -152,21 +213,23 @@ draft-and-react yet — you are in the gate.
 2. **Read project context BEFORE responding.** Read CLAUDE.md, existing design docs
    (especially anything in `docs/plans/` and `openspec/changes/`), and any referenced
    PRD. Read 2-3 existing design docs to match the project's voice and conventions.
-3. **Draft sections you CAN infer.** Problem statement from context. Non-goals from
-   similar docs. Walking skeleton from the domain.
+3. **Follow the calibrated path.** For low-risk work, draft sections you can infer:
+   problem statement from context, non-goals from similar docs, and a walking
+   skeleton from the domain. For high-risk work, ask and resolve the load-bearing
+   forks first, then draft from the binding decision set.
 4. **Socratic probe on problem statement (feature/epic only, skip for rapid):**
    If the problem statement was inferred from context rather than stated by the user,
    briefly validate it before drafting further: "Before I draft the design — you said
    the problem is [one-sentence summary]. Does that chain causally? Who's affected if
    we don't solve this?" This is one exchange, not an interrogation. If the user
    confirms, proceed. If they correct, update the problem statement and re-draft.
-5. **Surface the ONE question that unblocks the rest.** This must be a **separate
-   conversational message** after presenting the draft — not inline in a document or
-   file. Surface the question as spoken dialogue, not as text written into an artifact.
-   Stop output, ask the question, wait for the answer. Example: "I can draft everything
-   except the riskiest assumption — that has to come from you. What are you most unsure
-   about?"
-6. **Zero questions upfront, one max mid-draft.**
+5. **Low-risk blocking question.** On the lightweight path, surface at most one
+   question that unblocks the rest. It must be a **separate conversational message**
+   after presenting the draft — not inline in a document or file. Stop output, ask,
+   and wait. Example: "I can draft everything except the riskiest assumption — that
+   has to come from you. What are you most unsure about?"
+6. **Keep the low path light.** Ask nothing upfront and at most one blocking question
+   after the draft. The high-risk path uses the co-authoring gate instead.
 
 ## Modes
 
@@ -187,8 +250,9 @@ draft-and-react yet — you are in the gate.
 
 ### Create Mode
 
-Start from scratch. Read context, create an OpenSpec change, produce artifact drafts,
-surface one question.
+Start from scratch. Read context, clear the applicable interaction gate, create an
+OpenSpec change, and produce the draft. The calibrated path determines whether user
+input comes before or after that draft.
 
 **Steps (internal — never show these to the user):**
 
@@ -234,10 +298,10 @@ surface one question.
    All prerequisite artifacts must still be authored in dependency order to
    reach those gates.
 
-**What the user sees:** A draft design document presented in conversation, with the
-ONE blocking question surfaced as a separate message after the draft. The user does
-NOT see `openspec` commands, artifact IDs, JSON output, or status checks. They see
-a thoughtful design emerging.
+**What the user sees:** On the high-risk path, the load-bearing choices come first;
+the later draft visibly reflects them. On the lightweight path, the draft comes
+first and may end with its one blocking question. The user does NOT see `openspec`
+commands, artifact IDs, JSON output, or status checks.
 
 **Writing:** Once the user approves the draft (explicitly or by resolving the mid-draft
 question), write the artifact files immediately. No confirmation needed — draft
@@ -589,8 +653,9 @@ and the review gate will activate.
 |-----------|----------------------|
 | "Reading project context..." | CLAUDE.md, design docs, PRDs being read |
 | "This looks like a feature change..." | Schema auto-detected or explicit, `openspec new change` runs. If user corrects ("no, this is rapid"), switch immediately and re-announce. Schema selection is never final until the user approves the draft. |
-| Draft design appearing in conversation | Artifacts being composed from schema instructions |
-| [separate conversational message with one question] | Mid-draft question — a conversational message, never inline in a file |
+| 2-4 load-bearing choices before a high-risk draft | Co-authoring gate is waiting for every explicit answer |
+| Draft design appearing in conversation | Applicable interaction gate is clear; sections are composed from schema instructions and binding decisions |
+| A low-risk draft ends with one question | Lightweight-path question — conversational, never inline in a file |
 | "Saving design for '{name}'." | Artifact files written to OpenSpec change folder |
 | "Discovery complete for '{name}'. Design saved to openspec/changes/{name}/." | All `applyRequires` artifacts have `status: done`; path revealed once for findability |
 

@@ -196,6 +196,15 @@
       {
         "hooks": [
           {
+            "command": "python3 -B \"${PLUGIN_ROOT}/harness/bin/execution_reconcile.py\"",
+            "type": "command"
+          }
+        ],
+        "matcher": ""
+      },
+      {
+        "hooks": [
+          {
             "command": "python3 -B \"${PLUGIN_ROOT}/claude/hooks/codex_final_response_gap.py\"",
             "timeout": 5,
             "type": "command"

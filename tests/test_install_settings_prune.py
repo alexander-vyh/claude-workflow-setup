@@ -16,6 +16,28 @@ ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "INSTALL.sh"
 PLUGIN_SOURCE = ROOT / "plugins" / "escapement-claude"
 
+SHELL_LAUNCHCTL = r"""() {
+  state="$HOME/launchctl.loaded"
+  label="com.escapement.continuation-supervisor"
+  touch "$state"
+  printf '%s\n' "$*" >> "$HOME/launchctl.log"
+  if [[ "${1:-}" == print ]]; then
+    grep -Fxq "$label" "$state" && return 0
+    return 113
+  fi
+  if [[ "${1:-}" == bootout ]]; then
+    grep -Fxq "$label" "$state" || return 3
+    grep -Fvx "$label" "$state" > "$state.next" || true
+    mv -f "$state.next" "$state"
+    return 0
+  fi
+  if [[ "${1:-}" == bootstrap ]]; then
+    grep -Fxq "$label" "$state" && return 72
+    printf '%s\n' "$label" >> "$state"
+  fi
+  return 0
+}"""
+
 
 def _commands(settings: dict) -> list[str]:
     return [
@@ -32,6 +54,26 @@ def _stub_claude_cli(home: Path) -> Path:
     claude = stub_bin / "claude"
     claude.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
     claude.chmod(0o755)
+    uname = stub_bin / "uname"
+    uname.write_text(
+        "#!/usr/bin/env bash\nprintf 'Darwin\\n'\n",
+        encoding="utf-8",
+    )
+    uname.chmod(0o755)
+    launchctl = stub_bin / "launchctl"
+    launchctl.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf '%s\\n' \"$*\" >> \"$HOME/launchctl.log\"\n"
+        'state="$HOME/launchctl.loaded"\n'
+        'label="com.escapement.continuation-supervisor"\n'
+        'touch "$state"\n'
+        'if [[ "${1:-}" == print ]]; then grep -Fxq "$label" "$state" && exit 0; exit 113; fi\n'
+        'if [[ "${1:-}" == bootout ]]; then grep -Fxq "$label" "$state" || exit 3; grep -Fvx "$label" "$state" > "$state.next" || true; mv -f "$state.next" "$state"; exit 0; fi\n'
+        'if [[ "${1:-}" == bootstrap ]]; then grep -Fxq "$label" "$state" && exit 72; printf "%s\\n" "$label" >> "$state"; fi\n'
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    launchctl.chmod(0o755)
     return stub_bin
 
 
@@ -156,6 +198,7 @@ def test_installer_finds_real_plugin_cache_shape_and_removes_legacy_prime(
     env = os.environ.copy()
     env["HOME"] = str(home)
     env["PATH"] = f"{stub_bin}:{env['PATH']}"
+    env["BASH_FUNC_launchctl%%"] = SHELL_LAUNCHCTL
     result = subprocess.run(
         ["bash", str(INSTALLER), "--dev"],
         cwd=ROOT,
@@ -196,6 +239,7 @@ def test_installer_without_plugin_inventory_preserves_settings(
     env = os.environ.copy()
     env["HOME"] = str(home)
     env["PATH"] = f"{stub_bin}:{env['PATH']}"
+    env["BASH_FUNC_launchctl%%"] = SHELL_LAUNCHCTL
     result = subprocess.run(
         ["bash", str(INSTALLER), "--dev"],
         cwd=ROOT,
@@ -253,6 +297,7 @@ def test_registry_without_user_plugin_preserves_settings(
     env = os.environ.copy()
     env["HOME"] = str(home)
     env["PATH"] = f"{stub_bin}:{env['PATH']}"
+    env["BASH_FUNC_launchctl%%"] = SHELL_LAUNCHCTL
     result = subprocess.run(
         ["bash", str(INSTALLER), "--dev"],
         cwd=ROOT,
@@ -321,6 +366,7 @@ def test_invalid_registered_plugin_fails_without_touching_settings(
     env = os.environ.copy()
     env["HOME"] = str(home)
     env["PATH"] = f"{stub_bin}:{env['PATH']}"
+    env["BASH_FUNC_launchctl%%"] = SHELL_LAUNCHCTL
     result = subprocess.run(
         ["bash", str(INSTALLER), "--dev"],
         cwd=ROOT,

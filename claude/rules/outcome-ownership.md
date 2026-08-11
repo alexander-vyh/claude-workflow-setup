@@ -9,19 +9,33 @@ Done = the actual desired business outcome is happening. Not "my code change com
 - "Add the report" → done when the report shows accurate, correct numbers to the user
 - "Fix the OOM" → done when the job finishes AND produces correct output, not just when it stops crashing
 
+## Outcome Scope — Own Blockers, Not Every Discovery
+
+Outcome ownership follows causality. A defect is part of the active work when it
+**causally blocks the delegated outcome** and repairing it stays inside the delegated
+repository, audience, privilege, destructive-effect, and ownership boundaries. Fix
+that blocker even when it lives in another component or predates the current patch.
+
+Useful **adjacent discoveries** do not become active scope merely because an agent found
+them. Record them in the repository's task-state system, preserve enough evidence for a
+future owner, and continue the delegated outcome. Do not execute adjacent scope or stop
+the current work to ask whether every discovered improvement should be included.
+
 ## Anti-Patterns (Real Examples — Never Do These)
 
 ❌ "The Dependabot warnings are pre-existing — not from this change."
 → If they block the outcome, fix them or address them. Don't dismiss them.
 
 ❌ "It exposed a second bug: the LogDate filter uses date format instead of datetime format."
-→ Fix the date format too. You found it, you own it.
+→ If that bug causally prevents the delegated outcome, fix it. If it is adjacent,
+record it separately and keep delivering the delegated outcome.
 
 ❌ "All three jobs died OOM. That's a completely different problem from the schema mismatch fix."
 → The job still doesn't run. The user wanted a working job. Keep going.
 
 ❌ "My changes are correct but there's an issue in [other component]."
-→ The user doesn't care whose code the bug is in. Fix it.
+→ Component ownership does not excuse a causal blocker. Repair it within the existing
+authority boundary; track a non-blocking adjacent issue without expanding scope.
 
 ### Wind-Down Anti-Patterns (The Silent Killer)
 
@@ -56,14 +70,30 @@ options you offer the user.
 
 ❌ "One thing I did NOT do: merge the PR — this repo auto-deploys on merge, so
 want me to merge it now, or review the PR first?"
+<!-- escapement:support-claims:start
+merge-green-status=unsupported
+merge-green-status-reason=The merge authorization hook resolves repository-declared merge authority but does not observe pull-request check or green status.
+confirm-class-enforcement=reserved
+confirm-class-enforcement-reason=Repository confirmation classes are stored but are not currently enforced by the merge authorization hook.
+deploy-execution=informational
+deploy-execution-reason=Repository deploy metadata is surfaced as outcome context and does not execute or independently authorize a deployment command.
+codex-final-response-interception=guidance-only
+codex-final-response-interception-reason=The installed Codex adapter exposes no Stop or final-response hook; durable work state and SessionStart guidance support continuation without native interception.
+-->
+<!-- escapement:support-claims:end -->
 → Read the repo's `.escapement/repo.json` (via `harness/bin/repo_outcome.py`). If it
 declares `intended_outcome` ≥ `merged` with `auto_merge_on_green: true` and your change
-is GREEN, you are durably authorized — **merge it and ship it live; do not ask.** "This
+has independently verified green status, you are durably authorized to follow the
+repository's standard landing path — **merge it and ship it live; do not ask.** "This
 auto-deploys to prod" is not a reason to ask when the repo declared that as its intended
 outcome — it is the reason to merge. Announce the live surface ("now live at X") instead
 of soliciting review. Asking here is the exact solicitation the per-repo authorization
-exists to remove. (Only a change matching the repo's declared `confirm_class` still
-draws one confirm.) See `continuation-harness.md` § Per-repo outcome authorization.
+exists to remove. The current merge authorization hook does not itself observe green
+status; use the repository's actual checks and merge safeguards as that evidence.
+`confirm_class` is reserved configuration and not currently enforced, and deploy
+metadata is informational: it describes the standard declared landing path but neither
+executes a deployment nor authorizes arbitrary commands. See `continuation-harness.md`
+§ Per-repo outcome authorization.
 
 ## The Verification Test
 
@@ -129,14 +159,20 @@ any parent, verify the parent, not the children.
 ## When You May Actually Stop
 
 - You've verified the outcome works end-to-end — by RUNNING the actual workflow, not by reading code
-- You're truly blocked (missing credentials, need infrastructure access, need a human decision)
+- Every remaining route is truly blocked on an unresolved consequential choice,
+  missing credential, or access boundary; a blocked action alone is not a blocked session
 - The user explicitly tells you to stop or change direction
 
-"I found a bug in other code" is never a reason to stop. It's a reason to keep going.
+"I found a causal blocker in other code" is never a reason to stop. Repair it within
+the delegated boundary. An adjacent discovery is recorded, not silently adopted.
 "I ran out of steps" is never a reason to stop. Budget your steps better.
 "The remaining work is minor" is never a reason to stop. If it's minor, do it — it'll take seconds.
 "I've been working on this for a while" is never a reason to stop. Duration is not completion.
 
 ## The Prime Directive
 
-**Completing the outcome is the ONLY acceptable terminal state.** Everything else — obstacles, secondary bugs, missing context, edge cases, test failures, scope discoveries — is intermediate state that demands continued work, not a report and a stop. If you are about to write a summary paragraph that starts with "In summary" or "To complete this work" or "The remaining steps are" — STOP WRITING and START DOING.
+**Completing the outcome is the ONLY acceptable terminal state.** Causal obstacles,
+edge cases, and test failures are intermediate state that demands continued work, not a
+report and a stop. Adjacent scope discoveries are tracked without expanding the active
+outcome. If you are about to write a summary paragraph that starts with "In summary"
+or "To complete this work" or "The remaining steps are" — STOP WRITING and START DOING.

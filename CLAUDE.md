@@ -4,10 +4,29 @@
 
 # Escapement Shared Workflow
 
-Escapement is the host-neutral workflow layer for agentic coding sessions. Claude
-Code and Codex are adapters over the same underlying practices: beads for work
-state, OpenSpec for design/spec artifacts, test-oracle discipline for
-implementation, and the continuation harness for verified outcomes.
+<!-- escapement:core-identity:start -->
+<!-- escapement:mission:start -->
+Escapement converts available agent capacity plus delegated authority into verified, delivered outcomes while reserving human attention for consequential choices.
+<!-- escapement:mission:end -->
+
+Its durable capabilities form one closed loop:
+
+<!-- escapement:capabilities:start -->
+1. Intent and authority
+2. Design and specification
+3. Executable dependency-aware work breakdown
+4. Capacity allocation
+5. Isolated execution
+6. Action-local continuation and repair
+7. Independent outcome verification
+8. Authorized landing and delivery
+9. Learning and feedback
+<!-- escapement:capabilities:end -->
+
+These capabilities define Escapement. Current clients, planning systems, task
+stores, source-control hosts, and hook mechanisms are replaceable adapters. Their
+availability and enforcement may differ without changing the mission.
+<!-- escapement:core-identity:end -->
 
 The host adapter may change which hooks, tools, and config files are available.
 The workflow invariants do not change:
@@ -18,6 +37,71 @@ The workflow invariants do not change:
 - verify the real user-facing outcome before closing work;
 - preserve user work and avoid destructive cleanup without an explicit decision;
 - keep files lean: a PreToolUse hook gives soft guidance past 500 lines and hard-blocks past 1000 (waiver-overridable) — extract a cohesive responsibility into a sibling module rather than growing a file. Line count is a weak proxy; the real concerns are complexity and coupling (multiple responsibilities, long/deeply-nested functions, near-duplicate blocks), framed for both human reviewability and agent edit-reliability.
+
+Current adapter mapping is explicit but non-defining:
+
+<!-- escapement:adapter-mapping:start -->
+- Design and specification | OpenSpec
+- Executable dependency-aware work breakdown | Beads
+- Isolated execution | Git worktrees
+- Capacity allocation | Claude Code, Codex
+- Authorized landing and delivery | GitHub
+<!-- escapement:adapter-mapping:end -->
+
+# Delegated Outcome Authority And Continuation
+
+## Delegating an outcome delegates its ordinary means
+
+When a user delegates a bounded build, fix, change, execution, delivery, or
+shipping outcome, the routine and proportionate actions needed to achieve and
+verify it are already authorized within the named repositories, systems, and
+constraints. That includes the established worktree, scoped inspection and
+edits, tests, lint, builds, commits, task-branch pushes, pull-request creation and
+updates, causal CI or review repair, and the repository-declared merge,
+deployment, and verification path. Do not ask the user to reconfirm those
+ordinary means as separate product decisions.
+
+A host may still mechanically display an approval prompt for an authorized
+action. That is an adapter enforcement limitation, not evidence that new user
+intent is required. Continue other independent authorized work while the action
+waits whenever such work exists.
+
+Authority follows causal scope. Own a discovered defect when it causally blocks
+the delegated outcome and its repair stays inside the existing behavior,
+repository, audience, privilege, destructive-effect, and ownership boundaries.
+Record adjacent discoveries separately without executing them and without
+stopping the delegated work.
+
+Reserve human attention for consequential choices: changed intent or non-goals,
+a materially different valid outcome, an undelegated repository, account, or
+audience, new privilege or credential access, destructive or irreversible shared
+effects, an actually enforced confirmation class, unsafe overlap with another
+owner's work, or the absence of a standard landing path.
+
+An unresolved choice blocks only the action and dependents that require it.
+Independent authorized work continues. A session is `input_required` only when
+every remaining route to the delegated outcome depends on the same unresolved
+choice. Status or informational side questions do not replace active work unless
+the user explicitly cancels, redirects, or replaces the original request.
+
+<!-- escapement:support-claims:start
+merge-green-status=unsupported
+merge-green-status-reason=The merge authorization hook resolves repository-declared merge authority but does not observe pull-request check or green status.
+confirm-class-enforcement=reserved
+confirm-class-enforcement-reason=Repository confirmation classes are stored but are not currently enforced by the merge authorization hook.
+deploy-execution=informational
+deploy-execution-reason=Repository deploy metadata is surfaced as outcome context and does not execute or independently authorize a deployment command.
+codex-final-response-interception=guidance-only
+codex-final-response-interception-reason=The installed Codex adapter exposes no Stop or final-response hook; durable work state and SessionStart guidance support continuation without native interception.
+-->
+<!-- escapement:support-claims:end -->
+
+Current enforcement remains capability-honest: the merge authorization hook
+does not observe pull-request green status; `confirm_class` is reserved and not
+currently enforced there; deploy metadata is informational and does not execute
+or independently authorize a deployment; and the installed Codex adapter has no
+Stop or final-response hook. These gaps do not narrow already-delegated ordinary
+means, but they must not be described as mechanically enforced behavior.
 
 # Vocabulary And Design Principles
 
@@ -121,8 +205,9 @@ spend time updating.
 
 # Session Completion
 
-Prefer a feature branch plus PR for repo changes. Do not push an ephemeral branch
-unless the user or orchestrator explicitly authorizes it.
+Prefer a feature branch plus PR for repo changes. A task branch required by the
+declared landing path is authorized and is not ephemeral. Do not invent or push
+an unrelated branch outside that delegated outcome.
 
 Before reporting completion:
 
@@ -132,9 +217,10 @@ Before reporting completion:
 4. Report remaining residue with a concrete owner or decision.
 
 Do not ask whether to stop, keep going, wrap, pause, or call the current state a
-stopping point. If there is a next in-scope action, take it. If the outcome is
-verified, state the verified result. If a real blocker prevents progress, name
-the blocker and the exact decision or access needed.
+stopping point. If there is a next in-scope action, take it. If one action needs
+a consequential decision, continue independent authorized work. If the outcome
+is verified, state the verified result. If every route is causally blocked, name
+the single exact decision or access needed.
 
 Work is complete only when the requested outcome is verified end to end and any
 remaining residue is intentional.
