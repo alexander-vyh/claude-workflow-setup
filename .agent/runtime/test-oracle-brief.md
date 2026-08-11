@@ -1132,3 +1132,45 @@ answers keep only the unresolved choices gated.
 ## Final outcome verification
 Run `pytest -q tests/test_discovery_interaction_contract.py`, render/check agent
 surfaces, and exercise one high-, low-, and unknown-consequence conversation.
+
+---
+
+# Test Oracle Brief — final-tree oracle downgrade scope
+
+## Business invariant
+All public landing and Stop hooks report meaningful test-oracle loss once at the
+final path, including a rename out of test discovery.
+
+## Independent source of truth
+Fresh Git repositories provide immutable landing OIDs plus committed, index, and
+worktree states. Hand-written strong, weak, and strengthening tests define the
+expected advisory independently of hook internals.
+
+## Solution constraints
+Use literal NUL-delimited Git paths, resolve the landing ref once, bound candidate
+reads below 1 MiB, never follow external symlinks, group findings once per path,
+and preserve canonical/rendered parity.
+
+## Invalid solution classes
+Reject HEAD-only scope, mutable-ref reuse, newline path parsing, Git pathspec
+interpretation, separate per-state warnings, symlink target reads, and one row per
+reason.
+
+## Fragile implementation to reject
+Scanning only the worktree misses clean committed and staged-only weakening.
+
+## Negative control
+Committed, staged, and unstaged weakening at literal and unusual paths warns;
+renaming a strong test out of discovery warns at the destination.
+
+## Positive control
+Strengthening, weak/pass-only moves, within-discovery renames, and final stronger
+worktree overlays remain silent.
+
+## Missing/unresolved handling
+The advisory fails open. Missing landing refs use local scope; malformed or
+unreadable candidates do not hard-deny or import external content.
+
+## Final outcome verification
+Run the compact five-surface public matrix, existing downgrade regressions,
+renderer/parity, Ruff, and `git diff --check`.

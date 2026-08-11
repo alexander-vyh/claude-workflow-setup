@@ -41,24 +41,6 @@ def _allow() -> int:
     return 0
 
 
-def _head_src(repo_root: Path, rel: str) -> str:
-    """Committed (HEAD) content of `rel`, or "" if it is new/unknown to git."""
-    from oracle_downgrade_warning_gate import git_output
-
-    return git_output(repo_root, ["show", f"HEAD:{rel}"])
-
-
-def _worktree_src(repo_root: Path, rel: str) -> str:
-    """Current working-tree content of `rel`, or "" if deleted."""
-    path = repo_root / rel
-    if not path.exists():
-        return ""
-    try:
-        return path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return ""
-
-
 def _build_message(findings: list[tuple[str, list[str]]]) -> str:
     lines = [
         "⚠ Oracle-downgrade advisory (non-blocking) — changed test file(s) look like "
@@ -67,8 +49,10 @@ def _build_message(findings: list[tuple[str, list[str]]]) -> str:
     ]
     for rel, reasons in findings:
         lines.append(f"  • {rel}")
-        for reason in reasons:
+        for reason in reasons[:8]:
             lines.append(f"      – {reason}")
+        if len(reasons) > 8:
+            lines.append(f"      – ... {len(reasons) - 8} more reasons")
     lines.append(
         "If a removed or weakened assertion protected real behavior, restore or "
         "re-add equivalent coverage before this change lands."
@@ -77,24 +61,45 @@ def _build_message(findings: list[tuple[str, list[str]]]) -> str:
 
 
 def _collect_findings(repo_root: Path) -> list[tuple[str, list[str]]]:
-    from oracle_downgrade_warning_gate import changed_files, is_test_file
+    from git_change_scope import change_sources, net_tree_scope
+    from oracle_downgrade_warning_gate import is_test_file
     import oracle_strength_diff as osd
 
-    findings: list[tuple[str, list[str]]] = []
-    for rel in changed_files(repo_root):
-        if not is_test_file(rel):
+    grouped: dict[str, list[str]] = {}
+    scope = net_tree_scope(repo_root)
+    for change in scope.changes:
+        rel = change.filepath
+        baseline_path = (
+            os.fsdecode(change.baseline_path)
+            if change.baseline_path is not None
+            else ""
+        )
+        candidate_path = (
+            os.fsdecode(change.candidate_path)
+            if change.candidate_path is not None
+            else ""
+        )
+        baseline_is_test = bool(baseline_path) and is_test_file(baseline_path)
+        candidate_is_test = bool(candidate_path) and is_test_file(candidate_path)
+        if not baseline_is_test and not candidate_is_test:
             continue
-        old_src = _head_src(repo_root, rel)
-        new_src = _worktree_src(repo_root, rel)
+        old_src, new_src = change_sources(repo_root, scope, change)
         if not old_src and not new_src:
             continue
         try:
-            finding = osd.evaluate(old_src, new_src, rel)
+            finding = osd.evaluate(
+                old_src,
+                "" if baseline_is_test and not candidate_is_test else new_src,
+                rel,
+            )
         except Exception:
             continue  # fail-open per file
         if finding.level == osd.Level.WARN:
-            findings.append((rel, list(finding.reasons)[:3]))
-    return findings
+            reasons = grouped.setdefault(rel, [])
+            for reason in finding.reasons:
+                if reason not in reasons:
+                    reasons.append(reason)
+    return list(grouped.items())
 
 
 def main() -> int:
