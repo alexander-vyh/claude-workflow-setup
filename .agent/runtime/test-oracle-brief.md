@@ -1201,3 +1201,61 @@ symlink, index-state union, and ref-move fixtures. Then rerun all committed-
 scope and oracle-downgrade suites, the adjudicated private corpus, the
 implementation-echo change-scope suite, full hook tests, renderer/parity,
 Ruff/format, and `git diff --check` from the clean fix commit.
+
+### Minimal verified GDF delivery
+
+#### Business invariant
+
+Every public landing and Stop hook compares the immutable landing base with the
+final committed/index/worktree candidate tree. A meaningful test-oracle loss is
+reported once at its current path, including a rename out of test discovery.
+
+#### Independent source of truth
+
+Fresh real Git repositories provide the remote-default OID, merge base, NUL
+name-status records, index, and worktree states. Hand-written strong, weak, and
+strengthening test sources label the expected advisory outcome independently of
+the hook implementation.
+
+#### Solution constraints
+
+- Git paths remain raw/NUL-delimited and are always interpreted literally.
+- The selected landing ref is resolved to an OID once; later ref movement cannot
+  change the comparison base.
+- Regular Git blobs and no-follow worktree files are read through the same
+  bounded source contract. The implementation uses a 256 KiB prefix, below the
+  1 MiB ceiling, and never follows a symlink leaf or ancestor.
+- Findings are deterministic and grouped once per path, with at most 12 paths
+  and eight distinct reasons per path in the public warning.
+- Canonical and rendered Claude/plugin surfaces stay byte-identical.
+
+#### Invalid solution classes and fragile implementation to reject
+
+Reject HEAD-only or last-commit scope, mutable-ref reuse after OID resolution,
+newline path parsing, pathspec interpretation of names beginning `:(`, separate
+committed/staged/unstaged warnings for one net path, symlink target reads, and
+one output row per reason. The named tempting shortcut is scanning only the
+current worktree: it misses clean committed and staged-only weakening.
+
+#### Negative and positive controls
+
+The compact public matrix covers committed, staged, and unstaged weakening at a
+literal pathspec-looking name; exact strong-test renames out of discovery; one
+path with multiple independent reasons; raw/non-UTF-8 and newline names; missing
+and dangling landing refs; immutable-ref movement; and a multi-megabyte ordinary
+source whose returned content stays below 1 MiB while the early weakening still
+warns. Strengthening, a weak/pass-only discovery move, a within-discovery rename,
+and a final stronger worktree overlay remain silent.
+
+#### Missing and unresolved handling
+
+This advisory remains fail-open. Missing landing refs fall back to HEAD/local
+scope. Malformed Git output, unreadable entries, unsupported file modes, and
+source beyond the bounded prefix never hard-deny or import external content.
+
+#### Final outcome verification
+
+Run `test_oracle_downgrade_public_matrix.py`, the existing committed-scope and
+hostile-edge suites, warning/Stop legacy regressions, the implementation-echo
+change-scope suite, renderer check, Ruff, and `git diff --check`; then verify all
+five rendered entrypoints remain in parity and commit the clean worktree.

@@ -362,9 +362,36 @@ def analyze(repo_root: Path) -> list[Issue]:
     scope = net_tree_scope(repo_root)
     for change in scope.changes:
         filepath = change.filepath
-        if not is_test_file(filepath):
+        baseline_path = (
+            os.fsdecode(change.baseline_path)
+            if change.baseline_path is not None
+            else ""
+        )
+        candidate_path = (
+            os.fsdecode(change.candidate_path)
+            if change.candidate_path is not None
+            else ""
+        )
+        baseline_is_test = bool(baseline_path) and is_test_file(baseline_path)
+        candidate_is_test = bool(candidate_path) and is_test_file(candidate_path)
+        if not baseline_is_test and not candidate_is_test:
             continue
         old_src, new_src = change_sources(repo_root, scope, change)
+        if baseline_is_test and not candidate_is_test:
+            try:
+                import oracle_strength_diff as osd
+
+                if osd.evaluate(old_src, "", filepath).level == osd.Level.WARN:
+                    issues.append(
+                        Issue(
+                            filepath,
+                            "test-discovery-removed",
+                            "moved a meaningful test oracle out of test discovery",
+                        )
+                    )
+            except Exception:
+                pass
+            continue
         added, deleted = _source_diff_lines(old_src, new_src, filepath)
         if not added and not deleted:
             continue
@@ -416,11 +443,21 @@ def _brief_recently_modified(repo_root: Path) -> bool:
 
 
 def build_message(issues: list[Issue], brief_was_updated: bool) -> str:
-    listed = "\n".join(
-        f"  - {issue.filepath}: {issue.kind}: {issue.detail}" for issue in issues[:12]
-    )
-    if len(issues) > 12:
-        listed += f"\n  - ... {len(issues) - 12} more"
+    grouped: dict[str, list[Issue]] = {}
+    for issue in issues:
+        if issue not in grouped.setdefault(issue.filepath, []):
+            grouped[issue.filepath].append(issue)
+    lines = []
+    selected = list(grouped.items())[:12]
+    for filepath, path_issues in selected:
+        lines.append(f"  - {filepath}")
+        for issue in path_issues[:8]:
+            lines.append(f"      - {issue.kind}: {issue.detail}")
+        if len(path_issues) > 8:
+            lines.append(f"      - ... {len(path_issues) - 8} more reasons")
+    if len(grouped) > 12:
+        lines.append(f"  - ... {len(grouped) - 12} more paths")
+    listed = "\n".join(lines)
 
     if brief_was_updated:
         # The mechanical check passed; the warning is now informational —

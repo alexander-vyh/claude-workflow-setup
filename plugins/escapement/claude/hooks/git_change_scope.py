@@ -16,6 +16,17 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 
+SOURCE_BYTE_LIMIT = 256 * 1024
+
+
+def _git_environment() -> dict[str, str]:
+    env = os.environ.copy()
+    for variable in ("GIT_GLOB_PATHSPECS", "GIT_NOGLOB_PATHSPECS"):
+        env.pop(variable, None)
+    env["GIT_LITERAL_PATHSPECS"] = "1"
+    return env
+
+
 @dataclass(frozen=True)
 class LandingTarget:
     """Verified remote-default ref and the immutable commit it selected."""
@@ -68,6 +79,7 @@ def _run_git_bytes(
             ],
             cwd=os.fsencode(repo_root),
             capture_output=True,
+            env=_git_environment(),
             timeout=timeout,
             check=False,
         )
@@ -85,6 +97,38 @@ def _successful_output(
     if result is None or result.returncode != 0:
         return None
     return result.stdout
+
+
+def _bounded_git_output(
+    repo_root: Path,
+    args: list[str | bytes],
+) -> bytes | None:
+    """Read at most one source budget from Git without buffering the remainder."""
+    try:
+        process = subprocess.Popen(
+            [
+                b"git",
+                *(os.fsencode(arg) if isinstance(arg, str) else arg for arg in args),
+            ],
+            cwd=os.fsencode(repo_root),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            env=_git_environment(),
+        )
+    except OSError:
+        return None
+    assert process.stdout is not None
+    content = process.stdout.read(SOURCE_BYTE_LIMIT)
+    process.stdout.close()
+    try:
+        returncode = process.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+        return None
+    if len(content) < SOURCE_BYTE_LIMIT and returncode != 0:
+        return None
+    return content
 
 
 def git_lines(repo_root: Path, args: list[str]) -> list[str] | None:
@@ -258,7 +302,7 @@ def _changes_from_baseline(
         for change in parsed
     ]
 
-    for path in untracked:
+    for path in sorted(untracked):
         match = next(
             (
                 index
@@ -269,7 +313,36 @@ def _changes_from_baseline(
             None,
         )
         if match is None:
-            changes.append(NetTreeChange(None, path, candidate_from_worktree=True))
+            worktree_source = _safe_worktree_file(repo_root, path)
+            rename_match = next(
+                (
+                    index
+                    for index, change in enumerate(changes)
+                    if change.baseline_path is not None
+                    and (
+                        change.candidate_path is None
+                        or (
+                            change.candidate_from_worktree
+                            and change.candidate_path == change.baseline_path
+                            and not _safe_worktree_file(
+                                repo_root, change.candidate_path
+                            )
+                        )
+                    )
+                    and worktree_source
+                    and _tree_blob(repo_root, baseline, change.baseline_path)
+                    == worktree_source
+                ),
+                None,
+            )
+            if rename_match is None:
+                changes.append(NetTreeChange(None, path, candidate_from_worktree=True))
+            else:
+                changes[rename_match] = replace(
+                    changes[rename_match],
+                    candidate_path=path,
+                    candidate_from_worktree=True,
+                )
         else:
             changes[match] = replace(
                 changes[match],
@@ -348,7 +421,7 @@ def _tree_blob(repo_root: Path, revision: str, relative: bytes) -> str:
     mode, object_type, oid = fields
     if mode not in {b"100644", b"100755"} or object_type != b"blob":
         return ""
-    content = _successful_output(repo_root, ["cat-file", "blob", oid])
+    content = _bounded_git_output(repo_root, ["cat-file", "blob", oid])
     return content.decode("utf-8", errors="replace") if content is not None else ""
 
 
@@ -369,7 +442,7 @@ def _index_blob(repo_root: Path, relative: bytes) -> str:
     mode, oid, stage = fields
     if mode not in {b"100644", b"100755"} or stage != b"0":
         return ""
-    content = _successful_output(repo_root, ["cat-file", "blob", oid])
+    content = _bounded_git_output(repo_root, ["cat-file", "blob", oid])
     return content.decode("utf-8", errors="replace") if content is not None else ""
 
 
@@ -403,8 +476,10 @@ def _safe_worktree_file(repo_root: Path, relative: bytes) -> str:
         if not stat.S_ISREG(os.fstat(leaf_fd).st_mode):
             return ""
         chunks: list[bytes] = []
-        while chunk := os.read(leaf_fd, 64 * 1024):
+        remaining = SOURCE_BYTE_LIMIT
+        while remaining and (chunk := os.read(leaf_fd, min(64 * 1024, remaining))):
             chunks.append(chunk)
+            remaining -= len(chunk)
         return b"".join(chunks).decode("utf-8", errors="replace")
     except OSError:
         return ""
