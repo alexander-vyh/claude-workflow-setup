@@ -4,6 +4,7 @@
   "documents": {
     "shared_fragments": [
       "agent-surfaces/onboarding/shared.md",
+      "agent-surfaces/onboarding/authority.md",
       "agent-surfaces/onboarding/vocabulary.md",
       "agent-surfaces/onboarding/beads.md",
       "agent-surfaces/onboarding/outcome-oracle.md",
@@ -27,6 +28,28 @@
       }
     }
   },
+  "support_claims": [
+    {
+      "id": "merge-green-status",
+      "status": "unsupported",
+      "reason": "The merge authorization hook resolves repository-declared merge authority but does not observe pull-request check or green status."
+    },
+    {
+      "id": "confirm-class-enforcement",
+      "status": "reserved",
+      "reason": "Repository confirmation classes are stored but are not currently enforced by the merge authorization hook."
+    },
+    {
+      "id": "deploy-execution",
+      "status": "informational",
+      "reason": "Repository deploy metadata is surfaced as outcome context and does not execute or independently authorize a deployment command."
+    },
+    {
+      "id": "codex-final-response-interception",
+      "status": "guidance-only",
+      "reason": "The installed Codex adapter exposes no Stop or final-response hook; durable work state and SessionStart guidance support continuation without native interception."
+    }
+  ],
   "hooks": [
     {
       "id": "escapement_session_context",

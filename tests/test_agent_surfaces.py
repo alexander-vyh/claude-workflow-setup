@@ -961,12 +961,8 @@ def test_codex_ready_hook_with_other_hook_codex_fixture_fails(tmp_path):
             break
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
     render_result = run_renderer(root=temp_root)
-    assert render_result.returncode == 0, render_result.stderr
-
-    result = run_renderer("--check", root=temp_root)
-
-    assert result.returncode != 0
-    assert "Codex hook fixture must match hook source" in result.stderr
+    assert render_result.returncode != 0
+    assert "Codex hook fixture must match hook source" in render_result.stderr
 
 
 def test_codex_behavioral_gate_wrong_event_fails_plugin_drift_check(tmp_path):
@@ -1538,7 +1534,13 @@ def copy_repo(tmp_path):
     shutil.copytree(
         ROOT,
         temp_root,
-        ignore=shutil.ignore_patterns(".git", ".worktrees", "__pycache__", ".pytest_cache"),
+        ignore=shutil.ignore_patterns(
+            ".git",
+            ".worktrees",
+            ".agent-surface-stage-*",
+            "__pycache__",
+            ".pytest_cache",
+        ),
     )
     return temp_root
 
