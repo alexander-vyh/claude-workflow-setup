@@ -1,0 +1,12 @@
+{
+  "receipt_id": "gate-replay-review-2026-08-09",
+  "reviewer": "independent parent oracle reviewer",
+  "reviewed_at": "2026-08-11T00:00:00Z",
+  "review_method": "independent behavioral review; gate output hidden",
+  "source_artifact": "source-events.jsonl",
+  "source_revision": "sha256:8d04c39bcf296da8ff8bf442698c2e8aa1584cc74ba2cc212c6e74d862a7e676",
+  "selected_source_sha256": "cc88b7f708f833d965ac856029beaaf597bc83b4e7e8266145e81cbd72e799fc",
+  "labels_sha256": "e5163a465bd5997f55bf0979ceae808f280fd99ee4c4b312c471d63228aaa520",
+  "policy_revision": "5d2b43492b81006b289b19f78d81757c39c38529",
+  "notes": "Independent readback approved the exact label rules and five 36-case cells. Missing-brief edits ask for confirmation; missing-brief landing denies. Labels express intended policy, not replayed decisions."
+}
