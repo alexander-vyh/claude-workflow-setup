@@ -113,12 +113,17 @@ def plan_thread(
     if ledger is None:
         return {"status": "unresolved", "thread": session_id, "ledger_path": path}
     repo_cwd = session_repo_cwd(thread_dir, session_id)
-    if ledger["executions"] and repo_cwd is None:
+    active_executions = [
+        execution
+        for execution in ledger["executions"]
+        if execution["state"] not in {"terminal", "cancelled"}
+    ]
+    if active_executions and repo_cwd is None:
         return {"status": "unresolved", "thread": session_id, "ledger_path": path}
     bd_runner = run_bd or _default_run_bd(repo_cwd)
     events: list[dict] = []
     canonical: dict[str, dict] = {}
-    for execution in ledger["executions"]:
+    for execution in active_executions:
         observed = native_status(copy.deepcopy(execution))
         event = None
         status_label = "unknown"
