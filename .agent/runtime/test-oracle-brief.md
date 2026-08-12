@@ -1219,3 +1219,38 @@ exercise the installed command against a disposable arbitrary repository.
 
 The independently labeled gate replay brief is maintained at
 [`test-oracle-briefs/gate-decision-replay.md`](test-oracle-briefs/gate-decision-replay.md).
+
+---
+
+# Test Oracle Brief — completed execution cleanup
+
+## Business invariant
+A cleaned-up completed delegation must not make the installed supervisor unhealthy.
+
+## Independent source of truth
+The durable execution state is terminal/cancelled and the public waker writes fresh
+successful health without a checkout, Beads lookup, or recovery spawn.
+
+## Solution constraints
+Keep missing repository context fail-closed for queued, running, and unknown work.
+
+## Invalid solution classes
+Do not ignore missing context globally, recreate deleted worktrees, or special-case a
+session ID.
+
+## Fragile implementation to reject
+Returning success for every ledger whose checkout disappeared.
+
+## Negative control
+A queued execution without repository context remains unresolved and cannot stamp
+successful health.
+
+## Positive control
+Both terminal and cancelled ledgers reconcile successfully after repo cleanup.
+
+## Missing/unresolved handling
+Missing context is allowed only when every execution is already terminal or cancelled.
+
+## Final outcome verification
+Run the public waker regression, install merged source, and confirm the LaunchAgent's
+next fire exits zero with fresh supervisor health.
