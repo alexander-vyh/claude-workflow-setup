@@ -13,7 +13,6 @@ sys.path.insert(0, str(Path(__file__).parent))
 from test_oracle_brief_policy import find_git_root, is_relevant_file  # noqa: E402
 
 
-SHELL_CONTROL_TOKENS = {"&&", "||", ";", "|"}
 ENV_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 SHELL_KEYWORDS_BEFORE_COMMAND = {"if", "then", "elif", "else", "while", "until", "do", "time", "!"}
 SHELL_EXECUTABLES = {"sh", "bash", "zsh", "dash"}
@@ -29,7 +28,8 @@ ENV_BOOLEAN_FLAGS = {"-i", "--ignore-environment", "-0", "--null"}
 
 
 def _split_command_segments(command: str) -> list[list[str]]:
-    normalized = command.replace("\\\n", " ")
+    normalized = command.replace("\\\r\n", " ").replace("\\\n", " ")
+    normalized = normalized.replace("\r\n", ";").replace("\n", ";")
     try:
         lexer = shlex.shlex(normalized, posix=True, punctuation_chars=";&|()")
         lexer.whitespace_split = True
@@ -42,19 +42,18 @@ def _split_command_segments(command: str) -> list[list[str]]:
         segments: list[list[str]] = []
         current: list[str] = []
         for token in tokens:
-            if token in SHELL_CONTROL_TOKENS:
+            if re.fullmatch(r"[;&|()]+", token):
                 if current:
                     segments.append(current)
                     current = []
                 continue
-            if token not in {"(", ")"}:
-                current.append(token)
+            current.append(token)
         if current:
             segments.append(current)
         return segments
 
     segments = []
-    for raw in re.split(r"\s*(?:&&|\|\||;|\|)\s*", normalized):
+    for raw in re.split(r"\s*(?:&&|\|\||[;&|])\s*", normalized):
         try:
             parts = shlex.split(raw)
         except ValueError:
@@ -154,26 +153,32 @@ def _shell_c_command(parts: list[str], index: int) -> str | None:
     return None
 
 
-def _is_finishing_at(parts: list[str], index: int) -> bool:
+def _finishing_stage_at(parts: list[str], index: int) -> str | None:
     index = _skip_env_assignments(parts, index)
     if index >= len(parts):
-        return False
+        return None
     token = _clean_shell_token(parts[index])
     if token in {"command", "builtin"}:
-        return _is_finishing_at(parts, index + 1)
+        return _finishing_stage_at(parts, index + 1)
+    if token == "eval":
+        return "final"
     if token == "env":
-        return _is_finishing_at(parts, _env_command_index(parts, index))
+        return _finishing_stage_at(parts, _env_command_index(parts, index))
     if Path(token).name in SHELL_EXECUTABLES:
         nested = _shell_c_command(parts, index)
-        return bool(nested and _command_contains_finishing_action(nested))
+        return landing_stage(nested) if nested else None
     if _matches_executable(token, "git"):
-        return _git_subcommand(parts, index + 1) in {"commit", "push"}
+        return "durable" if _git_subcommand(parts, index + 1) in {"commit", "push"} else None
     if _matches_executable(token, "gh"):
         group, subcommand = _gh_subcommand(parts, index + 1)
-        return group == "pr" and subcommand in {"create", "merge"}
+        if group == "pr" and subcommand == "create":
+            return "review"
+        if group == "pr" and subcommand == "merge":
+            return "final"
+        return None
     if _matches_executable(token, "bd"):
-        return _bd_subcommand(parts, index + 1) == "close"
-    return False
+        return "final" if _bd_subcommand(parts, index + 1) == "close" else None
+    return None
 
 
 def _candidate_command_positions(parts: list[str]) -> set[int]:
@@ -189,13 +194,24 @@ def _candidate_command_positions(parts: list[str]) -> set[int]:
     return positions
 
 
-def _command_contains_finishing_action(command: str) -> bool:
+def landing_stage(command: str) -> str | None:
+    """Return the strongest delivery stage represented by a shell command."""
+    strength = {"durable": 1, "review": 2, "final": 3}
+    stages: list[str] = []
     for parts in _split_command_segments(command):
         if parts == ["__unparseable_finishing_command__"]:
-            return True
-        if any(_is_finishing_at(parts, index) for index in sorted(_candidate_command_positions(parts))):
-            return True
-    return False
+            stages.append("final")
+            continue
+        stages.extend(
+            stage
+            for index in sorted(_candidate_command_positions(parts))
+            if (stage := _finishing_stage_at(parts, index)) is not None
+        )
+    return max(stages, key=strength.__getitem__) if stages else None
+
+
+def _command_contains_finishing_action(command: str) -> bool:
+    return landing_stage(command) is not None
 
 
 def _git_files(repo_root: Path, args: list[str]) -> list[str]:

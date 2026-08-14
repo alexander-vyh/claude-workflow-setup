@@ -15,7 +15,12 @@ try:
 except ImportError:  # pragma: no cover - exercised by isolated-hook integration test
     _record_signal = None
 
-from test_oracle_brief_landing import landing_context
+from test_oracle_brief_landing import landing_context, landing_stage
+from oracle_brief_rapid import (
+    RAPID_OBSERVED_FIELD,
+    RAPID_REVIEW_FIELDS,
+    RAPID_SECTION_FIELDS,
+)
 from test_oracle_brief_policy import (
     BRIEF_RELATIVE_PATH,
     REQUIRED_SECTIONS,
@@ -86,6 +91,8 @@ def record_decision_signal(
         "category": category,
         **extras,
     }
+    if "rapid-brief" not in category:
+        signal_extras.pop("stage", None)
     if _record_signal is None:
         persisted = False
     else:
@@ -119,8 +126,16 @@ def block_message(
         f"{reason}\n\n"
         "Before editing or landing behavior-bearing code/tests, create:\n"
         f"  {repo_root / BRIEF_RELATIVE_PATH}\n\n"
-        "Required headings:\n"
+        "Full form headings (default):\n"
         + "\n".join(f"  - {section}" for section in REQUIRED_SECTIONS)
+        + "\n\nRapid form (only when every protected field is explicitly clear):\n"
+        + "\n".join(
+            f"  - {section}: {', '.join(fields)}"
+            for section, fields in RAPID_SECTION_FIELDS.items()
+        )
+        + "\n  - Review stage also requires: "
+        + ", ".join(RAPID_REVIEW_FIELDS)
+        + f"\n  - Final stage also requires: {RAPID_OBSERVED_FIELD}"
         + "\n\nRelevant changed/target files:\n"
         + (sample_files if sample_files else "  - unknown")
     )
@@ -159,7 +174,7 @@ def handle_edit_gate(data: dict) -> int:
     if repo_root is None or target is None or not relevant:
         return allow()
 
-    ok, reason, category = brief_status(repo_root)
+    ok, reason, category = brief_status(repo_root, stage="edit")
     if ok:
         record_decision_signal(
             data,
@@ -167,6 +182,7 @@ def handle_edit_gate(data: dict) -> int:
             reason="oracle brief present and valid",
             category=category,
             target=target,
+            stage="edit",
         )
         return allow()
 
@@ -177,6 +193,7 @@ def handle_edit_gate(data: dict) -> int:
         reason=reason,
         category=category,
         target=target,
+        stage="edit",
     )
     return ask(block_message(reason, repo_root, [target], ask_decision=True))
 
@@ -198,8 +215,11 @@ def handle_bash_landing_gate(data: dict) -> int:
     if context is None:
         return allow()
     repo_root, relevant = context
+    stage = landing_stage(command)
+    if stage is None:
+        return allow()
 
-    ok, reason, category = brief_status(repo_root)
+    ok, reason, category = brief_status(repo_root, stage=stage)
     target = relevant[0]
     if ok:
         record_decision_signal(
@@ -209,6 +229,7 @@ def handle_bash_landing_gate(data: dict) -> int:
             category=category,
             target=target,
             surface="landing-command",
+            stage=stage,
             file_count=len(relevant),
         )
         return allow()
@@ -221,6 +242,7 @@ def handle_bash_landing_gate(data: dict) -> int:
         category=category,
         target=target,
         surface="landing-command",
+        stage=stage,
         file_count=len(relevant),
     )
     return deny(block_message(reason, repo_root, relevant, ask_decision=False))

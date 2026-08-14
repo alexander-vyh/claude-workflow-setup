@@ -1254,3 +1254,109 @@ Missing context is allowed only when every execution is already terminal or canc
 ## Final outcome verification
 Run the public waker regression, install merged source, and confirm the LaunchAgent's
 next fire exits zero with fresh supervisor health.
+
+---
+
+# Test Oracle Brief — rapid path reconciliation
+
+## Business invariant
+
+Low-blast-radius work with a semantically complete, fail-closed three-section
+oracle must be able to edit and create an early durable artifact, enter review only
+when review-ready, and complete delivery only after observed user-facing proof. Full
+nine-section briefs must remain valid, protected or unknown work must require the
+full form, and `mol-rapid` must preserve actual
+outcome verification without unconditionally dispatching an adversarial reviewer.
+
+## Independent source of truth
+
+Correctness is determined by the documented rapid contract and OpenSpec scenarios,
+the public JSON decisions produced by canonical and rendered hook entrypoints on
+independent fixture repositories, the resulting gate-signal categories, and the
+actual rendered `mol-rapid` formula. Tests construct briefs and hook payloads without
+calling production parsing helpers or reusing production field collections.
+
+## Solution constraints
+
+The full form remains the default; compact form failures fail closed to the full
+form. Canonical hook policy stays renderer-owned and below the repository line
+boundary. Claude and Codex copies remain byte-equal to canonical sources. The
+implementation validates explicit evidence shape rather than inferring business
+risk from filenames. The policy distinguishes edit, durable, review, and final proof
+stages without broadening host hook registration. `oracle-independence`, final
+outcome verification, landing authorization, and host decision semantics remain
+unchanged.
+
+## Invalid solution classes
+
+Invalid solutions include accepting any document with the three legacy headings;
+making the three headings globally replace the full brief; treating protected or
+unknown eligibility as rapid; accepting planned-only proof at landing; requiring an
+observed result before implementation; accepting placeholder applicability; merely
+changing prose while rendered hooks or the formula retain old behavior; deleting
+all independent-review guidance; or adding a separate classifier, ledger, or rapid
+metadata file.
+
+Also reject compound-shell stage downgrades, sentence-shaped fictional proof,
+self-contradictory observed evidence, prose-only root-cause assurances,
+inapplicability laundering, and a rapid parser coupled to unrelated
+repository-path classification.
+
+## Fragile implementation to reject
+
+Reject the tempting shortcut that changes `REQUIRED_SECTIONS` to the three rapid
+headings or returns valid whenever those headings are present. That shortcut would
+make a compact brief pass without independent truth, binding constraints, a named
+fragile implementation, positive or missing-data disposition, fail-closed
+eligibility, or an observed landing result.
+
+## Negative control
+
+A three-heading brief must be rejected when independent truth is absent, an
+authorization/security exclusion is `yes`, `unknown`, missing, or duplicated;
+root-cause evidence is not observed and executable; planned outcome proof is not
+resolvable; positive proof admits empty or dropped output, missing-data control is
+absent, or either control is replaced with an
+inapplicability claim; PR review-readiness evidence is absent; or final proof has
+no matching observed result. A formula contract check must
+fail while `mol-rapid` still mandates adversarial-reviewer dispatch for every task.
+Literal-newline, background, pipe-stderr, and dynamic-eval landing commands must use
+their strongest stage; focused and final actual evidence must equal both its expected
+result and the planned expected result.
+
+## Positive control
+
+An existing concise nine-section brief remains accepted. A complete rapid brief
+with every protected surface explicitly absent, observed executable root-cause
+evidence, discriminating challenge, and exact planned proof permits source edits and
+a durable task-branch artifact. Review-ready evidence permits PR creation; the same
+rapid brief with a matching substantive final observed result permits merge or task
+closure. The updated formula still
+requires exact user-facing outcome verification and still names conditional
+independent-review triggers.
+
+## Missing/unresolved handling
+
+Any missing or unknown rapid eligibility decision, required compact field,
+unobserved root cause, non-executable outcome oracle, inapplicability claim, or
+contradictory observation fails closed to the full form. Signal persistence failure continues to fail
+soft without changing the gate decision. The hook must not fabricate real-world
+risk absence or observed proof.
+
+## Final outcome verification
+
+Run the focused canonical and rendered hook tests, formula/policy contract tests,
+OpenSpec validation, renderer parity check, and relevant full test suite. Exercise
+canonical and freshly installed hook entrypoints against fixture repositories and
+inspect their public JSON: a complete rapid brief allows an edit and durable commit,
+protected or unknown rapid briefs ask, incomplete work remains out of PR inventory,
+and observed final proof permits merge or task closure. Inspect the installed
+`mol-rapid` formula to confirm
+outcome verification remains mandatory and unconditional adversarial review is gone.
+
+Review-ready proof observed: the combined legacy/full-form and rapid policy suite
+passed 449 checks; the focused generated-surface and profile suite passed 29 checks;
+strict OpenSpec validation, renderer parity, lint, JSON validation, and diff checks
+passed. The adversarial code review, bounded mutation challenge, and all 24 OpenSpec
+scenarios passed with no remaining block or concern. Installed pinned-checkout proof
+remains the final landing check after merge.
