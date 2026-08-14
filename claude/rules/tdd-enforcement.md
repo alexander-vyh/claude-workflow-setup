@@ -53,22 +53,58 @@ behavioral, fixture, contract, architecture, and static check.
 
 ### Rapid form (low-blast-radius changes)
 
-The 9-section brief is the default. For a **low-blast-radius** change (a narrow,
-well-signposted edit — e.g. scoping one guard to the path it protects, a single-clause
-fix), you may collapse the brief to the three load-bearing sections:
+The 9-section brief is the default. A low-blast-radius change may use exactly three
+Markdown sections when their labeled evidence is semantically complete:
 
-1. Business invariant (what user/business outcome must hold)
-2. Negative control (what must fail if the code is wrong)
-3. Final outcome verification (the command/query/flow that proves the actual result)
+1. **Business invariant** — `Outcome`, `Independent source of truth`, `Binding
+   constraints`, and every rapid eligibility decision. Each protected-surface field
+   must be exactly `no`. Root cause must include observed executable evidence as
+   `Root cause: <Command|Query|API|Report|UI>: <action>; Expected: <cause>;
+   Actual: <same cause>; Match: yes`. The planned proof below is also the executable
+   outcome-oracle attestation, so rapid does not duplicate that authority in a
+   second yes/no field.
+2. **Negative control** — `Named fragile implementation`, `Negative control`,
+   `Positive control`, and `Missing/unresolved handling`. When drop-all or empty
+   output could pass, the positive control must preserve a valid result and uses the
+   same planned-proof syntax as user-facing verification. Its expected result cannot
+   be empty, dropped, suppressed, absent, or negated. Rapid always records a concrete
+   positive control and missing-data disposition; `N/A` or an inapplicability claim
+   requires the full lane rather than prose interpretation by the gate.
+3. **Final outcome verification** — `Exact user-facing verification` uses
+   `<Command|Query|API|Report|UI>: <action>; Expected: <result>`. Planned proof is
+   enough for edits and an early durable task-branch commit or push. PR creation
+   additionally requires `Focused proof result: Expected: ...; Actual: ...; Match:
+   yes`, `Objective blockers: none`, `Known limitations: none`, and structured
+   remaining landing proof. Merge or task closure also requires `Observed result:
+   Expected: ...; Actual: ...; Match: yes`. In observed proof, `Actual` must equal
+   `Expected`; focused and final observed proof must also equal the planned expected
+   result. `Command` actions must resolve an executable and use parseable argv with
+   an option, path, or qualified argument; `Report` actions begin with `Run` or
+   `Generate` followed by that command shape. This rejects sentence-shaped fictional
+   commands. Dynamic `eval` in a finishing shell command is treated as final and
+   therefore requires final proof.
 
-**…provided the named-fragile-implementation challenge still passes against those three.**
-If any plausible fragile implementation (echo test, wrong-layer filter, status-correct /
-state-wrong) would survive the 3-section subset, the short form is illegitimate — author
-the full 9 sections. The fragile-implementation challenge is mandatory in *both* forms;
-the rapid form drops restatement sections, never the oracle. This is a Flexibility
-affordance (a documented second path for small work), not an oracle downgrade — dropping
-the negative control or the outcome check is exactly the downgrade `never-suppress.md`
-forbids, and the rapid form retains both.
+Rapid is fail-closed. Every exclusion below must be explicitly absent; `unknown`
+means use the full form:
+
+- Authorization/security
+- Money or sensitive data
+- Production mutation
+- Schema/migration
+- Public contracts
+- Irreversible external effects
+- Shared infrastructure
+- Root cause is not known
+- Executable outcome oracle is absent
+
+Stop rapid execution in the current run and move to the full lane if a protected
+surface is discovered, the boundary expands, reversibility becomes uncertain,
+discriminating controls cannot be constructed, root cause remains unresolved, or
+the outcome oracle is missing.
+
+The fragile-implementation challenge is mandatory in both forms. The rapid form
+compresses presentation; it never drops independent truth, binding constraints,
+discriminating controls, missing-data behavior, or final user-facing proof.
 
 ## Implementation-Echo Tests Are Not Accepted
 

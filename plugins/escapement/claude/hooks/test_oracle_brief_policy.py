@@ -5,34 +5,20 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import sys
 from collections import Counter
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parent))
+from oracle_brief_rapid import (  # noqa: E402
+    PLACEHOLDER_VALUES,
+    PROOF_STAGES,
+    REQUIRED_SECTIONS,
+    rapid_brief_errors,
+)
+
 
 BRIEF_RELATIVE_PATH = Path(".agent/runtime/test-oracle-brief.md")
-
-REQUIRED_SECTIONS = (
-    "Business invariant",
-    "Independent source of truth",
-    "Solution constraints",
-    "Invalid solution classes",
-    "Fragile implementation to reject",
-    "Negative control",
-    "Positive control",
-    "Missing/unresolved handling",
-    "Final outcome verification",
-)
-
-PLACEHOLDER_VALUES = frozenset(
-    {
-        "tbd",
-        "todo",
-        "n/a",
-        "na",
-        "???",
-        "coming soon",
-    }
-)
 
 # Each required section must say something responsive to that section's job.
 # The anchors are stems so concise prose remains valid without prescribing exact
@@ -177,7 +163,9 @@ def missing_brief_sections(brief_path: Path) -> list[str]:
     ]
 
 
-def brief_status(repo_root: Path) -> tuple[bool, str | None, str]:
+def brief_status(
+    repo_root: Path, *, stage: str = "edit"
+) -> tuple[bool, str | None, str]:
     brief_path = repo_root / BRIEF_RELATIVE_PATH
     if not brief_path.exists():
         return (
@@ -186,14 +174,33 @@ def brief_status(repo_root: Path) -> tuple[bool, str | None, str]:
             "missing-brief",
         )
     missing = missing_brief_sections(brief_path)
-    if missing:
-        return (
-            False,
-            "Test Oracle Brief is missing required explanatory content for: "
-            + ", ".join(missing),
-            "invalid-brief",
-        )
-    return True, None, "valid-brief"
+    if not missing:
+        return True, None, "valid-brief"
+
+    if stage not in PROOF_STAGES:
+        return False, "Unknown proof stage; use the full nine-section form.", "invalid-rapid-brief"
+    try:
+        text = brief_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        text = ""
+    rapid_candidate, rapid_errors = rapid_brief_errors(text, stage)
+    if rapid_candidate:
+        if rapid_errors:
+            return (
+                False,
+                "Rapid Test Oracle Brief is incomplete or ineligible: "
+                + "; ".join(dict.fromkeys(rapid_errors))
+                + ". Use the full nine-section form.",
+                "invalid-rapid-brief",
+            )
+        return True, None, "valid-rapid-brief"
+
+    return (
+        False,
+        "Test Oracle Brief is missing required explanatory content for: "
+        + ", ".join(missing),
+        "invalid-brief",
+    )
 
 
 def find_git_root(start: str | Path) -> Path | None:

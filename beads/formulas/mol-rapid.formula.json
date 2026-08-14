@@ -1,7 +1,7 @@
 {
   "formula": "mol-rapid",
-  "description": "Rapid workflow for bug fixes, chores, and small tasks. Diagnose before fixing, verify the outcome, leave a regression test.",
-  "version": 2,
+  "description": "Rapid workflow for bounded bug fixes, chores, and small tasks. Diagnose, implement the minimum verified change, and prove the outcome.",
+  "version": 3,
   "type": "workflow",
   "vars": {
     "title": {
@@ -17,14 +17,14 @@
     {
       "id": "diagnose",
       "title": "Diagnose: {{title}}",
-      "description": "Phase: UNDERSTAND\n\nBefore fixing anything, understand the root cause.\n\n1. Reproduce the problem — run the failing command, see the actual error\n2. Trace the cause — don't stop at the symptom. Follow the error to its source.\n   - Is this a direct bug, or a symptom of something upstream?\n   - Are there related failures that share the same root cause? (check bd list for siblings)\n   - Would fixing this fix other open beads too?\n3. Write a one-sentence root cause: 'This fails because [X], not because [surface symptom].'\n4. Update this bead's description with the root cause finding.\n\nIf diagnosis reveals this is bigger than expected (multiple root causes, architectural issue, needs design), recommend upgrading to mol-feature instead of continuing.\n\nClose this step when root cause is identified.",
+      "description": "Phase: UNDERSTAND\n\nBefore fixing anything, establish the bounded cause and rapid eligibility.\n\n1. Reproduce the problem and trace it to a one-sentence root cause, not a surface symptom.\n2. Identify affected callers and the independent executable outcome oracle.\n3. Confirm that authorization/security, money or sensitive data, production mutation, schema/migration, public contracts, irreversible external effects, and shared infrastructure are all absent. Unknown means full lane.\n4. Record the root cause and eligibility finding on this bead.\n\nStop rapid execution in the current run and move to the full lane if a protected surface is discovered, the boundary expands, reversibility becomes uncertain, discriminating controls cannot be constructed, root cause remains unresolved, or the outcome oracle is missing. A protected exclusion moves the work to the full lane, where independent review remains available when that boundary calls for it. Preserve the same delegated outcome while changing the workflow lane.",
       "type": "task",
       "priority": 2
     },
     {
       "id": "implement",
       "title": "Fix: {{title}}",
-      "description": "Phase: FIX\n\nImplement the fix with TDD:\n1. Write a failing test that reproduces the bug (the test must fail WITHOUT the fix and pass WITH it)\n2. Implement the minimal fix\n3. Run the test — verify it passes\n4. Check for downstream effects — did this fix unblock other failing tests/models?\n\nThe regression test is NOT optional. Every bug fix must leave a test that would catch the bug if it recurred. Tag the test with the requirement ID: // covers #{{title}}-regression\n\nAcceptance: {{acceptance}}",
+      "description": "Phase: FIX\n\nImplement the smallest coherent fix with TDD.\n\n1. Write a failing behavioral test that reproduces the failure and kills the named fragile implementation. Include a valid-output positive control and missing-data disposition when relevant.\n2. Implement the minimal fix and run the focused proof.\n3. Check affected callers without expanding into adjacent improvements.\n4. Create an early durable branch, commit, or vertical slice; this is not a PR-readiness signal.\n5. Do not open a PR until bounded behavior works, focused proof passes, no objective-blocking work remains, and known limitations and remaining landing proof are stated.\n\nStop rapid execution in the current run and move to the full lane if a protected surface is discovered, the boundary expands, reversibility becomes uncertain, discriminating controls cannot be constructed, root cause remains unresolved, or the outcome oracle is missing.\n\nThe regression test is required and must protect the outcome rather than echo the implementation. Acceptance: {{acceptance}}",
       "type": "task",
       "needs": ["diagnose"],
       "priority": 2
@@ -32,7 +32,7 @@
     {
       "id": "verify",
       "title": "Verify: {{title}}",
-      "description": "Phase: CONFIRM\n\nVerify the OUTCOME, not just that tests pass:\n1. Run the exact workflow the user cares about — not just the unit test\n2. Check downstream: did fixing this resolve related failures? Update or close sibling beads if so.\n3. Check the acceptance criterion: {{acceptance}} — is it actually true now?\n4. Dispatch adversarial-reviewer subagent (isolated, no conversation history) on the changed files — even for bugs, the fix should be reviewed.\n\nIf the outcome isn't achieved, keep working. 'Tests pass' is not verification.",
+      "description": "Phase: CONFIRM\n\nVerify the outcome, not just that tests pass.\n\n1. Run the exact workflow the user cares about and record the observed user-facing result.\n2. Check the acceptance criterion: {{acceptance}}.\n3. Check affected callers and resolve any causal blocker to this outcome.\n4. Request independent review only when a specialty boundary, task-maturity gap, or named failure mechanism calls for a distinct evidence source. A protected exclusion belongs in the full lane, where targeted review remains available.\n\nStop rapid execution in the current run and move to the full lane if a protected surface is discovered, the boundary expands, reversibility becomes uncertain, discriminating controls cannot be constructed, root cause remains unresolved, or the outcome oracle is missing.\n\nIf the outcome is not achieved, keep working. Record final proof before merge or task closure.",
       "type": "task",
       "needs": ["implement"],
       "priority": 2

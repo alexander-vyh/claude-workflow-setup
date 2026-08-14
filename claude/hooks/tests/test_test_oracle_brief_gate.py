@@ -34,8 +34,7 @@ BRIEF_RELATIVE_PATH = Path(".agent/runtime/test-oracle-brief.md")
 SIGNAL_RELATIVE_PATH = Path(".beads/.gate-signal.jsonl")
 ENTRYPOINT_SOFT_LINE_LIMIT = 500
 EXTRACTED_POLICY_MODULES = (
-    "test_oracle_brief_policy.py",
-    "test_oracle_brief_landing.py",
+    "oracle_brief_rapid.py", "test_oracle_brief_policy.py", "test_oracle_brief_landing.py"
 )
 POLICY_PUBLIC_APIS = ("classify_edit_target", "brief_status")
 LANDING_PUBLIC_APIS = ("landing_context",)
