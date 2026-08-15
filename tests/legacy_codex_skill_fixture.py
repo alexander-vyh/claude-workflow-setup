@@ -8,8 +8,17 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 CURRENT_CLAUDE_SKILL = ROOT / "claude" / "skills" / "beads-execution" / "SKILL.md"
 CURRENT_CODEX_SKILL = ROOT / ".agents" / "skills" / "beads-execution" / "SKILL.md"
+PRE_FINISH_CODEX_SKILL_SHA256 = (
+    "f08ccbb6c66668db81a8a1fe19e1f2302be17a4a204f11dc43522a0b2031f1cb"
+)
 PREVIOUS_CODEX_SKILL_SHA256 = (
     "d175cacf8aff932af013d0d410a2e8324a505c35b7d7fd5301c34d78c0d22bcc"
+)
+
+_FINISH_GUIDANCE = (
+    "\n8. After verified merge or deployment from an Escapement-created worktree, run\n"
+    "   the session-supplied `escapement-worktree finish` command. A `pending` result\n"
+    "   is a safe handoff to the existing supervisor, not a completed deletion."
 )
 HISTORICAL_CRLF_SHA256 = (
     "2096820ff0d7a712aa4b58ca2590979f80f2d0fd168a23bda788a024f47792e0"
@@ -216,14 +225,18 @@ def historical_legacy_skill_bytes(*, crlf: bool = True) -> bytes:
     return crlf_bytes
 
 
-def previous_codex_skill_bytes() -> bytes:
-    """Return the exact immediately previous canonical Codex skill."""
+def pre_finish_codex_skill_bytes() -> bytes:
+    """Return the canonical Codex skill from immediately before finish guidance."""
     current = CURRENT_CODEX_SKILL.read_text(encoding="utf-8")
-    finish_guidance = (
-        "\n8. After verified merge or deployment from an Escapement-created worktree, run\n"
-        "   the session-supplied `escapement-worktree finish` command. A `pending` result\n"
-        "   is a safe handoff to the existing supervisor, not a completed deletion."
-    )
+    assert current.count(_FINISH_GUIDANCE) == 1, "pre-finish Codex fixture source drifted"
+    previous = current.replace(_FINISH_GUIDANCE, "").encode("utf-8")
+    assert hashlib.sha256(previous).hexdigest() == PRE_FINISH_CODEX_SKILL_SHA256
+    return previous
+
+
+def previous_codex_skill_bytes() -> bytes:
+    """Return the canonical Codex skill before the worktree-create policy change."""
+    current = pre_finish_codex_skill_bytes().decode("utf-8")
     new_policy = (
         "4. Use the session-injected `escapement-worktree create` transaction when\n"
         "   isolated implementation work is needed; Beads remains task state only."
@@ -231,8 +244,7 @@ def previous_codex_skill_bytes() -> bytes:
     old_policy = (
         "4. Use `bd worktree create` when isolated implementation work is needed."
     )
-    assert current.count(finish_guidance) == 1, "previous Codex fixture source drifted"
     assert current.count(new_policy) == 1, "previous Codex fixture source drifted"
-    previous = current.replace(finish_guidance, "").replace(new_policy, old_policy).encode("utf-8")
+    previous = current.replace(new_policy, old_policy).encode("utf-8")
     assert hashlib.sha256(previous).hexdigest() == PREVIOUS_CODEX_SKILL_SHA256
     return previous
