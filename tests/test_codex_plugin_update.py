@@ -33,6 +33,15 @@ def test_updater_refreshes_plugin_migrates_legacy_and_preserves_siblings(
     sibling = tmp_path / ".agents" / "skills" / "user-skill" / "notes.txt"
     shutil.copytree(ROOT / "plugins" / "escapement", plugin_root)
     shutil.copytree(ROOT / "plugins" / "escapement", plugin_source)
+    prior_runtime = tmp_path / "prior-runtime"
+    shutil.copytree(ROOT / "plugins" / "escapement" / "harness", prior_runtime)
+    for executable in prior_runtime.joinpath("bin").glob("*.py"):
+        executable.chmod(executable.stat().st_mode | 0o111)
+    harness.mkdir()
+    harness.joinpath("bin").symlink_to(prior_runtime / "bin", target_is_directory=True)
+    harness.joinpath("schemas").symlink_to(
+        prior_runtime / "schemas", target_is_directory=True
+    )
     global_skill.parent.mkdir(parents=True)
     sibling.parent.mkdir(parents=True)
     safe = (
@@ -85,6 +94,15 @@ fi
     )
 
     assert result.returncode == 0, result.stderr
+    second_result = subprocess.run(
+        ["bash", str(UPDATER)],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert second_result.returncode == 0, second_result.stderr
     assert global_skill.read_bytes() == safe
     backups = list(global_skill.parent.glob("SKILL.md.backup-*"))
     assert len(backups) == 1

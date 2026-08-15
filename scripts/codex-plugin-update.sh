@@ -115,10 +115,24 @@ for stable in "$HARNESS_HOME/bin" "$HARNESS_HOME/schemas"; do
     exit 1
   fi
 done
+promote_runtime_link() {
+  python3 - "$1" "$2" <<'PY'
+import os
+import sys
+
+source, target = sys.argv[1:]
+os.replace(source, target)
+directory = os.open(os.path.dirname(target), os.O_RDONLY)
+try:
+    os.fsync(directory)
+finally:
+    os.close(directory)
+PY
+}
 ln -sfn "$plugin_root/harness/bin" "$HARNESS_HOME/.bin.next"
-mv -f "$HARNESS_HOME/.bin.next" "$HARNESS_HOME/bin"
+promote_runtime_link "$HARNESS_HOME/.bin.next" "$HARNESS_HOME/bin"
 ln -sfn "$plugin_root/harness/schemas" "$HARNESS_HOME/.schemas.next"
-mv -f "$HARNESS_HOME/.schemas.next" "$HARNESS_HOME/schemas"
+promote_runtime_link "$HARNESS_HOME/.schemas.next" "$HARNESS_HOME/schemas"
 mkdir -p "$HARNESS_HOME/worktrees"
 chmod 700 "$HARNESS_HOME" "$HARNESS_HOME/worktrees"
 if [[ "${ESCAPEMENT_SKIP_SUPERVISOR_INSTALL:-0}" != "1" ]]; then
