@@ -11,6 +11,7 @@ from pathlib import Path
 
 from legacy_codex_skill_fixture import (
     historical_legacy_skill_bytes,
+    pre_finish_codex_skill_bytes,
     previous_codex_skill_bytes,
 )
 from scripts import migrate_codex_beads_skill
@@ -79,6 +80,24 @@ def test_immediately_previous_codex_skill_is_recognized_without_hash_override(
     target = tmp_path / "SKILL.md"
     source.write_text("safe explicit-execution skill\n", encoding="utf-8")
     previous = previous_codex_skill_bytes()
+    target.write_bytes(previous)
+
+    result = _run(source, target)
+
+    assert result.returncode == 0, result.stderr
+    assert target.read_bytes() == source.read_bytes()
+    backups = list(tmp_path.glob("SKILL.md.backup-*"))
+    assert len(backups) == 1
+    assert backups[0].read_bytes() == previous
+
+
+def test_pre_finish_codex_skill_is_recognized_without_hash_override(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "safe.md"
+    target = tmp_path / "SKILL.md"
+    source.write_text("safe explicit-execution skill\n", encoding="utf-8")
+    previous = pre_finish_codex_skill_bytes()
     target.write_bytes(previous)
 
     result = _run(source, target)
