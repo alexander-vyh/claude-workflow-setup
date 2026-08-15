@@ -6,6 +6,7 @@ import importlib.util
 import io
 import json
 import hashlib
+import os
 import shlex
 import shutil
 import subprocess
@@ -303,6 +304,8 @@ def test_linked_worktree_repair_names_primary_and_cli_accepts_it(
         text=True,
         capture_output=True,
         check=False,
+        env=os.environ
+        | {"CONTINUATION_HARNESS_HOME": str(tmp_path / "harness")},
     )
     assert result.returncode == 0, result.stderr
     record = json.loads(result.stdout)

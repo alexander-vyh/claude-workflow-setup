@@ -219,6 +219,11 @@ def historical_legacy_skill_bytes(*, crlf: bool = True) -> bytes:
 def previous_codex_skill_bytes() -> bytes:
     """Return the exact immediately previous canonical Codex skill."""
     current = CURRENT_CODEX_SKILL.read_text(encoding="utf-8")
+    finish_guidance = (
+        "\n8. After verified merge or deployment from an Escapement-created worktree, run\n"
+        "   the session-supplied `escapement-worktree finish` command. A `pending` result\n"
+        "   is a safe handoff to the existing supervisor, not a completed deletion."
+    )
     new_policy = (
         "4. Use the session-injected `escapement-worktree create` transaction when\n"
         "   isolated implementation work is needed; Beads remains task state only."
@@ -226,7 +231,8 @@ def previous_codex_skill_bytes() -> bytes:
     old_policy = (
         "4. Use `bd worktree create` when isolated implementation work is needed."
     )
+    assert current.count(finish_guidance) == 1, "previous Codex fixture source drifted"
     assert current.count(new_policy) == 1, "previous Codex fixture source drifted"
-    previous = current.replace(new_policy, old_policy).encode("utf-8")
+    previous = current.replace(finish_guidance, "").replace(new_policy, old_policy).encode("utf-8")
     assert hashlib.sha256(previous).hexdigest() == PREVIOUS_CODEX_SKILL_SHA256
     return previous

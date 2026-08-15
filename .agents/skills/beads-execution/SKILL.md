@@ -39,6 +39,9 @@ Positive routing examples:
    outcome, not only test status.
 7. Update or close the Beads task only after the outcome and repository state
    satisfy its acceptance criteria.
+8. After verified merge or deployment from an Escapement-created worktree, run
+   the session-supplied `escapement-worktree finish` command. A `pending` result
+   is a safe handoff to the existing supervisor, not a completed deletion.
 
 Preserve user work. Do not delete, reset, merge, push, or close unrelated work
 merely because it appears in Beads output.

@@ -28,7 +28,7 @@ import sys
 BIN = pathlib.Path(__file__).resolve().parent.parent / "bin"
 sys.path.insert(0, str(BIN))
 
-import repo_outcome as ro
+import repo_outcome as ro  # noqa: E402
 
 
 def _write(tmp_path, obj):
@@ -85,6 +85,13 @@ def _init_worktree_repo(tmp_path, main_declaration=None):
     return primary, sibling
 
 
+def _commit_policy(repo, declaration, message):
+    _write(repo, declaration)
+    _git(repo, "add", ".escapement/repo.json")
+    _git(repo, "commit", "-m", message)
+    return _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+
 # --- POSITIVE CONTROL ------------------------------------------------------
 
 def test_valid_merged_and_deployed_authorizes(tmp_path):
@@ -134,6 +141,84 @@ def test_unconfigured_primary_denies_even_if_sibling_self_authorizes(tmp_path):
     resolved = ro.resolve(sibling)
 
     assert resolved.source == "default-absent"
+    assert ro.authorizes_auto_merge(resolved) is False
+
+
+def test_explicit_live_default_commit_authorizes_despite_local_disagreement(tmp_path):
+    primary, sibling = _init_worktree_repo(
+        tmp_path,
+        {
+            "intended_outcome": "merged-and-deployed",
+            "auto_merge_on_green": True,
+            "deploy": {"surface": "captured-live-default"},
+        },
+    )
+    captured_live_default = _git(primary, "rev-parse", "HEAD").stdout.strip()
+
+    # Both possible local substitutes now deny. The captured authenticated
+    # live-default commit remains the sole policy authority for this decision.
+    _commit_policy(
+        primary,
+        {"intended_outcome": "pr-opened", "auto_merge_on_green": False},
+        "advance local remote-tracking default to denying policy",
+    )
+    _git(primary, "push", "origin", "main")
+    _commit_policy(
+        sibling,
+        {"intended_outcome": "pr-opened", "auto_merge_on_green": False},
+        "make invoking worktree deny",
+    )
+
+    invoking_policy = json.loads(ro.declaration_path(sibling).read_text())
+    assert invoking_policy["auto_merge_on_green"] is False
+    assert ro.authorizes_auto_merge(ro.resolve(sibling)) is False
+
+    resolved = ro.resolve_at_ref(sibling, captured_live_default)
+
+    assert resolved.source == "declared-ref"
+    assert resolved.intended_outcome == "merged-and-deployed"
+    assert resolved.deploy == {"surface": "captured-live-default"}
+    assert ro.authorizes_auto_merge(resolved) is True
+
+
+def test_explicit_live_default_commit_denies_despite_local_self_authorization(tmp_path):
+    primary, sibling = _init_worktree_repo(
+        tmp_path,
+        {"intended_outcome": "pr-opened", "auto_merge_on_green": False},
+    )
+    captured_live_default = _git(primary, "rev-parse", "HEAD").stdout.strip()
+
+    # Both the invoking worktree and the later origin/HEAD target authorize.
+    # Neither may replace the exact live-default commit captured by the caller.
+    _commit_policy(
+        primary,
+        {
+            "intended_outcome": "merged-and-deployed",
+            "auto_merge_on_green": True,
+            "deploy": {"surface": "later-local-default"},
+        },
+        "advance local remote-tracking default to authorizing policy",
+    )
+    _git(primary, "push", "origin", "main")
+    _commit_policy(
+        sibling,
+        {
+            "intended_outcome": "merged-and-deployed",
+            "auto_merge_on_green": True,
+            "deploy": {"surface": "invoking-worktree"},
+        },
+        "self authorize invoking worktree",
+    )
+
+    invoking_policy = json.loads(ro.declaration_path(sibling).read_text())
+    assert invoking_policy["auto_merge_on_green"] is True
+    assert ro.authorizes_auto_merge(ro.resolve(sibling)) is True
+
+    resolved = ro.resolve_at_ref(sibling, captured_live_default)
+
+    assert resolved.source == "declared-ref"
+    assert resolved.intended_outcome == "pr-opened"
+    assert resolved.deploy is None
     assert ro.authorizes_auto_merge(resolved) is False
 
 

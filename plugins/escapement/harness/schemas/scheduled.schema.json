@@ -1,0 +1,137 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://escapement/harness/schemas/scheduled.schema.json",
+  "title": "ScheduledWakeups",
+  "description": "Per-thread durable wakeup entries. Array; multiple wakeups may coexist for the same thread.",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["wake_at", "prompt", "thread_id", "created_by", "crash_count"],
+    "allOf": [
+      {
+        "if": {
+          "properties": {
+            "kind": { "const": "check" }
+          },
+          "required": ["kind"]
+        },
+        "then": {
+          "required": ["command"]
+        }
+      },
+      {
+        "if": {
+          "properties": {
+            "created_by": { "const": "execution-supervisor" }
+          },
+          "required": ["created_by"]
+        },
+        "then": {
+          "required": [
+            "parent_session_id",
+            "watchdog_id",
+            "execution_id",
+            "attempt",
+            "generation",
+            "registered_at",
+            "supervisor_installation_id",
+            "supervisor_generation"
+          ]
+        }
+      }
+    ],
+    "properties": {
+      "wake_at": {
+        "type": "string",
+        "format": "date-time",
+        "description": "ISO-8601 timestamp; gate counts only future-dated entries."
+      },
+      "registered_at": {
+        "type": "string",
+        "format": "date-time",
+        "description": "Durable managed-proof registration timestamp; a qualifying supervisor pass must start strictly later."
+      },
+      "prompt": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Text injected as first user message on resume."
+      },
+      "thread_id": {
+        "type": "string",
+        "minLength": 1
+      },
+      "created_by": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Tool or process that registered this entry (e.g., 'ScheduleWakeup', 'adapter-fallback')."
+      },
+      "crash_count": {
+        "type": "integer",
+        "minimum": 0,
+        "default": 0,
+        "description": "Incremented if a wakeup fires while a prior re-spawn for this thread is still active. Crash budget enforcement is v0.1+."
+      },
+      "kind": {
+        "type": "string",
+        "enum": ["check", "resume"],
+        "description": "Dispatch kind. 'resume' (default if absent, for back-compat) re-injects prompt as a same-session resume. 'check' polls command cheaply; exit 0 means the awaited condition is met and the waker should hand off to a fresh cheap session, while non-zero reschedules without spawning Claude."
+      },
+      "command": {
+        "type": "string",
+        "minLength": 1,
+        "description": "For kind='check': shell command to poll. Exit 0 means condition met and produces a fresh-session handoff; non-zero means not ready and is rescheduled."
+      },
+      "escalate_prompt": {
+        "type": "string",
+        "minLength": 1,
+        "description": "For kind='check': self-contained handoff prompt used when the check succeeds or reaches its deadline. Falls back to prompt if absent."
+      },
+      "poll_interval": {
+        "type": "integer",
+        "minimum": 60,
+        "maximum": 86400,
+        "default": 300,
+        "description": "For kind='check': seconds before the next cheap poll when command exits non-zero. Invalid runtime values fall back to the default."
+      },
+      "deadline": {
+        "type": "string",
+        "format": "date-time",
+        "description": "For kind='check': optional time after which an unfinished poll escalates once via handoff instead of polling forever."
+      },
+      "model": {
+        "type": "string",
+        "minLength": 1,
+        "description": "For kind='check': optional model for the fresh handoff session. Defaults to the harness cheap model."
+      },
+      "parent_session_id": {
+        "type": "string",
+        "minLength": 1
+      },
+      "watchdog_id": {
+        "type": "string",
+        "minLength": 1
+      },
+      "execution_id": {
+        "type": "string",
+        "minLength": 1
+      },
+      "attempt": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "generation": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "supervisor_installation_id": {
+        "type": "string",
+        "minLength": 1
+      },
+      "supervisor_generation": {
+        "type": "integer",
+        "minimum": 1
+      }
+    }
+  }
+}

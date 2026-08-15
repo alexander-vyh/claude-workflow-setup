@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import plistlib
 import shutil
 import subprocess
 from pathlib import Path
@@ -21,12 +22,17 @@ def test_updater_refreshes_plugin_migrates_legacy_and_preserves_siblings(
 ) -> None:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
+    home = tmp_path / "home"
+    codex_home = tmp_path / "codex-home"
     fake_codex = fake_bin / "codex"
     command_log = tmp_path / "codex.log"
-    plugin_root = tmp_path / "plugin"
+    plugin_source = tmp_path / "marketplace-source"
+    plugin_root = codex_home / "plugins" / "cache" / "escapement" / "escapement" / "1.0.0"
+    harness = tmp_path / "shared-harness"
     global_skill = tmp_path / ".agents" / "skills" / "beads-execution" / "SKILL.md"
     sibling = tmp_path / ".agents" / "skills" / "user-skill" / "notes.txt"
     shutil.copytree(ROOT / "plugins" / "escapement", plugin_root)
+    shutil.copytree(ROOT / "plugins" / "escapement", plugin_source)
     global_skill.parent.mkdir(parents=True)
     sibling.parent.mkdir(parents=True)
     safe = (
@@ -42,17 +48,31 @@ echo "$*" >> "$FAKE_CODEX_LOG"
 if [[ "$*" == "plugin marketplace list --json" ]]; then
   printf '{"marketplaces":[{"name":"escapement","marketplaceSource":{"sourceType":"local"}}]}'
 elif [[ "$*" == "plugin list --marketplace escapement --json" ]]; then
-  printf '{"installed":[{"pluginId":"escapement@escapement","source":{"source":"local","path":"%s"}}]}' "$FAKE_PLUGIN_ROOT"
+  printf '{"installed":[{"pluginId":"escapement@escapement","name":"escapement","marketplaceName":"escapement","version":"1.0.0","source":{"source":"local","path":"%s"}}]}' "$FAKE_PLUGIN_ROOT"
 fi
 """,
         encoding="utf-8",
     )
     fake_codex.chmod(0o755)
+    (fake_bin / "uname").write_text("#!/bin/sh\nprintf 'Darwin\\n'\n", encoding="utf-8")
+    (fake_bin / "launchctl").write_text(
+        "#!/bin/sh\n"
+        "[ \"${1:-}\" != print ] || exit 113\n"
+        "[ \"${1:-}\" != bootout ] || exit 3\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    (fake_bin / "uname").chmod(0o755)
+    (fake_bin / "launchctl").chmod(0o755)
     env = os.environ | {
+        "HOME": str(home),
+        "CODEX_HOME": str(codex_home),
+        "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
         "CODEX_BIN": str(fake_codex),
         "FAKE_CODEX_LOG": str(command_log),
-        "FAKE_PLUGIN_ROOT": str(plugin_root),
+        "FAKE_PLUGIN_ROOT": str(plugin_source),
         "ESCAPEMENT_GLOBAL_BEADS_SKILL": str(global_skill),
+        "CONTINUATION_HARNESS_HOME": str(harness),
     }
 
     result = subprocess.run(
@@ -76,6 +96,10 @@ fi
     assert "plugin marketplace upgrade" not in commands
     assert "replaced recognized legacy skill" in result.stdout
     assert "Codex plugin refreshed" in result.stdout
+    assert harness.joinpath("bin").resolve() == plugin_root / "harness" / "bin"
+    with (home / "Library" / "LaunchAgents" / "com.escapement.continuation-supervisor.plist").open("rb") as stream:
+        plist = plistlib.load(stream)
+    assert plist["ProgramArguments"] == [str(harness / "bin" / "wakeup_waker.py"), "--fire"]
 
 
 @pytest.mark.parametrize(
@@ -90,6 +114,7 @@ fi
             ".codex-plugin/plugin.json",
             b'{"name":"escapement","version":"stale-test-fixture"}\n',
         ),
+        ("bin/escapement_worktree_registry.py", b"stale registry runtime\n"),
     ),
 )
 def test_updater_rejects_stale_installed_surface(
@@ -98,9 +123,12 @@ def test_updater_rejects_stale_installed_surface(
     stale_content: bytes,
 ) -> None:
     fake_codex = tmp_path / "codex"
-    plugin_root = tmp_path / "plugin"
+    codex_home = tmp_path / "codex-home"
+    plugin_source = tmp_path / "marketplace-source"
+    plugin_root = codex_home / "plugins" / "cache" / "escapement" / "escapement" / "1.0.0"
     global_skill = tmp_path / "global" / "SKILL.md"
     shutil.copytree(ROOT / "plugins" / "escapement", plugin_root)
+    shutil.copytree(ROOT / "plugins" / "escapement", plugin_source)
     (plugin_root / relative_path).write_bytes(stale_content)
     global_skill.parent.mkdir()
     legacy = historical_legacy_skill_bytes()
@@ -111,7 +139,7 @@ set -eu
 if [[ "$*" == "plugin marketplace list --json" ]]; then
   printf '{"marketplaces":[{"name":"escapement","marketplaceSource":{"sourceType":"local"}}]}'
 elif [[ "$*" == "plugin list --marketplace escapement --json" ]]; then
-  printf '{"installed":[{"pluginId":"escapement@escapement","source":{"source":"local","path":"%s"}}]}' "$FAKE_PLUGIN_ROOT"
+  printf '{"installed":[{"pluginId":"escapement@escapement","name":"escapement","marketplaceName":"escapement","version":"1.0.0","source":{"source":"local","path":"%s"}}]}' "$FAKE_PLUGIN_ROOT"
 fi
 """,
         encoding="utf-8",
@@ -124,8 +152,11 @@ fi
         env=os.environ
         | {
             "CODEX_BIN": str(fake_codex),
-            "FAKE_PLUGIN_ROOT": str(plugin_root),
+            "CODEX_HOME": str(codex_home),
+            "FAKE_PLUGIN_ROOT": str(plugin_source),
             "ESCAPEMENT_GLOBAL_BEADS_SKILL": str(global_skill),
+            "CONTINUATION_HARNESS_HOME": str(tmp_path / "harness"),
+            "ESCAPEMENT_SKIP_SUPERVISOR_INSTALL": "1",
         },
         capture_output=True,
         text=True,
@@ -136,3 +167,4 @@ fi
     assert "installed plugin surface is stale" in result.stderr
     assert global_skill.read_bytes() == legacy
     assert list(global_skill.parent.glob("SKILL.md.backup-*")) == []
+    assert not (tmp_path / "harness").exists()

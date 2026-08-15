@@ -135,7 +135,11 @@ def run_cli(
     primary: Path, *args: str, env: Mapping[str, str] | None = None
 ) -> subprocess.CompletedProcess[str]:
     """Run the public command without making absent-command tests error."""
-    command_env = {**os.environ, **(env or {})}
+    command_env = {
+        **os.environ,
+        "CONTINUATION_HARNESS_HOME": str(primary.parent / "harness"),
+        **(env or {}),
+    }
     if not CLI.is_file():
         return subprocess.CompletedProcess(
             [str(CLI), *args], 127, "", f"required CLI is absent: {CLI}\n"

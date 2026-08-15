@@ -4,13 +4,11 @@
 from __future__ import annotations
 
 import argparse
-import fcntl
 import json
 import os
 import re
 import sys
-from collections.abc import Iterator, Sequence
-from contextlib import contextmanager
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -19,6 +17,7 @@ from escapement_worktree_bootstrap import (
     resolve_bootstrap_contract,
     run_bootstrap,
 )
+from escapement_worktree_cleanup import SemanticConflict, github_repository
 from escapement_worktree_git import (
     CreationIdentity,
     RepositoryContext,
@@ -27,11 +26,19 @@ from escapement_worktree_git import (
     capture_creation_identity,
     git,
     registered_branch_owners,
+    repository_transaction_lock,
     resolve_default_source,
     resolve_explicit_source,
     resolve_repository,
     run,
     target_owned_by_creation,
+)
+from escapement_worktree_finish import finish_lifecycle
+from escapement_worktree_registry import (
+    ensure_registry,
+    lifecycle_exists,
+    lifecycle_lock,
+    write_lifecycle,
 )
 
 SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -135,25 +142,6 @@ def beads_context(path: Path) -> dict[str, str] | None:
             raise WorktreeError(f"bd context is missing non-empty {field!r}")
         context[field] = value
     return context
-
-
-@contextmanager
-def creation_lock(ctx: RepositoryContext) -> Iterator[None]:
-    lock_path = ctx.common_dir / "escapement-worktree.lock"
-    try:
-        lock_file = lock_path.open("w", encoding="utf-8")
-    except OSError as error:
-        raise WorktreeError(
-            f"cannot open repository transaction lock: {error}"
-        ) from error
-    with lock_file:
-        try:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-        except OSError as error:
-            raise WorktreeError(
-                f"cannot acquire repository transaction lock: {error}"
-            ) from error
-        yield
 
 
 def _worktree_records(porcelain: str) -> list[dict[str, str]]:
@@ -343,7 +331,10 @@ def rollback_created_artifacts(
 
 def create_worktree(request: WorktreeRequest) -> CreationResult:
     ctx = resolve_repository(request.repo)
-    with creation_lock(ctx):
+    ensure_registry()
+    with lifecycle_lock(request.name), repository_transaction_lock(ctx):
+        if lifecycle_exists(request.name):
+            raise WorktreeError(f"lifecycle receipt already exists: {request.name}")
         target = validate_request(ctx, request)
         source = (
             resolve_explicit_source(ctx, request.source)
@@ -379,12 +370,40 @@ def create_worktree(request: WorktreeRequest) -> CreationResult:
                 beads_verified = verify_created_worktree(
                     ctx, request, target, source, root_beads
                 )
+            origin_url = git(ctx, "config", "--get", "remote.origin.url").stdout.strip()
+            try:
+                origin = f"github.com/{github_repository(origin_url)}"
+            except SemanticConflict:
+                origin = origin_url
+            write_lifecycle(
+                request.name,
+                {
+                    "schema_version": 1,
+                    "lifecycle_id": request.name,
+                    "repository": str(ctx.primary),
+                    "common_directory": str(ctx.common_dir),
+                    "origin": origin,
+                    "worktree": str(target.resolve(strict=True)),
+                    "branch_ref": f"refs/heads/{request.branch}",
+                    "source_sha": source.sha,
+                    "phase": "created",
+                    "finish_requested": False,
+                    "approved_head_sha": None,
+                    "last_reason": None,
+                },
+            )
         except (WorktreeError, OSError) as error:
             failure = (
                 error
                 if isinstance(error, WorktreeError)
                 else WorktreeError(f"worktree operation failed: {error}")
             )
+            receipt_retained = lifecycle_exists(request.name)
+            if receipt_retained:
+                raise WorktreeError(
+                    f"{failure}; durable lifecycle receipt retained with worktree "
+                    "for recovery"
+                ) from None
             residue = (
                 rollback_created_artifacts(
                     ctx,
@@ -422,12 +441,17 @@ def _parser() -> argparse.ArgumentParser:
     create.add_argument("--name", required=True)
     create.add_argument("--branch", required=True)
     create.add_argument("--source")
+    finish = commands.add_parser("finish")
+    finish.add_argument("--lifecycle-id", required=True)
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
+        if args.command == "finish":
+            print(json.dumps(finish_lifecycle(args.lifecycle_id), sort_keys=True))
+            return 0
         result = create_worktree(
             WorktreeRequest(
                 repo=args.repo,

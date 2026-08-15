@@ -307,6 +307,7 @@ def test_linked_worktree_context_emits_an_executable_primary_checkout_command(
     result = subprocess.run(
         shlex.split(command),
         cwd=sibling,
+        env={**os.environ, "CONTINUATION_HARNESS_HOME": str(tmp_path / "harness")},
         capture_output=True,
         text=True,
         check=False,
@@ -331,6 +332,18 @@ def test_linked_worktree_context_emits_an_executable_primary_checkout_command(
         ).stdout.strip()
         == str(primary / ".git")
     )
+
+    finish_context, _ = _context(
+        _run(
+            created,
+            {"hook_event_name": "SessionStart", "cwd": str(created)},
+        )
+    )
+    assert (
+        f"python3 -B {WORKTREE_CLI} finish --lifecycle-id context-linked"
+        in finish_context
+    )
+    assert "records a pending request" in finish_context
 
 
 def test_precompact_reinjects_the_same_authoritative_contract(tmp_path: Path) -> None:
