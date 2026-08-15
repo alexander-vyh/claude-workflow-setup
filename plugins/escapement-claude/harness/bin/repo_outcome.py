@@ -41,7 +41,7 @@ class RepoOutcome:
     """Resolved per-project outcome authorization.
 
     `source` records provenance so callers can distinguish a real declaration from a
-    fallback: "declared" | "declared-default-branch" | "default-absent" |
+    fallback: "declared" | "declared-default-branch" | "declared-ref" | "default-absent" |
     "default-malformed" | "default-invalid".
     `warning` is set (non-None) only when we fell back from a present-but-broken file,
     so the caller can surface it instead of silently swallowing a misconfiguration.
@@ -182,6 +182,32 @@ def resolve(repo_root) -> RepoOutcome:
     return _resolve_text(raw_text, declared_source="declared")
 
 
+def resolve_at_ref(repo_root, ref: str) -> RepoOutcome:
+    """Resolve policy from one caller-selected commit, never local checkout state.
+
+    The caller is responsible for establishing the commit's authority (for
+    example, by capturing GitHub's authenticated live default).  This function
+    deliberately does not fall back to ``origin/HEAD`` or the filesystem when
+    the named commit or declaration cannot be read.
+    """
+    if not isinstance(ref, str) or not ref:
+        return _default(
+            "default-invalid",
+            "an explicit policy commit is required; using conservative default "
+            "(no auto-merge).",
+        )
+    declaration = _git(repo_root, "show", f"{ref}:.escapement/repo.json")
+    if declaration is None:
+        return _default(
+            "default-malformed",
+            "the explicit policy commit could not be inspected; using "
+            "conservative default (no auto-merge).",
+        )
+    if declaration.returncode != 0:
+        return _default("default-absent", None)
+    return _resolve_text(declaration.stdout, declared_source="declared-ref")
+
+
 def _outcome_index(outcome: str) -> int:
     try:
         return INTENDED_OUTCOME_LADDER.index(outcome)
@@ -196,6 +222,9 @@ def authorizes_auto_merge(outcome: RepoOutcome) -> bool:
     The consistency guard (flag true but outcome only pr-opened) does NOT authorize —
     you cannot auto-merge in a repo that declared it only wants a PR opened.
     """
-    return bool(outcome.auto_merge_on_green) and _outcome_index(
-        outcome.intended_outcome
-    ) >= _MERGE_MIN_INDEX
+    return bool(outcome.auto_merge_on_green) and authorizes_merged_outcome(outcome)
+
+
+def authorizes_merged_outcome(outcome: RepoOutcome) -> bool:
+    """Whether the declared terminal outcome includes an already-merged state."""
+    return _outcome_index(outcome.intended_outcome) >= _MERGE_MIN_INDEX

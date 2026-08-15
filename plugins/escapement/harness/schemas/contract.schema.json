@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://escapement/harness/schemas/contract.schema.json",
+  "title": "Contract",
+  "description": "Per-task outcome contract — the agent declares what 'done' means before its first implementation tool call. Gate enforces by running verification_command and comparing exit code to expected_exit.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["goal", "verification_command", "expected_exit", "source", "thread_id", "created_at"],
+  "properties": {
+    "goal": {
+      "type": "string",
+      "minLength": 5,
+      "description": "One-sentence statement of the outcome the agent will produce."
+    },
+    "verification_command": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Shell command whose exit code is the oracle. Executed by harness/bin/verify."
+    },
+    "expected_exit": {
+      "type": "integer",
+      "default": 0,
+      "description": "Exit code that means success."
+    },
+    "source": {
+      "type": "string",
+      "enum": ["bead-derived", "agent-declared", "user-authored"]
+    },
+    "thread_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_run": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["exit_code", "timestamp"],
+      "properties": {
+        "exit_code": { "type": "integer" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "output_excerpt": { "type": "string", "maxLength": 4096 }
+      }
+    }
+  }
+}

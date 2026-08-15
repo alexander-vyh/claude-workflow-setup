@@ -437,7 +437,9 @@ def test_fire_advances_health_once_after_scheduled_and_execution_work_succeed(tm
     )
 
 
-def test_fire_partial_schedule_failure_withholds_authoritative_health(tmp_path):
+def test_fire_partial_schedule_failure_withholds_authoritative_health(
+    tmp_path, monkeypatch
+):
     """One unreadable scheduled-work input invalidates the global health tick.
 
     The successful sibling is a positive control: an empty implementation that
@@ -474,6 +476,13 @@ def test_fire_partial_schedule_failure_withholds_authoritative_health(tmp_path):
         "counts": {"successful_passes": 7, "threads": 2},
     }
     health_path.write_text(json.dumps(seeded))
+    lifecycle_scans = []
+    monkeypatch.setattr(
+        ww.wls,
+        "reconcile",
+        lambda harness_root: lifecycle_scans.append(harness_root)
+        or {"status": "ok", "checked": 0},
+    )
 
     assert ww.main(["--threads-root", str(root), "--fire"]) == 1
 
@@ -484,6 +493,7 @@ def test_fire_partial_schedule_failure_withholds_authoritative_health(tmp_path):
         "malformed": "schedule-must-be-an-array"
     }
     assert json.loads(health_path.read_text()) == seeded
+    assert lifecycle_scans == [root.parent]
 
 
 def test_fire_fsyncs_schedule_source_and_directory_before_certifying_health(

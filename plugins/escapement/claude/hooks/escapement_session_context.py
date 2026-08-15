@@ -144,7 +144,42 @@ def _worktree_context(repo_root: Path) -> str:
     )
 
 
-def _additional_context(outcome, repo_root: Path) -> str:
+def _finish_context(outcome, payload: dict) -> str | None:
+    if outcome.intended_outcome not in {"merged", "merged-and-deployed"}:
+        return None
+    cwd = payload.get("cwd")
+    if not isinstance(cwd, str) or not cwd:
+        return None
+    try:
+        result = subprocess.run(
+            ["git", "-C", cwd, "rev-parse", "--show-toplevel"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    top = Path(result.stdout.strip()) if result.returncode == 0 else None
+    if top is None or top.parent.name != ".worktrees":
+        return None
+    prefix = bundled_cli_prefix(Path(__file__))
+    if prefix is None:
+        return None
+    command = shlex.join([*prefix, "finish", "--lifecycle-id", top.name])
+    boundary = (
+        "deployment verification"
+        if outcome.intended_outcome == "merged-and-deployed"
+        else "merge verification"
+    )
+    return (
+        f"After {boundary}, finish this Escapement worktree with `{command}`. "
+        "An in-worktree call records a pending request; the existing supervisor "
+        "completes it after activity ends."
+    )
+
+
+def _additional_context(outcome, repo_root: Path, payload: dict) -> str:
     auto_merge = str(outcome.auto_merge_on_green).lower()
     lines = [
         "Escapement owns workflow policy. Beads is the task-state system only.",
@@ -164,6 +199,9 @@ def _additional_context(outcome, repo_root: Path) -> str:
         ),
         f"Required landing path: {_LANDING_PATHS[outcome.intended_outcome]}",
     ]
+    finish = _finish_context(outcome, payload)
+    if finish is not None:
+        lines.append(finish)
 
     if outcome.source.startswith("default-"):
         lines.append(
@@ -204,7 +242,7 @@ def main() -> int:
                 "systemMessage": "Escapement workflow policy is active.",
                 "hookSpecificOutput": {
                     "hookEventName": event,
-                    "additionalContext": _additional_context(outcome, repo_root),
+                    "additionalContext": _additional_context(outcome, repo_root, payload),
                 },
             }
         )

@@ -741,6 +741,7 @@ raise SystemExit(result.returncode)
     env = {
         **os.environ,
         "PATH": f"{proxy_dir}{os.pathsep}{os.environ['PATH']}",
+        "CONTINUATION_HARNESS_HOME": str(tmp_path / "harness"),
         "REAL_GIT": shutil.which("git") or "git",
         "LOCK_ENTERED": str(entered),
         "LOCK_OVERLAP": str(overlap),

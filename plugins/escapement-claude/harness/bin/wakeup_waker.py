@@ -34,6 +34,7 @@ import wakeup_dispatch as wd  # noqa: E402
 import execution_supervisor as es  # noqa: E402
 import schedule_store  # noqa: E402
 import trusted_source as ts  # noqa: E402
+import worktree_lifecycle_supervisor as wls  # noqa: E402
 from thread_identity import is_actor_state_dir, iter_state_dirs  # noqa: E402
 
 HARNESS_ROOT = pathlib.Path(
@@ -288,17 +289,25 @@ def main(argv=None) -> int:
             if lock_file is not None:
                 lock_file.close()
     if args.fire:
-        if not scheduled_ok:
+        lifecycle_result = None
+        lifecycle_ok = True
+        try:
+            lifecycle_result = wls.reconcile(root.parent)
+        except (OSError, RuntimeError, ValueError) as exc:
+            lifecycle_ok = False
+            print(f"worktree reconciliation incomplete: {exc}", file=sys.stderr)
+        if not scheduled_ok or not lifecycle_ok:
             exit_code = 1
-            print(
-                "execution reconciliation incomplete: scheduled-work inspection was incomplete",
-                file=sys.stderr,
-            )
+            if not scheduled_ok:
+                print(
+                    "execution reconciliation incomplete: scheduled-work inspection was incomplete",
+                    file=sys.stderr,
+                )
         else:
             reconcile_now = _dt.datetime.now(_dt.timezone.utc)
 
             def inspect_scheduled():
-                return {"status": "ok"}
+                return lifecycle_result
 
             try:
                 result = es.reconcile_all(

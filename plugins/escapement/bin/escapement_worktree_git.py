@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import os
+import fcntl
 import re
 import subprocess
 from collections.abc import Mapping, Sequence
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field as dataclass_field
 from pathlib import Path
 from typing import Literal
@@ -38,6 +41,26 @@ class CreationIdentity:
     device: int
     inode: int
     descriptor: int = dataclass_field(compare=False, repr=False)
+
+
+@contextmanager
+def repository_transaction_lock(ctx: RepositoryContext) -> Iterator[None]:
+    """Serialize every worktree lifecycle transition for one Git common dir."""
+    lock_path = ctx.common_dir / "escapement-worktree.lock"
+    try:
+        lock_file = lock_path.open("a+", encoding="utf-8")
+    except OSError as error:
+        raise WorktreeError(
+            f"cannot open repository transaction lock: {error}"
+        ) from error
+    with lock_file:
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        except OSError as error:
+            raise WorktreeError(
+                f"cannot acquire repository transaction lock: {error}"
+            ) from error
+        yield
 
 
 def run(
@@ -166,11 +189,16 @@ def _nul_worktree_records(porcelain: str) -> list[dict[str, str]]:
     return records
 
 
-def registered_branch_owners(ctx: RepositoryContext, branch_ref: str) -> list[str]:
-    """Return paths that Git's NUL-delimited registry assigns to a branch."""
-    records = _nul_worktree_records(
+def worktree_records(ctx: RepositoryContext) -> list[dict[str, str]]:
+    """Return Git's NUL-delimited registry as exact field dictionaries."""
+    return _nul_worktree_records(
         git(ctx, "worktree", "list", "--porcelain", "-z").stdout
     )
+
+
+def registered_branch_owners(ctx: RepositoryContext, branch_ref: str) -> list[str]:
+    """Return paths that Git's NUL-delimited registry assigns to a branch."""
+    records = worktree_records(ctx)
     owners: list[str] = []
     for record in records:
         if record.get("branch") != branch_ref:

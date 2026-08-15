@@ -68,8 +68,13 @@ SHARED_HOOK_SUPPORT = {
 SHARED_RUNTIME_SUPPORT = {
     "bin/escapement-worktree",
     "bin/escapement_worktree.py",
+    "bin/escapement_worktree_activity.py",
     "bin/escapement_worktree_bootstrap.py",
+    "bin/escapement_worktree_cleanup.py",
+    "bin/escapement_worktree_finish.py",
     "bin/escapement_worktree_git.py",
+    "bin/escapement_worktree_github.py",
+    "bin/escapement_worktree_registry.py",
 }
 CODEX_HOOK_SUPPORT = {
     # merge_authorization_gate.py resolves this sibling via its plugin-relative
@@ -81,8 +86,17 @@ CODEX_HOOK_SUPPORT = {
     "harness/bin/execution_ledger.py",
     "harness/bin/execution_store.py",
     "harness/bin/execution_validation.py",
+    "harness/bin/execution_supervisor.py",
+    "harness/bin/schedule_store.py",
+    "harness/bin/supervisor_health.py",
     "harness/bin/thread_identity.py",
     "harness/bin/trusted_source.py",
+    "harness/bin/wakeup_dispatch.py",
+    "harness/bin/wakeup_waker.py",
+    "harness/bin/worktree_lifecycle_supervisor.py",
+    "harness/schemas/contract.schema.json",
+    "harness/schemas/executions.schema.json",
+    "harness/schemas/scheduled.schema.json",
 }
 CLAUDE_EXTRA_HOOK_SUPPORT = {
     "claude/hooks/local_judge_health.py",

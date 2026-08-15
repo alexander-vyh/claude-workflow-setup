@@ -61,6 +61,8 @@ def _run_public_cli(
         capture_output=True,
         check=False,
         timeout=20,
+        env=os.environ
+        | {"CONTINUATION_HARNESS_HOME": str(primary.parent / "harness")},
     )
 
 
