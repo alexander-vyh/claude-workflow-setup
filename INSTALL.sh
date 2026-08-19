@@ -67,12 +67,42 @@ run() {
   fi
 }
 
+# B egk: resolve the EFFECTIVE pin dir for --update mode.
+# If the caller explicitly set ESCAPEMENT_PIN_DIR, use that (B2 override wins).
+# Otherwise read the sentinel symlink to find which checkout is actually live.
+# Falls back to the default ESCAPEMENT_PIN_DIR if no sentinel exists (B3 fresh).
+#
+# Defined before the pre-flight banner on purpose: bash resolves functions at
+# call time, so the banner can only report the effective pin if this is already
+# in scope. It used to sit further down, which left the banner printing the
+# unresolved default — a path the run never touched.
+resolve_effective_pin_dir() {
+  if [[ "$_PIN_DIR_EXPLICIT" == "set" ]]; then
+    echo "$ESCAPEMENT_PIN_DIR"
+    return
+  fi
+  # claude/bin is retained as the pinned auxiliary sentinel after plugin cutover.
+  local sentinel="$CLAUDE_DIR/bin"
+  if [[ -L "$sentinel" ]]; then
+    local target
+    target="$(readlink "$sentinel")"
+    local checkout_root
+    checkout_root="${target%%/claude/*}"
+    if [[ -n "$checkout_root" && -d "$checkout_root/.git" ]]; then
+      echo "$checkout_root"
+      return
+    fi
+  fi
+  # No sentinel or unresolvable — fall through to the default.
+  echo "$ESCAPEMENT_PIN_DIR"
+}
+
 # --- Pre-flight ---
 echo "==> Escapement installer"
 echo "    repo:   $REPO_DIR"
 echo "    claude: $CLAUDE_DIR"
 echo "    beads:  $BEADS_DIR"
-echo "    deploy: $([ "$DEV_MODE" == true ] && echo "live working tree (--dev)" || echo "pinned checkout ($ESCAPEMENT_PIN_DIR @ $ESCAPEMENT_PIN_REF)")"
+echo "    deploy: $([ "$DEV_MODE" == true ] && echo "live working tree (--dev)" || echo "pinned checkout ($(resolve_effective_pin_dir) @ $ESCAPEMENT_PIN_REF)")"
 echo "    mode:   $MODE$([ "$DRY_RUN" == true ] && echo ' (dry-run)')"
 echo
 
@@ -223,31 +253,6 @@ ensure_pinned_checkout() {
     run git clone --quiet "$ESCAPEMENT_PIN_REMOTE" "$pin_dir"
     run git -C "$pin_dir" checkout --quiet "$ESCAPEMENT_PIN_REF"
   fi
-}
-
-# B egk: resolve the EFFECTIVE pin dir for --update mode.
-# If the caller explicitly set ESCAPEMENT_PIN_DIR, use that (B2 override wins).
-# Otherwise read the sentinel symlink to find which checkout is actually live.
-# Falls back to the default ESCAPEMENT_PIN_DIR if no sentinel exists (B3 fresh).
-resolve_effective_pin_dir() {
-  if [[ "$_PIN_DIR_EXPLICIT" == "set" ]]; then
-    echo "$ESCAPEMENT_PIN_DIR"
-    return
-  fi
-  # claude/bin is retained as the pinned auxiliary sentinel after plugin cutover.
-  local sentinel="$CLAUDE_DIR/bin"
-  if [[ -L "$sentinel" ]]; then
-    local target
-    target="$(readlink "$sentinel")"
-    local checkout_root
-    checkout_root="${target%%/claude/*}"
-    if [[ -n "$checkout_root" && -d "$checkout_root/.git" ]]; then
-      echo "$checkout_root"
-      return
-    fi
-  fi
-  # No sentinel or unresolvable — fall through to the default.
-  echo "$ESCAPEMENT_PIN_DIR"
 }
 
 converge_plugin() {
