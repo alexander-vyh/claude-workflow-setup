@@ -13,7 +13,6 @@ Exit codes:
   0 — always (silent success or swallowed failure)
 """
 
-import os
 import sys
 import time
 from pathlib import Path

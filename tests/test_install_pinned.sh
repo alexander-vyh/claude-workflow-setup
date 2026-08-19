@@ -292,6 +292,17 @@ if [ "$cws_after" != "$cws_before" ] && [ "$cws_after" != "MISSING" ]; then
 else
   bad "bare --update did not advance the live CWS auxiliary pin"
 fi
+
+# The banner must name the pin the run will actually touch. It previously
+# printed the unresolved default, so an operator reading it on a machine whose
+# live pin is NOT the default sees a path the run never uses -- and reasonably
+# concludes an orphan pin is about to be created.
+banner="$(grep -m1 '^    deploy:' "$T3/update.log" 2>/dev/null || echo '')"
+case "$banner" in
+  *"/.cws-pinned"*) ok "banner names the effective pin, not the default" ;;
+  *"/.escapement-pinned"*) bad "banner advertises the default pin while operating on .cws-pinned: $banner" ;;
+  *) bad "banner did not report a pinned checkout at all: $banner" ;;
+esac
 if [ "$cws_after" != "$cws_before" ]; then
   ok "no silent wrong-directory update"
 elif [ "$upd_rc" -ne 0 ]; then
