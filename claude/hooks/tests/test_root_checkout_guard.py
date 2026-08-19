@@ -477,3 +477,176 @@ def test_missing_or_malformed_payload_fails_open():
 
     assert code == 0
     assert output == {}, f"malformed payload must fail open; got {raw!r}"
+
+
+# ---------------------------------------------------------------------------
+# Shell write-target resolution
+#
+# The guard's oracle is the shape of the path a command actually writes to, not
+# the shape of the session's cwd. A command issued from inside a primary
+# checkout that writes somewhere else is ordinary work and must be allowed;
+# a command that writes into the checkout must be denied no matter where it
+# was issued from.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "command",
+    (
+        "mkdir /tmp/tdd-rerun/logs",
+        "mkdir -p /tmp/tdd-rerun/logs",
+        "rm -rf /tmp/scratch",
+        "touch /tmp/scratch/file",
+        "mv /tmp/a /tmp/b",
+        "cp -rf /tmp/a /tmp/b",
+        "tee /tmp/out.txt",
+        "rmdir /tmp/empty",
+        "install -m 0755 /tmp/src /tmp/dest",
+        "mkdir -m 0755 /tmp/newdir",
+    ),
+)
+def test_shell_write_outside_checkout_is_allowed_from_inside_it(tmp_path, command):
+    """cwd inside the repo must not condemn a command that writes elsewhere."""
+    repo = _make_primary_beads_repo(tmp_path)
+
+    code, output, raw = _run_payload(_bash_payload(command, cwd=repo))
+
+    assert code == 0
+    assert _decision(output) is None, raw
+
+
+@pytest.mark.parametrize(
+    "template",
+    (
+        "mkdir {repo}/newdir",
+        "mkdir -p {repo}/a/b",
+        "rm -rf {repo}/src",
+        "rm {repo}/src/app.py",
+        "touch {repo}/newfile",
+        "rmdir {repo}/src",
+        "tee {repo}/out.txt",
+        "cp /tmp/src {repo}/dest",
+        "install -m 0755 /tmp/src {repo}/dest",
+        "mv /tmp/src {repo}/dest",
+    ),
+)
+def test_shell_write_into_checkout_is_denied_from_outside(tmp_path, template):
+    """Negative control: the guard must not be neutered for real in-repo writes."""
+    repo = _make_primary_beads_repo(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+
+    code, output, raw = _run_payload(
+        _bash_payload(template.format(repo=repo), cwd=outside)
+    )
+
+    assert code == 0
+    assert _decision(output) == "deny", raw
+    assert "primary checkout" in _reason(output)
+
+
+def test_relative_shell_write_still_resolves_against_cwd(tmp_path):
+    repo = _make_primary_beads_repo(tmp_path)
+
+    code, output, raw = _run_payload(_bash_payload("mkdir newdir", cwd=repo))
+
+    assert code == 0
+    assert _decision(output) == "deny", raw
+
+
+def test_relative_shell_write_follows_a_cd_out_of_the_checkout(tmp_path):
+    repo = _make_primary_beads_repo(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+
+    code, output, raw = _run_payload(
+        _bash_payload(f"cd {outside} && mkdir newdir", cwd=repo)
+    )
+
+    assert code == 0
+    assert _decision(output) is None, raw
+
+
+def test_relative_shell_write_follows_a_cd_into_the_checkout(tmp_path):
+    repo = _make_primary_beads_repo(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+
+    code, output, raw = _run_payload(
+        _bash_payload(f"cd {repo} && touch newfile", cwd=outside)
+    )
+
+    assert code == 0
+    assert _decision(output) == "deny", raw
+
+
+def test_moving_a_file_out_of_the_checkout_is_denied(tmp_path):
+    """mv removes its sources, so an in-repo SOURCE mutates the checkout."""
+    repo = _make_primary_beads_repo(tmp_path)
+
+    code, output, raw = _run_payload(
+        _bash_payload(f"mv {repo}/src/app.py /tmp/app.py", cwd=repo)
+    )
+
+    assert code == 0
+    assert _decision(output) == "deny", raw
+
+
+def test_copying_a_file_out_of_the_checkout_is_allowed(tmp_path):
+    """cp only writes its destination; reading the repo is not a mutation."""
+    repo = _make_primary_beads_repo(tmp_path)
+
+    code, output, raw = _run_payload(
+        _bash_payload(f"cp {repo}/src/app.py /tmp/app.py", cwd=repo)
+    )
+
+    assert code == 0
+    assert _decision(output) is None, raw
+
+
+def test_flag_values_are_not_mistaken_for_write_targets(tmp_path):
+    """`0755` must not resolve to <repo>/0755 and trigger a denial."""
+    repo = _make_primary_beads_repo(tmp_path)
+
+    code, output, raw = _run_payload(
+        _bash_payload("install -m 0755 -o me -g staff /tmp/a /tmp/b", cwd=repo)
+    )
+
+    assert code == 0
+    assert _decision(output) is None, raw
+
+
+def test_target_directory_flag_is_treated_as_the_destination(tmp_path):
+    repo = _make_primary_beads_repo(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+
+    code, output, raw = _run_payload(
+        _bash_payload(f"cp -t {repo}/src /tmp/a /tmp/b", cwd=outside)
+    )
+
+    assert code == 0
+    assert _decision(output) == "deny", raw
+
+
+def test_end_of_options_marker_exposes_dash_prefixed_paths(tmp_path):
+    repo = _make_primary_beads_repo(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+
+    code, output, raw = _run_payload(
+        _bash_payload(f"rm -rf -- {repo}/src", cwd=outside)
+    )
+
+    assert code == 0
+    assert _decision(output) == "deny", raw
+
+
+def test_command_with_no_path_operand_falls_back_to_cwd(tmp_path):
+    """Conservative default: an unparseable operand list keeps the old behavior."""
+    repo = _make_primary_beads_repo(tmp_path)
+
+    code, output, raw = _run_payload(_bash_payload("rm -rf", cwd=repo))
+
+    assert code == 0
+    assert _decision(output) == "deny", raw

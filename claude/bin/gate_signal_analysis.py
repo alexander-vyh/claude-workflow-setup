@@ -98,6 +98,24 @@ def _resolve_signal_path() -> Path | None:
     return None
 
 
+def _signal_sources() -> list[Path]:
+    """Every existing signal file, unioned across both sinks.
+
+    Defers to claude/hooks/_gate_signal.py, which owns path resolution on the
+    write side. The mirror above covers only `.beads/`, so on its own it
+    reports a half-corpus wherever gates fired without a beads dir.
+    """
+    hooks_dir = Path(__file__).resolve().parent.parent / "hooks"
+    if str(hooks_dir) not in sys.path:
+        sys.path.insert(0, str(hooks_dir))
+    try:
+        from _gate_signal import signal_sources  # type: ignore
+    except ImportError:
+        primary = _resolve_signal_path()
+        return [primary] if primary is not None and primary.is_file() else []
+    return signal_sources()
+
+
 def _parse_since(token: str) -> timedelta:
     """Parse '1d', '7d', '24h', '30m' into a timedelta."""
     if not token:
@@ -427,15 +445,16 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {e}", file=sys.stderr)
         return 2
 
-    signal_path = _resolve_signal_path()
+    sources = _signal_sources()
 
-    # Fail soft: no .beads/ at all, or no signal file yet. Emit the
-    # report headers with zero rows so the learning loop is observably
-    # closed, and exit 0 — a missing log is a normal early state.
-    if signal_path is None or not signal_path.is_file():
-        where = signal_path if signal_path is not None else "<no .beads/ found>"
-        print(f"notice: no gate-signal log at {where} — nothing to analyze yet "
-              "(fail-soft).", file=sys.stderr)
+    # Fail soft: no signal file in either store yet. Emit the report headers
+    # with zero rows so the learning loop is observably closed, and exit 0 —
+    # a missing log is a normal early state.
+    if not sources:
+        primary = _resolve_signal_path()
+        where = primary if primary is not None else "<no .beads/ found>"
+        print(f"notice: no gate-signal log at {where} or in the user-level "
+              "fallback — nothing to analyze yet (fail-soft).", file=sys.stderr)
         empty = {"total_entries": 0, "frequency": {}, "recurrence": [], "half_life": []}
         if args.json:
             print(json.dumps(empty, indent=2))
@@ -443,7 +462,9 @@ def main(argv: list[str] | None = None) -> int:
             _print_human(empty, args.since, args.half_life)
         return 0
 
-    entries = _read_entries(signal_path, since)
+    entries: list[dict[str, Any]] = []
+    for source in sources:
+        entries.extend(_read_entries(source, since))
     model = analyze(entries)
 
     if args.json:

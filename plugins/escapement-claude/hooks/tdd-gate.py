@@ -3,9 +3,11 @@
 
 Fires as PreToolUse on Write and Edit.
 
-When writing to an implementation file in a repo with a tests/ directory,
-checks that test files have been modified in the working tree first.
-If no test files are modified, prompts the user to confirm.
+When writing to an implementation file in a code project — one with test
+infrastructure or a language project manifest — checks that test files have
+been modified in the working tree first. If no test files are modified,
+prompts the user to confirm. Greenfield counts: a project whose tests/ dir
+does not exist yet is exactly where the question is still open.
 
 Severity: ask (not block) — the user can always override.
 
@@ -192,6 +194,34 @@ def has_tests_directory(repo_root: str) -> bool:
     return False
 
 
+# Files that mark a directory as a code project even before any test exists.
+_PROJECT_MANIFESTS = frozenset({
+    "pyproject.toml", "setup.py", "setup.cfg", "requirements.txt",  # Python
+    "package.json",                                                  # JS/TS
+    "Cargo.toml",                                                    # Rust
+    "go.mod",                                                        # Go
+    "mix.exs",                                                       # Elixir
+    "Gemfile",                                                       # Ruby
+    "pom.xml", "build.gradle", "build.gradle.kts",                    # JVM
+    "composer.json",                                                 # PHP
+})
+
+
+def has_project_manifest(repo_root: str) -> bool:
+    """Check whether the repo is a code project at all.
+
+    `has_tests_directory` answers "does test infrastructure already exist",
+    which is false for every greenfield project at the moment of its first
+    implementation write — precisely when the nudge matters most, and after
+    which the repo still has no tests/ dir, so the exemption would hold
+    forever. This answers the weaker question the gate actually needs: is
+    this a code project, as opposed to a docs or config repo where a TDD
+    prompt would be noise.
+    """
+    root = Path(repo_root)
+    return any((root / name).is_file() for name in _PROJECT_MANIFESTS)
+
+
 def get_modified_files(repo_root: str) -> list[str]:
     """Get all modified, staged, and untracked files in the working tree."""
     files: list[str] = []
@@ -302,8 +332,11 @@ def main() -> int:
     if not repo_root:
         return allow()
 
-    # Repo has no tests/ directory? Allow — no test infrastructure
-    if not has_tests_directory(repo_root):
+    # Neither test infrastructure nor a code-project manifest? Allow — a docs
+    # or config repo is not "actual dev". Test infrastructure alone is not
+    # enough of a signal: requiring it made the gate silent on greenfield,
+    # where the presence of tests is still an open question.
+    if not (has_tests_directory(repo_root) or has_project_manifest(repo_root)):
         return allow()
 
     # --- TDD enforcement ---
