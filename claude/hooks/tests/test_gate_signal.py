@@ -350,3 +350,83 @@ def test_record_fails_soft_when_fallback_also_unwritable(isolated_env, monkeypat
     assert persisted is False
     # The directory we created is still a directory (nothing clobbered it).
     assert (fallback_dir / _gate_signal._FALLBACK_FILENAME).is_dir()
+
+
+# ---------------------------------------------------------------------------
+# signal_sources: readers must see BOTH sinks
+#
+# record() splits its writes between `.beads/.gate-signal.jsonl` and the
+# user-level fallback depending on whether a beads dir is locatable. A reader
+# that consults one sink reports a partial corpus and cannot tell the
+# difference between "this gate never fired" and "it fired into the other
+# store" — which is how a whole worktree session goes missing.
+# ---------------------------------------------------------------------------
+
+def test_signal_sources_is_empty_when_nothing_was_ever_written(isolated_env):
+    assert _gate_signal.signal_sources() == []
+
+
+def test_signal_sources_finds_the_beads_store(isolated_env, monkeypatch):
+    beads_dir = isolated_env / ".beads"
+    beads_dir.mkdir()
+    record(gate_name="g", decision="allow", reason="r")
+
+    sources = _gate_signal.signal_sources()
+
+    assert [p.name for p in sources] == [_SIGNAL_FILENAME]
+
+
+def test_signal_sources_finds_the_fallback_store(isolated_env, monkeypatch):
+    """No .beads/ anywhere: the row lands in the fallback and must be visible."""
+    fallback_dir = isolated_env / "fallback"
+    monkeypatch.setenv(_gate_signal._FALLBACK_DIR_ENV, str(fallback_dir))
+    record(gate_name="g", decision="ask", reason="r")
+
+    sources = _gate_signal.signal_sources()
+
+    assert len(sources) == 1
+    assert sources[0].parent == fallback_dir
+
+
+def test_signal_sources_unions_both_stores(isolated_env, monkeypatch):
+    """The real-world shape: some rows written without beads, some with."""
+    fallback_dir = isolated_env / "fallback"
+    monkeypatch.setenv(_gate_signal._FALLBACK_DIR_ENV, str(fallback_dir))
+    record(gate_name="early", decision="ask", reason="before beads existed")
+
+    (isolated_env / ".beads").mkdir()
+    record(gate_name="later", decision="allow", reason="after beads existed")
+
+    sources = _gate_signal.signal_sources()
+
+    assert len(sources) == 2
+    gates = set()
+    for source in sources:
+        for line in source.read_text(encoding="utf-8").splitlines():
+            gates.add(json.loads(line)["gate"])
+    assert gates == {"early", "later"}
+
+
+def test_signal_sources_does_not_create_the_fallback_directory(isolated_env, monkeypatch):
+    """Resolving paths to READ from must not have filesystem side effects."""
+    fallback_dir = isolated_env / "never-created"
+    monkeypatch.setenv(_gate_signal._FALLBACK_DIR_ENV, str(fallback_dir))
+
+    _gate_signal.signal_sources()
+
+    assert not fallback_dir.exists()
+
+
+def test_signal_sources_deduplicates_when_both_resolve_to_one_file(
+    isolated_env, monkeypatch
+):
+    """Guard against double-counting if the fallback is pointed at .beads/."""
+    beads_dir = isolated_env / ".beads"
+    beads_dir.mkdir()
+    record(gate_name="g", decision="allow", reason="r")
+    monkeypatch.setenv(_gate_signal._FALLBACK_DIR_ENV, str(beads_dir))
+    (beads_dir / _gate_signal._FALLBACK_FILENAME).write_text("", encoding="utf-8")
+
+    sources = _gate_signal.signal_sources()
+
+    assert len({p.resolve() for p in sources}) == len(sources)

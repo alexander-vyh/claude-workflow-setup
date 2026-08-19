@@ -61,6 +61,28 @@ GIT_STATE_CHANGING_SUBCOMMANDS = frozenset(
     }
 )
 SHELL_STATE_CHANGING_COMMANDS = frozenset({"cp", "install", "mkdir", "mv", "rm", "rmdir", "tee", "touch"})
+# Flags whose NEXT token is a value, not a path. Missing one turns a mode
+# string like `0755` into an operand that resolves against cwd, producing the
+# false denial this whole resolution exists to prevent. Keyed by command
+# because the same short flag means different things: `touch -t` is a
+# timestamp, `cp -t` is a destination directory.
+SHELL_VALUE_FLAGS = {
+    "cp": frozenset({"-S", "--suffix"}),
+    "install": frozenset({"-m", "--mode", "-o", "--owner", "-g", "--group", "-S", "--suffix"}),
+    "mkdir": frozenset({"-m", "--mode"}),
+    "mv": frozenset({"-S", "--suffix"}),
+    "rm": frozenset(),
+    "rmdir": frozenset(),
+    "tee": frozenset(),
+    "touch": frozenset({"-d", "--date", "-r", "--reference", "-t", "--time"}),
+}
+# Commands accepting an explicit destination directory; when given, it is the
+# only write target and every remaining operand is a source.
+SHELL_TARGET_DIR_COMMANDS = frozenset({"cp", "install", "mv"})
+SHELL_TARGET_DIR_FLAGS = frozenset({"-t", "--target-directory"})
+# Commands that only read their sources, so just the final operand is written.
+# `mv` is deliberately absent: it removes its sources, which mutates them.
+SHELL_DEST_ONLY_COMMANDS = frozenset({"cp", "install"})
 GIT_VALUE_FLAGS = frozenset({"-C", "-c", "--git-dir", "--work-tree", "--git-common-dir", "--namespace", "--super-prefix"})
 ENV_VALUE_FLAGS = frozenset({"-u", "--unset", "-S", "--split-string"})
 ENV_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
@@ -180,6 +202,58 @@ def _git_target_and_subcommand(tokens: list[str], cwd: Path) -> tuple[Path, str]
     return None
 
 
+def _shell_write_targets(tokens: list[str], cwd: Path) -> list[Path]:
+    """Resolve the paths a state-changing shell command actually writes to.
+
+    Returns an empty list when no operand can be identified, which lets the
+    caller keep its conservative cwd-based default rather than guessing.
+    """
+    start = _strip_command_prefixes(tokens)
+    if start is None:
+        return []
+    name = Path(tokens[start]).name
+    value_flags = SHELL_VALUE_FLAGS.get(name, frozenset())
+    takes_target_dir = name in SHELL_TARGET_DIR_COMMANDS
+
+    operands: list[str] = []
+    target_dir: str | None = None
+    end_of_options = False
+    i = start + 1
+    while i < len(tokens):
+        token = tokens[i]
+        if not end_of_options and token == "--":
+            end_of_options = True
+            i += 1
+            continue
+        if not end_of_options and token.startswith("-") and token != "-":
+            flag, _, inline_value = token.partition("=")
+            if takes_target_dir and flag in SHELL_TARGET_DIR_FLAGS:
+                if inline_value:
+                    target_dir = inline_value
+                elif i + 1 < len(tokens):
+                    target_dir = tokens[i + 1]
+                    i += 1
+            elif flag in value_flags and not inline_value and i + 1 < len(tokens):
+                i += 1
+            i += 1
+            continue
+        operands.append(token)
+        i += 1
+
+    if target_dir is not None:
+        selected = [target_dir]
+    elif name in SHELL_DEST_ONLY_COMMANDS and len(operands) > 1:
+        selected = [operands[-1]]
+    else:
+        selected = operands
+
+    resolved: list[Path] = []
+    for raw in selected:
+        candidate = Path(raw)
+        resolved.append(_safe_resolve(candidate if candidate.is_absolute() else cwd / candidate))
+    return resolved
+
+
 def _bash_mutation_target(command: str, cwd: Path) -> tuple[Path, str] | None:
     current_cwd = cwd
     for segment in SHELL_SEP_RE.split(command):
@@ -204,7 +278,16 @@ def _bash_mutation_target(command: str, cwd: Path) -> tuple[Path, str] | None:
                 return target, f"git {subcommand}"
             continue
         if name in SHELL_STATE_CHANGING_COMMANDS:
-            return _safe_resolve(current_cwd), name
+            targets = _shell_write_targets(tokens, current_cwd)
+            if not targets:
+                # No identifiable operand: fall back to the session's cwd.
+                return _safe_resolve(current_cwd), name
+            for target in targets:
+                if _primary_checkout_root_for(target) is not None:
+                    return target, name
+            # This segment writes outside any primary checkout; keep scanning
+            # the rest of the command line rather than clearing it wholesale.
+            continue
     return None
 
 

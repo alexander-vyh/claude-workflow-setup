@@ -12,6 +12,7 @@ Run from anywhere with:
 import importlib
 import io
 import json
+import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -228,10 +229,17 @@ class TestMainGitGuards:
         with patch("tdd_gate.find_git_root", return_value=None):
             assert _run_allowed("Write", "/tmp/scratch/app.py")
 
-    def test_no_tests_dir_allowed(self):
+    def test_no_tests_dir_and_no_project_manifest_allowed(self):
+        """A docs or config repo is not "actual dev" — stay quiet there.
+
+        Explicit spec change: test-infrastructure absence alone no longer
+        exempts a repo, because that made the gate silent on every greenfield
+        project's first write. A project manifest now also counts.
+        """
         with (
             patch("tdd_gate.find_git_root", return_value="/repo"),
             patch("tdd_gate.has_tests_directory", return_value=False),
+            patch("tdd_gate.has_project_manifest", return_value=False),
         ):
             assert _run_allowed("Write", "/repo/src/app.py")
 
@@ -438,3 +446,90 @@ class TestExpandedTestInfraDetection:
         import tempfile
         with tempfile.TemporaryDirectory() as tmpdir:
             assert not tdd_gate.has_tests_directory(tmpdir)
+
+
+# ---------------------------------------------------------------------------
+# main() — greenfield projects
+#
+# A gate that only fires once tests/ already exists is a regression guard, not
+# a genesis guard: it stays silent for exactly the writes that decide whether
+# a project has tests at all. These use a real git repo on disk rather than
+# patching the git helpers, so the shape being asserted is the shape a fresh
+# project actually has.
+# ---------------------------------------------------------------------------
+
+class TestGreenfieldProjects:
+    @staticmethod
+    def _repo(tmp_path: Path, *relative_paths: str) -> Path:
+        subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+        for relative in relative_paths:
+            target = tmp_path / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("", encoding="utf-8")
+        return tmp_path
+
+    def test_first_write_in_a_fresh_python_project_asks(self, tmp_path):
+        repo = self._repo(tmp_path, "pyproject.toml")
+        with patch("tdd_gate.get_modified_files", return_value=[]):
+            asked, output = _run("Write", str(repo / "slot_validator" / "validator.py"))
+        assert asked
+        assert "TDD" in json.dumps(output)
+
+    def test_second_write_still_asks_while_no_test_exists(self, tmp_path):
+        """The gap compounds: having skipped tests once, the repo still has no
+        tests/ dir, so the old exemption would keep the gate silent forever."""
+        repo = self._repo(tmp_path, "pyproject.toml", "slot_validator/validator.py")
+        with patch("tdd_gate.get_modified_files", return_value=["slot_validator/validator.py"]):
+            asked, _ = _run("Write", str(repo / "slot_validator" / "rules.py"))
+        assert asked
+
+    def test_writing_the_test_first_is_allowed_before_any_tests_dir_exists(self, tmp_path):
+        repo = self._repo(tmp_path, "pyproject.toml")
+        assert _run_allowed("Write", str(repo / "tests" / "test_validator.py"))
+
+    def test_manifest_project_with_a_touched_test_file_is_allowed(self, tmp_path):
+        repo = self._repo(tmp_path, "pyproject.toml")
+        with patch("tdd_gate.get_modified_files", return_value=["tests/test_validator.py"]):
+            assert _run_allowed("Write", str(repo / "slot_validator" / "validator.py"))
+
+    def test_docs_only_repo_stays_quiet(self, tmp_path):
+        """Negative control: no manifest, no tests — not a code project."""
+        repo = self._repo(tmp_path, "README.md", "docs/guide.md")
+        with patch("tdd_gate.get_modified_files", return_value=[]):
+            assert _run_allowed("Write", str(repo / "tools" / "render.py"))
+
+    def test_repo_with_only_a_dotfile_stays_quiet(self, tmp_path):
+        repo = self._repo(tmp_path, ".gitignore")
+        with patch("tdd_gate.get_modified_files", return_value=[]):
+            assert _run_allowed("Write", str(repo / "app.py"))
+
+    def test_exempt_file_types_are_still_exempt_in_a_manifest_project(self, tmp_path):
+        repo = self._repo(tmp_path, "pyproject.toml")
+        with patch("tdd_gate.get_modified_files", return_value=[]):
+            assert _run_allowed("Write", str(repo / "config.yaml"))
+
+
+class TestProjectManifestDetection:
+    @staticmethod
+    def _root(tmp_path: Path, name: str) -> str:
+        (tmp_path / name).write_text("", encoding="utf-8")
+        return str(tmp_path)
+
+    def test_recognizes_common_manifests(self, tmp_path):
+        for index, name in enumerate((
+            "pyproject.toml", "setup.py", "package.json",
+            "Cargo.toml", "go.mod", "Gemfile", "pom.xml",
+        )):
+            root = tmp_path / str(index)
+            root.mkdir()
+            assert tdd_gate.has_project_manifest(self._root(root, name)), name
+
+    def test_ignores_prose_and_config(self, tmp_path):
+        for index, name in enumerate(("README.md", "LICENSE", ".gitignore", "notes.txt")):
+            root = tmp_path / f"n{index}"
+            root.mkdir()
+            assert not tdd_gate.has_project_manifest(self._root(root, name)), name
+
+    def test_directory_named_like_a_manifest_does_not_count(self, tmp_path):
+        (tmp_path / "package.json").mkdir()
+        assert not tdd_gate.has_project_manifest(str(tmp_path))

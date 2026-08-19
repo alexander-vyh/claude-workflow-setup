@@ -79,17 +79,38 @@ def _parse_since(token: str) -> timedelta:
 
 
 def find_signal_logs(root: Path) -> list[Path]:
-    """Return all `.beads/.gate-signal.jsonl` files under root."""
-    if not root.is_dir():
-        return []
+    """Return every gate-signal log this monitor should read.
+
+    Per-repo `.beads/.gate-signal.jsonl` files under root, plus the single
+    user-level fallback sink. Gates firing in a context without a locatable
+    `.beads/` — a linked worktree, a scratch directory — write there instead,
+    so a per-repo scan alone misses whole sessions rather than a few rows.
+    """
     out: list[Path] = []
-    for entry in root.iterdir():
-        if not entry.is_dir() or entry.is_symlink():
-            continue
-        signal_log = entry / ".beads" / ".gate-signal.jsonl"
-        if signal_log.is_file():
-            out.append(signal_log)
+    if root.is_dir():
+        for entry in root.iterdir():
+            if not entry.is_dir() or entry.is_symlink():
+                continue
+            signal_log = entry / ".beads" / ".gate-signal.jsonl"
+            if signal_log.is_file():
+                out.append(signal_log)
+    fallback = _fallback_signal_log()
+    if fallback is not None and fallback not in out:
+        out.append(fallback)
     return sorted(out)
+
+
+def _fallback_signal_log() -> Path | None:
+    """The user-level fallback sink, if it exists.
+
+    Mirrors the writer's resolution in claude/hooks/_gate_signal.py without
+    importing it: this script runs standalone against arbitrary roots and
+    must not depend on a sibling checkout being present.
+    """
+    env_dir = os.environ.get("GATE_SIGNAL_FALLBACK_DIR")
+    base = Path(env_dir) if env_dir else Path("~/.claude/harness")
+    candidate = base.expanduser() / "gate-signal-fallback.jsonl"
+    return candidate if candidate.is_file() else None
 
 
 def read_entries(

@@ -36,7 +36,12 @@ _SIGNAL_FILENAME = ".gate-signal.jsonl"
 
 
 def _resolve_signal_path() -> Path | None:
-    """Mirror of _gate_signal._resolve_signal_path."""
+    """Mirror of _gate_signal._resolve_signal_path.
+
+    Retained for callers that need the primary `.beads/` location specifically.
+    Readers wanting the full corpus must use `_signal_sources()`, which also
+    covers the user-level fallback sink.
+    """
     beads_dir_env = os.environ.get("BEADS_DIR")
     if beads_dir_env:
         candidate = Path(beads_dir_env)
@@ -50,6 +55,25 @@ def _resolve_signal_path() -> Path | None:
             return beads / _SIGNAL_FILENAME
 
     return None
+
+
+def _signal_sources() -> list[Path]:
+    """Every existing signal file, unioned across both sinks.
+
+    Path resolution is owned by claude/hooks/_gate_signal.py, which does the
+    writing; this reader defers to it rather than mirroring it, because the
+    mirror above is exactly what drifted when the writer gained a fallback
+    sink and the readers did not.
+    """
+    hooks_dir = Path(__file__).resolve().parent.parent / "hooks"
+    if str(hooks_dir) not in sys.path:
+        sys.path.insert(0, str(hooks_dir))
+    try:
+        from _gate_signal import signal_sources  # type: ignore
+    except ImportError:
+        primary = _resolve_signal_path()
+        return [primary] if primary is not None and primary.is_file() else []
+    return signal_sources()
 
 
 def _parse_since(token: str) -> timedelta:
@@ -195,14 +219,14 @@ def main() -> int:
         print(f"error: {e}", file=sys.stderr)
         return 2
 
-    signal_path = _resolve_signal_path()
-    if signal_path is None:
-        print("error: no .beads/ directory found from cwd or BEADS_DIR env var",
-              file=sys.stderr)
-        return 1
-    if not signal_path.is_file():
-        print(f"note: signal file does not exist yet at {signal_path}",
-              file=sys.stderr)
+    sources = _signal_sources()
+    if not sources:
+        if _resolve_signal_path() is None:
+            print("error: no .beads/ directory found from cwd or BEADS_DIR env var, "
+                  "and no user-level fallback signal file exists",
+                  file=sys.stderr)
+            return 1
+        print("note: no signal file exists yet in either store", file=sys.stderr)
         if args.json:
             print(json.dumps({"total_entries": 0}))
         else:
@@ -210,7 +234,9 @@ def main() -> int:
             print("  total entries: 0")
         return 0
 
-    entries = _read_entries(signal_path, since, args.gate, args.decision)
+    entries: list[dict[str, Any]] = []
+    for source in sources:
+        entries.extend(_read_entries(source, since, args.gate, args.decision))
     summary = _summarize(entries)
 
     if args.json:

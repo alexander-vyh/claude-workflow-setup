@@ -108,7 +108,7 @@ def _resolve_waiver_path() -> Path | None:
     return beads / _WAIVER_FILENAME if beads is not None else None
 
 
-def _resolve_fallback_path() -> Path | None:
+def _resolve_fallback_path(create: bool = True) -> Path | None:
     """Return the user-level fallback signal path.
 
     Used only when the primary `.beads/` signal path is unresolvable, so the
@@ -117,15 +117,48 @@ def _resolve_fallback_path() -> Path | None:
     GATE_SIGNAL_FALLBACK_DIR if set, else `~/.claude/harness/`; it is created
     if absent. Returns None only if even the directory cannot be prepared —
     record() then degrades to its existing fail-soft no-op. Never raises.
+
+    Readers pass create=False: resolving a path to read from should not have
+    the side effect of creating a directory.
     """
     try:
         env_dir = os.environ.get(_FALLBACK_DIR_ENV)
         base = Path(env_dir) if env_dir else _DEFAULT_FALLBACK_DIR
         base = base.expanduser()
-        base.mkdir(parents=True, exist_ok=True)
+        if create:
+            base.mkdir(parents=True, exist_ok=True)
         return base / _FALLBACK_FILENAME
     except Exception:
         return None
+
+
+def signal_sources() -> list[Path]:
+    """Return every existing signal file a reader must union.
+
+    record() writes to `.beads/.gate-signal.jsonl` when a beads dir is
+    locatable and to the user-level fallback when it is not, so a reader
+    consulting only one of them silently under-reports. This is not an edge
+    case: a linked worktree without its own `.beads/` sends an entire
+    session's gate history to the fallback, where every `.beads/`-only reader
+    is blind to it.
+
+    Path resolution lives here because this module owns the write side; a
+    reader re-deriving it is how the two drifted apart in the first place.
+    """
+    sources: list[Path] = []
+    seen: set[Path] = set()
+    for candidate in (_resolve_signal_path(), _resolve_fallback_path(create=False)):
+        if candidate is None or not candidate.is_file():
+            continue
+        try:
+            key = candidate.resolve()
+        except OSError:
+            key = candidate
+        if key in seen:
+            continue
+        seen.add(key)
+        sources.append(candidate)
+    return sources
 
 
 def record(
