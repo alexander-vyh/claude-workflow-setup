@@ -1033,6 +1033,41 @@
       }
     },
     {
+      "id": "bead_verify_nudge",
+      "description": "Advisory just-in-time nudge at bead creation: surfaces the bead-derived oracle convention (a fenced ```verify block inside --acceptance, read by harness/bin/derive_contract.py) when `bd create` carries no oracle. Non-blocking. Exists because the convention sat at 0/475 adoption while the injected rules listed bead-derived contracts as not-yet-built.",
+      "source": "claude/hooks/bead_verify_nudge.py",
+      "hosts": {
+        "claude": {
+          "status": "ready",
+          "events": [
+            {
+              "event": "PreToolUse",
+              "matcher": "Bash",
+              "command": "python3 -B ~/.claude/hooks/bead_verify_nudge.py"
+            }
+          ],
+          "fixtures": [
+            "claude/hooks/tests/test_bead_verify_nudge.py"
+          ]
+        },
+        "codex": {
+          "status": "ready",
+          "events": [
+            {
+              "event": "PreToolUse",
+              "matcher": "Bash",
+              "command": "python3 -B claude/hooks/bead_verify_nudge.py",
+              "timeout_seconds": 5
+            }
+          ],
+          "fixtures": [
+            "claude/hooks/tests/test_bead_verify_nudge.py::test_codex_bead_verify_nudge_fires_without_oracle",
+            "claude/hooks/tests/test_bead_verify_nudge.py::test_codex_bead_verify_nudge_silent_with_oracle"
+          ]
+        }
+      }
+    },
+    {
       "id": "review_nudge",
       "description": "Nudge toward /review when a prompt looks like a review request.",
       "source": "claude/hooks/review_nudge.py",

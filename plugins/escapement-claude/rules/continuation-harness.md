@@ -26,7 +26,48 @@ answer them and resume unless the user explicitly redirects or stops the work.
 
 ## How to declare a contract
 
-Before your first implementation tool call on any non-trivial task, scaffold a contract:
+### Preferred: declare the oracle on the bead, once
+
+If the work is tracked by a bead, put the oracle in the bead's acceptance criteria as
+a fenced `verify` block. `harness/bin/derive_contract.py` reads it and builds the
+contract — `goal` from the bead title, `verification_command` from the block,
+`source: bead-derived`. No second authoring step.
+
+The acceptance criteria carry prose plus one fenced block tagged `verify`:
+
+~~~text
+<what a user must be able to observe>
+
+```verify
+<shell command whose exit 0 proves that outcome>
+```
+~~~
+
+Pass that whole string to `bd create --acceptance=...` (or `bd update <id> --acceptance=...`
+to add one to an existing bead). A concrete example:
+
+~~~text
+The Finance close line reads plain language and states whether the close is
+authoritative or degraded. No rendered close-status string contains an
+underscore-derived enum, including for an unmapped basis value.
+
+```verify
+cd src/dashboards/frontend && npx vitest run outcome/outcome-1940.test.jsx
+```
+~~~
+
+Only a fence tagged `verify` counts, so an illustrative ``` block in the criteria is
+never mistaken for an oracle. Absent or trivial oracles (`true`, `:`, `echo x`) are
+rejected — the deriver is fail-closed, and **a bead with no verify block yields no
+contract at all**, which silently degrades "done" to whatever is mechanically
+checkable (a green suite, clean lint) rather than to the outcome the bead exists to
+produce.
+
+Write the oracle against the surface a reader actually sees — render the component,
+call the endpoint, query the report — not against a helper function. "A test exists"
+is not an outcome; "the line on the page reads X" is.
+
+### Fallback: hand-author when there is no bead
 
 ```bash
 python3 ~/.claude/harness/bin/init_contract.py \
@@ -194,4 +235,4 @@ hand.
 
 ## Status
 
-This rule is paired with the continuation-harness (May 2026). Code installs to `~/.claude/harness/bin/` (deployed by `INSTALL.sh` from the repo's `harness/` source); runtime state lives in `~/.claude/harness/` and is keyed per session (`threads/{session_id}/`) so concurrent agents never clobber each other. The full spec lives in the repo at `openspec/changes/continuation-harness/`. Still v0.1+: full 57-stall regression test, the launchd waker that actually fires scheduled wakeups, bead-derived contracts, and the supervisor daemon.
+This rule is paired with the continuation-harness (May 2026). Code installs to `~/.claude/harness/bin/` (deployed by `INSTALL.sh` from the repo's `harness/` source); runtime state lives in `~/.claude/harness/` and is keyed per session (`threads/{session_id}/`) so concurrent agents never clobber each other. The full spec lives in the repo at `openspec/changes/continuation-harness/`. Still v0.1+: full 57-stall regression test, the launchd waker that actually fires scheduled wakeups, and the supervisor daemon. (Bead-derived contracts shipped — `harness/bin/derive_contract.py`; see "How to declare a contract" above. Listing them as unbuilt is believed to be why adoption sat at 0 of 475 open beads in a real repo as of 2026-08-20.)
