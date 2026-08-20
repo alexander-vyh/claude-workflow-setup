@@ -78,10 +78,14 @@ def find_prepared_execution(tool_input: dict, ledger: dict) -> dict | None:
     if not isinstance(tool_input, dict) or not isinstance(ledger, dict):
         return None
     agent_name = tool_input.get("name")
+    # Current Claude Code builds run every subagent in the background and no
+    # longer pass run_in_background in tool_input (unknown fields are stripped
+    # by the Agent schema). Requiring the field made the gate deny every
+    # dispatch on those builds. Reject only an explicit foreground dispatch.
     if (
         not isinstance(agent_name, str)
         or not agent_name
-        or tool_input.get("run_in_background") is not True
+        or tool_input.get("run_in_background") is False
     ):
         return None
     matches = [
