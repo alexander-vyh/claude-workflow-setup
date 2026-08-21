@@ -7,6 +7,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import shutil
 import sys
 import tempfile
@@ -77,6 +78,9 @@ SHARED_RUNTIME_SUPPORT = {
     "bin/escapement_worktree_registry.py",
 }
 CODEX_HOOK_SUPPORT = {
+    # Codex Bash policy gates execute through one in-process dispatcher to avoid
+    # multiplying interpreter startup and filesystem pressure per tool call.
+    "claude/hooks/codex_pretool_dispatch.py",
     # merge_authorization_gate.py resolves this sibling via its plugin-relative
     # path. Without it, an explicitly authorized Codex repository is denied
     # fail-closed because the policy reader cannot be imported.
@@ -240,11 +244,43 @@ def _codex_plugin_command(command: str) -> str:
 
 def _render_codex_plugin_hooks(manifest: dict[str, Any]) -> str:
     hooks: dict[str, list[dict[str, Any]]] = {}
+    bash_sources: list[str] = []
+    bash_timeouts: list[int] = []
     for hook in manifest.get("hooks", []):
         host = hook.get("hosts", {}).get("codex", {})
         if host.get("status") != "ready":
             continue
         for event in host.get("events", []):
+            if event.get("event") == "PreToolUse" and event.get("matcher") == "Bash":
+                bash_sources.append(hook["source"])
+                if event.get("timeout_seconds") is not None:
+                    bash_timeouts.append(event["timeout_seconds"])
+
+    dispatcher_rendered = False
+    for hook in manifest.get("hooks", []):
+        host = hook.get("hosts", {}).get("codex", {})
+        if host.get("status") != "ready":
+            continue
+        for event in host.get("events", []):
+            if event.get("event") == "PreToolUse" and event.get("matcher") == "Bash":
+                if dispatcher_rendered:
+                    continue
+                command = (
+                    'python3 -B "${PLUGIN_ROOT}/claude/hooks/'
+                    'codex_pretool_dispatch.py"'
+                )
+                command += "".join(
+                    f" --gate {shlex.quote(source)}" for source in bash_sources
+                )
+                item = {
+                    "matcher": "Bash",
+                    "hooks": [{"type": "command", "command": command}],
+                }
+                if bash_timeouts:
+                    item["hooks"][0]["timeout"] = max(bash_timeouts)
+                hooks.setdefault("PreToolUse", []).append(item)
+                dispatcher_rendered = True
+                continue
             item: dict[str, Any] = {
                 "matcher": event.get("matcher", ""),
                 "hooks": [
