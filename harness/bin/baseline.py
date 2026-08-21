@@ -11,7 +11,8 @@ Output: harness/baseline-{YYYY-MM-DD}.json containing:
   - sessions_terminating_on_tool_call
   - sessions_terminating_on_plain_text
   - terminating_tool_call_rate
-  - validate_no_shirking_blocks (count of regex hook block messages in transcripts)
+  - shirking_blocks_in_transcripts (legacy: counts regex hook block messages; the
+    gate that produced them is retired, so this reads 0 on new transcripts)
 
 Re-run at the 7-day post-deploy mark and compare.
 """

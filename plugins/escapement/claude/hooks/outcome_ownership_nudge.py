@@ -11,7 +11,7 @@ Wiring note (why a broad `Bash` matcher, not `Bash(gh pr merge:*)`):
   Claude's argument-scoped matchers are command-PREFIX matchers — `Bash(gh pr merge:*)`
   does NOT match `cd /worktree\ngh pr merge …`, the exact newline-compound shape the cake
   incident used (transcript record 602). So this hook is wired on the broad `Bash`
-  matcher (like validate_no_shirking) and self-filters via `_is_ship_command`, matching
+  matcher and self-filters via `_is_ship_command`, matching
   the command TOKENS anywhere they appear rather than at a leading anchor. Same design on
   the codex surface. (The prefix-matcher blindspot also affects merge_authorization_gate
   and outcome_assertion_gate — tracked separately.)
@@ -28,7 +28,7 @@ Why this exists (binding failure, not doctrine gap):
   where the decision is made (the ship command).
 
 Deliberately NOT a language matcher and NOT a blocker:
-  `validate_no_shirking.py` already tries to BLOCK on dismissive language and missed this
+  `validate_no_shirking.py` (since RETIRED) tried to BLOCK on dismissive language and missed this
   exact paraphrase ("pre-existing dev-dataset test reds"). Chasing paraphrases with a
   regex is a losing arms race (see that file's FP-narrowing history). This hook does not
   detect shirking at all — it unconditionally re-states the standard at the ship point,

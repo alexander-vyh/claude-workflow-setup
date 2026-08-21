@@ -26,11 +26,8 @@
     "beads_formulas": "beads/formulas/*.json, beads/mol-status.sh when installed with --profile workflow"
   },
   "required_hooks": [
-    "validate_no_shirking.py",
     "test_oracle_brief_gate.py",
     "tdd-gate.py",
-    "implementation_echo_test_gate.py",
-    "oracle_downgrade_warning_gate.py",
     "file_complexity_gate.py",
     "serena_preference_gate.py",
     "context_burn_detector.py",

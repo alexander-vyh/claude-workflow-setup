@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# file-complexity-waiver: 1087 lines; delegated Stop policy is isolated in execution_stop_adapter.py, leaving this legacy hook with one adapter import and call. Broader split remains owned by bead e9v.7.
+# file-complexity-waiver: 1088 lines; delegated Stop policy is isolated in execution_stop_adapter.py, leaving this legacy hook with one adapter import and call. Broader split remains owned by bead e9v.7.
 """
 Claude Code Stop-hook adapter for continuation-harness.
 
@@ -11,7 +11,8 @@ State is keyed by the hook payload's session_id and, for a subagent, the
 CLAUDE_AGENT_ID actor identity. The session_id is also included in the incidents
 log for correlation.
 
-Coexists with ~/.claude/hooks/validate_no_shirking.py — both run on Stop;
+Previously coexisted with validate_no_shirking.py on Stop; that gate is retired,
+so this is now the sole Stop-time check.
 both can block. Additive coverage.
 """
 
@@ -26,7 +27,7 @@ import sys
 import time
 from typing import Optional, Tuple
 
-_TRANSCRIPT_WINDOW = 25_000  # bytes — same tail size as validate_no_shirking.py
+_TRANSCRIPT_WINDOW = 25_000  # bytes of transcript tail to scan
 
 # Self-locate for the sibling import — works whether this script lives in the
 # repo source tree or is installed to ~/.claude/harness/bin. No hardcoded path.
@@ -145,7 +146,7 @@ def _read_payload() -> dict:
 def _read_last_user_message(transcript_path: str) -> Optional[str]:
     """Return the most recent user message text from the transcript tail.
 
-    Mirrors the read_recent_messages pattern in validate_no_shirking.py so that
+    Reads the transcript tail directly (the pattern the retired shirking gate used) so that
     _user_released() in would_block_stop actually fires when the user says 'stop'.
     Returns None if transcript_path is empty, unreadable, or has no user turns.
     """

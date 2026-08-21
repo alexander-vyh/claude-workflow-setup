@@ -109,9 +109,17 @@ validate_plugin_root() {
   local plugin_root="$1"
   local required
   validate_plugin_root_for_update "$plugin_root" || return 1
+  # Sentinels for a partially-copied plugin. Both are transitive imports whose
+  # absence degrades a gate SILENTLY rather than loudly — which is exactly what
+  # this check exists to catch. `_gate_signal` is imported by 22 hooks (without
+  # it every gate decision goes unrecorded); `_worktree_cli` backs the worktree
+  # transaction root_checkout_guard points agents at.
+  #
+  # Previously magic_number_echo.py and oracle_reason_validation.py, retired
+  # with implementation_echo_test_gate.
   for required in \
-    hooks/magic_number_echo.py \
-    hooks/oracle_reason_validation.py
+    hooks/_gate_signal.py \
+    hooks/_worktree_cli.py
   do
     if [[ ! -e "$plugin_root/$required" ]]; then
       echo "FATAL: installed plugin is incomplete: $plugin_root/$required" >&2

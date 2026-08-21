@@ -691,40 +691,6 @@
       }
     },
     {
-      "id": "implementation_echo_test_gate",
-      "description": "Reject high-confidence implementation-echo tests.",
-      "source": "claude/hooks/implementation_echo_test_gate.py",
-      "hosts": {
-        "codex": {
-          "status": "ready",
-          "events": [
-            {
-              "event": "PreToolUse",
-              "matcher": "Bash",
-              "command": "python3 -B claude/hooks/implementation_echo_test_gate.py",
-              "timeout_seconds": 10
-            }
-          ],
-          "fixtures": [
-            "claude/hooks/tests/test_implementation_echo_test_gate.py::test_codex_implementation_echo_test_gate_blocks_shared_generated_literal"
-          ]
-        },
-        "claude": {
-          "status": "ready",
-          "events": [
-            {
-              "event": "PreToolUse",
-              "matcher": "Bash",
-              "command": "python3 -B ~/.claude/hooks/implementation_echo_test_gate.py"
-            }
-          ],
-          "fixtures": [
-            "claude/hooks/tests/test_implementation_echo_test_gate.py"
-          ]
-        }
-      }
-    },
-    {
       "id": "mol_status_check",
       "description": "Inject active molecule state on session start.",
       "source": "claude/hooks/mol_status_check.py",
@@ -864,65 +830,6 @@
           ],
           "fixtures": [
             "claude/hooks/tests/test_openspec_task_reconciliation_gate.py"
-          ]
-        }
-      }
-    },
-    {
-      "id": "oracle_downgrade_stop",
-      "description": "Stop-time oracle-downgrade advisory: runs the per-function oracle-strength differ over the full git diff (write-path-agnostic) and surfaces a non-blocking systemMessage on likely test weakening.",
-      "source": "claude/hooks/oracle_downgrade_stop.py",
-      "hosts": {
-        "codex": {
-          "status": "unsupported",
-          "unsupported_reason": "Depends on the Claude Stop event; Codex has no Stop-time hook to run the whole-diff oracle-strength differ."
-        },
-        "claude": {
-          "status": "ready",
-          "events": [
-            {
-              "event": "Stop",
-              "matcher": "",
-              "command": "python3 -B ~/.claude/hooks/oracle_downgrade_stop.py"
-            }
-          ],
-          "fixtures": [
-            "claude/hooks/tests/test_oracle_downgrade_stop.py::test_in_place_weakening_emits_advisory",
-            "claude/hooks/tests/test_oracle_downgrade_stop.py::test_non_stop_event_is_silent"
-          ]
-        }
-      }
-    },
-    {
-      "id": "oracle_downgrade_warning_gate",
-      "description": "Landing-time warning for likely test-oracle downgrades.",
-      "source": "claude/hooks/oracle_downgrade_warning_gate.py",
-      "hosts": {
-        "codex": {
-          "status": "ready",
-          "events": [
-            {
-              "event": "PreToolUse",
-              "matcher": "Bash",
-              "command": "python3 -B claude/hooks/oracle_downgrade_warning_gate.py",
-              "timeout_seconds": 10
-            }
-          ],
-          "fixtures": [
-            "claude/hooks/tests/test_oracle_downgrade_warning_gate.py::test_codex_oracle_downgrade_warning_gate_warns_on_weakened_assertion"
-          ]
-        },
-        "claude": {
-          "status": "ready",
-          "events": [
-            {
-              "event": "PreToolUse",
-              "matcher": "Bash",
-              "command": "python3 -B ~/.claude/hooks/oracle_downgrade_warning_gate.py"
-            }
-          ],
-          "fixtures": [
-            "claude/hooks/tests/test_oracle_downgrade_warning_gate.py"
           ]
         }
       }
@@ -1322,35 +1229,6 @@
           ],
           "fixtures": [
             "claude/settings.template.json"
-          ]
-        }
-      }
-    },
-    {
-      "id": "validate_no_shirking",
-      "description": "Block outcome-shirking (\"pre-existing failure\" evasion) at commit/push and Stop.",
-      "source": "claude/hooks/validate_no_shirking.py",
-      "hosts": {
-        "codex": {
-          "status": "unsupported",
-          "unsupported_reason": "Fires on the Claude-only Stop event and reads the Claude transcript path; Codex has no Stop lifecycle event."
-        },
-        "claude": {
-          "status": "ready",
-          "events": [
-            {
-              "event": "PreToolUse",
-              "matcher": "Bash",
-              "command": "python3 -B ~/.claude/hooks/validate_no_shirking.py"
-            },
-            {
-              "event": "Stop",
-              "matcher": "",
-              "command": "python3 -B ~/.claude/hooks/validate_no_shirking.py"
-            }
-          ],
-          "fixtures": [
-            "claude/hooks/tests/test_validate_no_shirking.py"
           ]
         }
       }

@@ -209,164 +209,7 @@ def test_claude_plugin_manifest_has_no_version_so_auto_update_works():
     )
 
 
-def test_claude_plugin_implementation_echo_gate_is_behaviorally_complete(tmp_path):
-    """The packaged gate must load its real analyzers, not permissive fallbacks."""
-    plugin_hooks = ROOT / "plugins" / "escapement-claude" / "hooks"
-    for dependency in ("magic_number_echo.py", "oracle_reason_validation.py"):
-        assert (plugin_hooks / dependency).is_file(), (
-            "Claude plugin omits an implementation-echo dependency and silently "
-            f"disables part of the gate: {dependency}"
-        )
 
-    source = tmp_path / "metric_descriptions.py"
-    test = tmp_path / "test_metrics.py"
-    source.write_text(
-        'PCT_AUTOMATED = "all-history snapshot reads ~91% because it carries older grants"\n'
-    )
-    test.write_text(
-        'def test_pct():\n    assert "91%" in describe("dw_x", "pct_automated")\n'
-    )
-    probe = (
-        "import importlib.util,json,sys;"
-        "root,source,test=sys.argv[1:];"
-        "sys.path.insert(0,root);"
-        "spec=importlib.util.spec_from_file_location("
-        "'packaged_gate',root+'/implementation_echo_test_gate.py');"
-        "gate=importlib.util.module_from_spec(spec);"
-        "sys.modules['packaged_gate']=gate;"
-        "spec.loader.exec_module(gate);"
-        "findings=gate.find_magic_number_echoes("
-        "{source:open(source).read()},{test:open(test).read()});"
-        "print(json.dumps([[finding.filepath,finding.token,finding.sources] "
-        "for finding in findings]))"
-    )
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            probe,
-            str(plugin_hooks),
-            str(source),
-            str(test),
-        ],
-        capture_output=True,
-        text=True,
-    )
-
-    assert result.returncode == 0, result.stderr
-    findings = json.loads(result.stdout)
-    assert findings and "91%" in str(findings), (
-        "packaged implementation-echo gate accepted the planted 91% echo; "
-        "its analyzer imports are probably falling back to no-op functions"
-    )
-
-    oracle_probe = (
-        "import importlib.util,json,sys;"
-        "root=sys.argv[1];"
-        "sys.path.insert(0,root);"
-        "spec=importlib.util.spec_from_file_location("
-        "'packaged_oracle',root+'/oracle_reason_validation.py');"
-        "module=importlib.util.module_from_spec(spec);"
-        "spec.loader.exec_module(module);"
-        "asserted=module.asserted_tokens({'pct_automated'});"
-        "print(json.dumps(["
-        "module.validate_oracle_reason("
-        "'the pct_automated literal is the asserted oracle',asserted),"
-        "module.validate_oracle_reason("
-        "'cross-checked against the upstream Salesforce report export totals',asserted)"
-        "]))"
-    )
-    oracle_result = subprocess.run(
-        [sys.executable, "-c", oracle_probe, str(plugin_hooks)],
-        capture_output=True,
-        text=True,
-    )
-    assert oracle_result.returncode == 0, oracle_result.stderr
-    assert json.loads(oracle_result.stdout) == ["circular", None], (
-        "packaged oracle-reason validator must reject a circular override while "
-        "preserving the independent-source escape path"
-    )
-
-
-def test_both_plugin_wrappers_bundle_data_fixture_echo_policy():
-    """The gate's fixture classifier must not fall back in either host."""
-    canonical = (ROOT / "claude" / "hooks" / "data_fixture_echo.py").read_bytes()
-    packaged = (
-        ROOT / "plugins" / "escapement-claude" / "hooks" / "data_fixture_echo.py",
-        ROOT / "plugins" / "escapement" / "claude" / "hooks" / "data_fixture_echo.py",
-    )
-
-    for path in packaged:
-        assert path.is_file(), (
-            "plugin omits the implementation-echo data-fixture policy and "
-            f"silently falls back to hard-deny behavior: {path}"
-        )
-        assert path.read_bytes() == canonical
-
-
-@pytest.mark.parametrize(
-    "plugin_hooks",
-    (
-        ROOT / "plugins" / "escapement-claude" / "hooks",
-        ROOT / "plugins" / "escapement" / "claude" / "hooks",
-    ),
-)
-def test_both_rendered_gates_load_their_real_analyzers(plugin_hooks):
-    """Renderer and packaged runtime must preserve the gate's import closure."""
-    renderer_spec = importlib.util.spec_from_file_location(
-        "agent_surface_renderer_for_test",
-        RENDERER,
-    )
-    assert renderer_spec is not None and renderer_spec.loader is not None
-    renderer = importlib.util.module_from_spec(renderer_spec)
-    renderer_spec.loader.exec_module(renderer)
-    manifest = renderer._load_manifest(MANIFEST)
-    targets = renderer.rendered_targets(ROOT, manifest)
-
-    dependencies = (
-        "data_fixture_echo.py",
-        "magic_number_echo.py",
-        "oracle_reason_validation.py",
-    )
-    for dependency in dependencies:
-        canonical = (ROOT / "claude" / "hooks" / dependency).read_text(
-            encoding="utf-8"
-        )
-        target = plugin_hooks / dependency
-        assert targets.get(target) == canonical, (
-            "renderer omits or stales an implementation-echo dependency and "
-            f"would activate a permissive runtime fallback: {target}"
-        )
-
-    probe = (
-        "import importlib.util,json,sys;"
-        "root=sys.argv[1];"
-        "sys.path.insert(0,root);"
-        "spec=importlib.util.spec_from_file_location("
-        "'packaged_gate',root+'/implementation_echo_test_gate.py');"
-        "gate=importlib.util.module_from_spec(spec);"
-        "sys.modules['packaged_gate']=gate;"
-        "spec.loader.exec_module(gate);"
-        "asserted=gate.asserted_tokens({'pct_automated'});"
-        "print(json.dumps(["
-        "gate.validate_oracle_reason("
-        "'the pct_automated literal is the asserted oracle',asserted),"
-        "gate.validate_oracle_reason("
-        "'cross-checked against the upstream Salesforce report export totals',asserted),"
-        "gate.find_magic_number_echoes.__module__"
-        "]))"
-    )
-    result = subprocess.run(
-        [sys.executable, "-I", "-c", probe, str(plugin_hooks)],
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout) == [
-        "circular",
-        None,
-        "magic_number_echo",
-    ]
 
 
 def test_repo_root_is_a_marketplace_not_a_shadow_plugin():
@@ -576,9 +419,13 @@ def test_codex_plugin_wrapper_hooks_are_self_contained_and_codex_shaped():
 
     assert "bd prime" not in commands
     assert CODEX_PLUGIN_CONTEXT_FRAGMENT in commands
+    # Named gates the Codex surface must carry. These are artifact-grounded -- they
+    # resolve a path, a spec anchor, or a repo.json field -- which is why they port
+    # to Codex at all. implementation_echo_test_gate and oracle_downgrade_warning_gate
+    # were listed here until retired; both inspected diff/language, not durable state.
     assert any("test_oracle_brief_gate.py" in command for command in commands)
-    assert any("implementation_echo_test_gate.py" in command for command in commands)
-    assert any("oracle_downgrade_warning_gate.py" in command for command in commands)
+    assert any("merge_authorization_gate.py" in command for command in commands)
+    assert any("beads_worktree_guard.py" in command for command in commands)
 
     for command in commands:
         if "${PLUGIN_ROOT}/" not in command:

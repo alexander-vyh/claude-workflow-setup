@@ -45,20 +45,6 @@ SHARED_HOOK_SUPPORT = {
     "claude/hooks/_gate_signal.py",
     "claude/hooks/_local_judge_client.py",
     "claude/hooks/_gh_command.py",
-    # Landing-time gates share repository-neutral origin/HEAD + merge-base
-    # authority. Omitting this sibling makes installed hooks fail open.
-    "claude/hooks/git_change_scope.py",
-    # Both advisory boundaries use the corpus-backed per-function strength
-    # differ; its parser is a required transitive sibling in installed hosts.
-    "claude/hooks/oracle_strength_diff.py",
-    "claude/hooks/oracle_strength_parse.py",
-    # implementation_echo_test_gate imports this policy helper in both hosts.
-    # Omitting it makes the defensive import fallback hard-deny fixture echoes.
-    "claude/hooks/data_fixture_echo.py",
-    # implementation_echo_test_gate imports both analyzers in both hosts.
-    # Omitting either silently activates a permissive defensive fallback.
-    "claude/hooks/magic_number_echo.py",
-    "claude/hooks/oracle_reason_validation.py",
     # test_oracle_brief_gate keeps path/content and landing-command policy in
     # bounded siblings shared byte-for-byte by both host packages.
     "claude/hooks/oracle_brief_rapid.py",
@@ -833,10 +819,15 @@ def validate_codex_surfaces(targets: dict[Path, str], manifest: dict[str, Any]) 
             "Codex plugin hooks must include at least one behavioral gate beyond session context"
         )
 
+    # Named gates the Codex surface must carry. These are artifact-grounded —
+    # they resolve a path, a spec anchor, or a repo.json field — which is why
+    # they port to Codex at all. The language-inspecting gates that used to be
+    # listed here (implementation_echo_test_gate, oracle_downgrade_warning_gate)
+    # were retired; see refactor/retire-language-inspecting-gates.
     for required in (
         "test_oracle_brief_gate.py",
-        "implementation_echo_test_gate.py",
-        "oracle_downgrade_warning_gate.py",
+        "merge_authorization_gate.py",
+        "beads_worktree_guard.py",
     ):
         if not any(required in command for command in plugin_commands):
             errors.append(f"Codex plugin hooks must include {required}")

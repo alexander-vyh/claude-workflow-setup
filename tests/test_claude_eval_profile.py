@@ -172,7 +172,7 @@ def test_claude_eval_profiles_install_and_doctor_validate(profile, tmp_path):
 
     assert install.returncode == 0, install.stderr
     assert (target / "settings.json").is_file()
-    assert (target / "hooks" / "validate_no_shirking.py").is_file()
+    assert (target / "hooks" / "test_oracle_brief_gate.py").is_file()
     assert (target / "harness" / "bin" / "stop_hook.py").is_file()
     assert "/Users/" not in "\n".join(
         path.read_text(encoding="utf-8", errors="replace")
@@ -220,7 +220,7 @@ def test_claude_eval_doctor_fails_when_installed_dependency_missing(tmp_path):
     ])
     assert install.returncode == 0, install.stderr
 
-    missing = target / "hooks" / "validate_no_shirking.py"
+    missing = target / "hooks" / "test_oracle_brief_gate.py"
     missing.unlink()
 
     doctor = _run(["python3", str(DOCTOR), "--target", str(target)])

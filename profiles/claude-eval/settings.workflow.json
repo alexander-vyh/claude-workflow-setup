@@ -39,20 +39,6 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 -B ~/.claude/hooks/validate_no_shirking.py"
-          },
-          {
-            "type": "command",
-            "command": "python3 -B ~/.claude/hooks/implementation_echo_test_gate.py",
-            "timeout": 10000
-          },
-          {
-            "type": "command",
-            "command": "python3 -B ~/.claude/hooks/oracle_downgrade_warning_gate.py",
-            "timeout": 10000
-          },
-          {
-            "type": "command",
             "command": "python3 -B ~/.claude/hooks/serena_preference_gate.py"
           },
           {
@@ -376,14 +362,6 @@
       }
     ],
     "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 -B ~/.claude/hooks/validate_no_shirking.py"
-          }
-        ]
-      },
       {
         "hooks": [
           {

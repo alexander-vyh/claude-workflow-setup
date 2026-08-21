@@ -64,9 +64,6 @@ _DEFAULT_KNOWN_GATES = [
     "discovery_close_gate",
     "enforce_named_agents",
     "test_oracle_brief_gate",
-    "oracle_downgrade_warning_gate",
-    "implementation_echo_test_gate",
-    "validate_no_shirking",
 ]
 
 

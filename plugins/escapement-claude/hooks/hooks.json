@@ -287,15 +287,6 @@
       {
         "hooks": [
           {
-            "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/hooks/implementation_echo_test_gate.py\"",
-            "type": "command"
-          }
-        ],
-        "matcher": "Bash"
-      },
-      {
-        "hooks": [
-          {
             "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/hooks/no_direct_send_guard.py\"",
             "type": "command"
           }
@@ -346,15 +337,6 @@
           }
         ],
         "matcher": "Bash(bd close:*)"
-      },
-      {
-        "hooks": [
-          {
-            "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/hooks/oracle_downgrade_warning_gate.py\"",
-            "type": "command"
-          }
-        ],
-        "matcher": "Bash"
       },
       {
         "hooks": [
@@ -472,15 +454,6 @@
           }
         ],
         "matcher": "mcp__serena__insert_before_symbol"
-      },
-      {
-        "hooks": [
-          {
-            "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/hooks/validate_no_shirking.py\"",
-            "type": "command"
-          }
-        ],
-        "matcher": "Bash"
       },
       {
         "hooks": [
@@ -608,24 +581,6 @@
         "hooks": [
           {
             "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/harness/bin/stop_hook.py\"",
-            "type": "command"
-          }
-        ],
-        "matcher": ""
-      },
-      {
-        "hooks": [
-          {
-            "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/hooks/oracle_downgrade_stop.py\"",
-            "type": "command"
-          }
-        ],
-        "matcher": ""
-      },
-      {
-        "hooks": [
-          {
-            "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/hooks/validate_no_shirking.py\"",
             "type": "command"
           }
         ],
