@@ -53,15 +53,38 @@ def test_updater_refreshes_plugin_migrates_legacy_and_preserves_siblings(
     legacy = historical_legacy_skill_bytes()
     global_skill.write_bytes(legacy)
     sibling.write_bytes(b"user-owned sibling\n")
+    for directory, name in (
+        (codex_home / "hooks", "test_oracle_brief_gate.py"),
+        (codex_home / "hooks", "implementation_echo_test_gate.py"),
+        (codex_home / "hooks", "oracle_downgrade_warning_gate.py"),
+        (home / ".claude" / "hooks", "beads_worktree_guard.py"),
+    ):
+        directory.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / "claude" / "hooks" / name, directory / name)
     legacy_hooks = {
         "hooks": {
             "PreToolUse": [
                 {
                     "matcher": "Bash",
                     "hooks": [
-                        {"command": f"python3 {codex_home}/hooks/test_oracle_brief_gate.py"},
-                        {"command": f"python3 {codex_home}/hooks/implementation_echo_test_gate.py"},
-                        {"command": f"python3 {codex_home}/hooks/oracle_downgrade_warning_gate.py"},
+                        {
+                            "command": f"python3 {codex_home}/hooks/test_oracle_brief_gate.py",
+                            "statusMessage": "Checking Test Oracle Brief gate",
+                            "timeout": 30,
+                            "type": "command",
+                        },
+                        {
+                            "command": f"python3 {codex_home}/hooks/implementation_echo_test_gate.py",
+                            "statusMessage": "Checking implementation-echo tests",
+                            "timeout": 30,
+                            "type": "command",
+                        },
+                        {
+                            "command": f"python3 {codex_home}/hooks/oracle_downgrade_warning_gate.py",
+                            "statusMessage": "Checking oracle downgrade warnings",
+                            "timeout": 30,
+                            "type": "command",
+                        },
                         {
                             "command": (
                                 "python3 /repo/.git/codex-hooks/sifi_pr_policy.py"
@@ -72,7 +95,12 @@ def test_updater_refreshes_plugin_migrates_legacy_and_preserves_siblings(
                             "command": f"python3 {codex_home}/hooks/pr_create_guard.py",
                             "statusMessage": "preserve PR guard",
                         },
-                        {"command": f"python3 {home}/.claude/hooks/beads_worktree_guard.py"},
+                        {
+                            "command": f"python3 {home}/.claude/hooks/beads_worktree_guard.py",
+                            "statusMessage": "Checking bd worktree location (.worktrees/)",
+                            "timeout": 10,
+                            "type": "command",
+                        },
                     ],
                 }
             ]

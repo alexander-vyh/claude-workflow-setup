@@ -44,14 +44,24 @@ scripts in the same interpreter, and combines their public hook results.
 contexts, and system messages are retained in manifest order. A broken child
 gate becomes an explicit system warning while later gates still run, preserving
 the current fail-open-on-hook-error behavior without producing a host-level
-process storm.
+process storm. Each gate retains its manifest deadline, and the rendered host
+deadline covers the sum of those serial budgets plus bounded dispatch overhead.
+The dispatcher restores cwd, environment, import path, module registry, signal
+state, argv, and standard streams between gates so one gate cannot poison later
+policy evaluation. Payload input is capped at one MiB.
 
 The Codex updater invokes a new conservative pruner against
 `~/.codex/hooks.json`. It recognizes only gate paths rooted directly beneath the
 current user's legacy `~/.codex/hooks` or `~/.claude/hooks` directories and only
-when the dispatcher declares the same basename. It backs up the original file,
-preserves non-hook keys, group metadata, ordering, and unrelated hook objects,
-and is idempotent.
+when the exact historical PreToolUse/Bash registration metadata and a shipped
+content fingerprint prove Escapement ownership. Symlinks and ambiguous
+same-name files survive. It locks the migration, aborts if inspected bytes
+change, durably backs up the original file, preserves non-hook keys, group
+metadata, ordering, and unrelated hook objects, and is idempotent.
+
+The installed-runtime verifier binds `codex plugin list` to the selected
+`CODEX_HOME` and accepts only the corresponding versioned cache. It rejects
+disabled, stale, or cross-home plugin reports before running concurrent probes.
 
 ## Test Oracle Brief
 
@@ -68,17 +78,23 @@ and is idempotent.
 4. **Invalid solution classes:** raising deadlines; deleting all global hooks;
    dropping gates; spawning each gate as a subprocess behind one wrapper;
    swallowing deny/ask/advisory outputs; matching unrelated hooks by basename
-   alone.
+   alone; serializing gates under the old maximum timeout; leaking mutable
+   process state between gates; resolving a different Codex home; overwriting a
+   concurrently changed global hook file.
 5. **Fragile implementation to reject:** one wrapper command that still launches
    fifteen child Python processes.
 6. **Negative control:** a deny gate combined with an allow/advisory gate must
    produce deny; a same-named script outside the recognized legacy directories
-   must survive pruning.
-7. **Positive control:** multiple advisory contexts survive aggregation, and the
-   unrelated Sifi and PR-policy hooks remain after migration.
-8. **Missing/unresolved handling:** malformed dispatcher configuration fails
-   visibly; an individual gate exception is reported as a system warning while
-   remaining gates continue, matching current host behavior.
+   must survive pruning. Same-named personal and symlinked scripts inside those
+   directories also survive; a mutating gate cannot affect its witness; serial
+   budgets exceed the old maximum timeout; cross-home and stale installs fail.
+7. **Positive control:** all labelled decision reasons and multiple advisory
+   contexts survive aggregation, known fingerprinted legacy hooks are removed,
+   and the unrelated Sifi and PR-policy hooks remain after migration.
+8. **Missing/unresolved handling:** malformed or oversized dispatcher input and
+   cross-home installation state fail visibly; an individual gate exception or
+   timeout is reported as a system warning while remaining gates continue;
+   ambiguous migration provenance fails closed by preserving the hook.
 9. **Final outcome verification:** run
    `python3 scripts/verify_codex_hook_runtime.py --codex-home /Users/alexandervyhmeister/.codex --require-installed`,
    then execute a fresh Codex Bash command and inspect fresh runtime telemetry for

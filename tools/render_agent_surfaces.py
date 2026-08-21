@@ -159,6 +159,7 @@ CODEX_SKILL_FORBIDDEN = (
     "subagent_type",
 )
 MAX_CODEX_HOOK_TIMEOUT_SECONDS = 900
+CODEX_DISPATCH_OVERHEAD_SECONDS_PER_GATE = 1
 
 
 def _load_manifest(path: Path) -> dict[str, Any]:
@@ -270,14 +271,19 @@ def _render_codex_plugin_hooks(manifest: dict[str, Any]) -> str:
                     'codex_pretool_dispatch.py"'
                 )
                 command += "".join(
-                    f" --gate {shlex.quote(source)}" for source in bash_sources
+                    f" --gate {shlex.quote(source)} --gate-timeout {timeout}"
+                    for source, timeout in zip(
+                        bash_sources, bash_timeouts, strict=True
+                    )
                 )
                 item = {
                     "matcher": "Bash",
                     "hooks": [{"type": "command", "command": command}],
                 }
                 if bash_timeouts:
-                    item["hooks"][0]["timeout"] = max(bash_timeouts)
+                    item["hooks"][0]["timeout"] = sum(bash_timeouts) + (
+                        len(bash_timeouts) * CODEX_DISPATCH_OVERHEAD_SECONDS_PER_GATE
+                    )
                 hooks.setdefault("PreToolUse", []).append(item)
                 dispatcher_rendered = True
                 continue

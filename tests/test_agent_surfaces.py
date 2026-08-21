@@ -21,7 +21,7 @@ EXPECTED_CODEX_GATE = {
     "matcher": "Bash",
     "dispatcher": "codex_pretool_dispatch.py",
     "gate": "claude/hooks/test_oracle_brief_gate.py",
-    "timeout": 10,
+    "timeout": 150,
 }
 CODEX_PLUGIN_FINAL_RESPONSE_GAP_FRAGMENT = 'python3 -B "${PLUGIN_ROOT}/claude/hooks/codex_final_response_gap.py"'
 CODEX_PLUGIN_CONTEXT_FRAGMENT = (
@@ -471,6 +471,15 @@ def _dispatcher_gate_paths(command):
     ]
 
 
+def _dispatcher_gate_timeouts(command):
+    tokens = shlex.split(command)
+    return [
+        float(tokens[index + 1])
+        for index, token in enumerate(tokens[:-1])
+        if token == "--gate-timeout"
+    ]
+
+
 def _manifest_codex_bash_gate_paths():
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     paths = []
@@ -484,6 +493,19 @@ def _manifest_codex_bash_gate_paths():
             tokens = shlex.split(event["command"])
             paths.append(tokens[2] if tokens[:2] == ["python3", "-B"] else tokens[1])
     return paths
+
+
+def _manifest_codex_bash_gate_timeouts():
+    manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    timeouts = []
+    for hook in manifest["hooks"]:
+        codex = hook["hosts"]["codex"]
+        if codex["status"] != "ready":
+            continue
+        for event in codex["events"]:
+            if event["event"] == "PreToolUse" and event.get("matcher", "") == "Bash":
+                timeouts.append(float(event["timeout_seconds"]))
+    return timeouts
 
 
 def test_codex_plugin_is_the_sole_hook_owner():
@@ -517,7 +539,10 @@ def test_codex_plugin_is_the_sole_hook_owner():
     [bash_hook] = bash_hooks
     assert "codex_pretool_dispatch.py" in bash_hook["command"]
     assert _dispatcher_gate_paths(bash_hook["command"]) == _manifest_codex_bash_gate_paths()
-    assert bash_hook["timeout"] == 10
+    gate_timeouts = _dispatcher_gate_timeouts(bash_hook["command"])
+    assert gate_timeouts == _manifest_codex_bash_gate_timeouts()
+    assert bash_hook["timeout"] >= sum(gate_timeouts) + len(gate_timeouts)
+    assert bash_hook["timeout"] > max(gate_timeouts)
 
 
 def test_codex_beads_execution_skill_requires_explicit_execution_intent():

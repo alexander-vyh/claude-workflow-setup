@@ -3,13 +3,22 @@ from __future__ import annotations
 import copy
 import importlib.util
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 PRUNER = ROOT / "scripts" / "prune_codex_hooks.py"
+LEGACY_STATUS = {
+    "test_oracle_brief_gate.py": "Checking Test Oracle Brief gate",
+    "implementation_echo_test_gate.py": "Checking implementation-echo tests",
+    "oracle_downgrade_warning_gate.py": "Checking oracle downgrade warnings",
+    "beads_worktree_guard.py": "Checking bd worktree location (.worktrees/)",
+}
 
 
 def _module():
@@ -38,7 +47,23 @@ def _plugin_hooks() -> dict:
     }
 
 
+def _install_known_legacy_gate(directory: Path, name: str) -> Path:
+    directory.mkdir(parents=True, exist_ok=True)
+    target = directory / name
+    shutil.copy2(ROOT / "claude" / "hooks" / name, target)
+    return target
+
+
 def _live_hooks(codex_home: Path, home: Path) -> dict:
+    for name in (
+        "test_oracle_brief_gate.py",
+        "implementation_echo_test_gate.py",
+        "oracle_downgrade_warning_gate.py",
+    ):
+        _install_known_legacy_gate(codex_home / "hooks", name)
+    _install_known_legacy_gate(
+        home / ".claude" / "hooks", "beads_worktree_guard.py"
+    )
     sifi = {
         "command": "/usr/bin/python3 /repo/.git/codex-hooks/sifi_pr_policy.py",
         "timeout": 30,
@@ -61,16 +86,23 @@ def _live_hooks(codex_home: Path, home: Path) -> dict:
                     "hooks": [
                         {
                             "command": f'python3 "{codex_home}/hooks/test_oracle_brief_gate.py"',
+                            "statusMessage": LEGACY_STATUS["test_oracle_brief_gate.py"],
                             "timeout": 30,
                             "type": "command",
                         },
                         {
                             "command": f'python3 "{codex_home}/hooks/implementation_echo_test_gate.py"',
+                            "statusMessage": LEGACY_STATUS[
+                                "implementation_echo_test_gate.py"
+                            ],
                             "timeout": 30,
                             "type": "command",
                         },
                         {
                             "command": f'python3 "{codex_home}/hooks/oracle_downgrade_warning_gate.py"',
+                            "statusMessage": LEGACY_STATUS[
+                                "oracle_downgrade_warning_gate.py"
+                            ],
                             "timeout": 30,
                             "type": "command",
                         },
@@ -78,6 +110,7 @@ def _live_hooks(codex_home: Path, home: Path) -> dict:
                         pr_guard,
                         {
                             "command": f'python3 "{home}/.claude/hooks/beads_worktree_guard.py"',
+                            "statusMessage": LEGACY_STATUS["beads_worktree_guard.py"],
                             "timeout": 10,
                             "type": "command",
                         },
@@ -154,6 +187,8 @@ def test_only_direct_python_children_of_legacy_roots_are_pruned(tmp_path: Path) 
     direct = codex_home / "hooks" / "test_oracle_brief_gate.py"
     nested = codex_home / "hooks" / "nested" / "test_oracle_brief_gate.py"
     claude_direct = home / ".claude" / "hooks" / "beads_worktree_guard.py"
+    _install_known_legacy_gate(direct.parent, direct.name)
+    _install_known_legacy_gate(claude_direct.parent, claude_direct.name)
     live = {
         "hooks": {
             "PreToolUse": [
@@ -161,12 +196,16 @@ def test_only_direct_python_children_of_legacy_roots_are_pruned(tmp_path: Path) 
                     "matcher": "Bash",
                     "hooks": [
                         {
-                            "command": f'python3 -B "{direct}" --mode advisory',
-                            "statusMessage": "remove quoted direct child",
+                            "command": f'python3 "{direct}"',
+                            "statusMessage": LEGACY_STATUS[direct.name],
+                            "timeout": 30,
+                            "type": "command",
                         },
                         {
                             "command": f"python3 {claude_direct}",
-                            "statusMessage": "remove Claude direct child",
+                            "statusMessage": LEGACY_STATUS[claude_direct.name],
+                            "timeout": 10,
+                            "type": "command",
                         },
                         {
                             "command": f"python3 {nested}",
@@ -219,6 +258,130 @@ def test_only_direct_python_children_of_legacy_roots_are_pruned(tmp_path: Path) 
         "preserve pipe compound",
         "preserve redirection compound",
     ]
+
+
+def test_fingerprinted_hooks_with_wrong_registration_metadata_survive(
+    tmp_path: Path,
+) -> None:
+    module = _module()
+    codex_home = tmp_path / ".codex"
+    home = tmp_path / "home"
+    wrong_event = _install_known_legacy_gate(
+        codex_home / "hooks", "test_oracle_brief_gate.py"
+    )
+    wrong_matcher = _install_known_legacy_gate(
+        codex_home / "hooks", "implementation_echo_test_gate.py"
+    )
+    wrong_timeout = _install_known_legacy_gate(
+        codex_home / "hooks", "oracle_downgrade_warning_gate.py"
+    )
+    wrong_status = _install_known_legacy_gate(
+        home / ".claude" / "hooks", "beads_worktree_guard.py"
+    )
+    live = {
+        "hooks": {
+            "SessionStart": [
+                {
+                    "matcher": "Bash",
+                    "hooks": [
+                        {
+                            "command": f"python3 {wrong_event}",
+                            "statusMessage": LEGACY_STATUS[wrong_event.name],
+                            "timeout": 30,
+                            "type": "command",
+                        }
+                    ],
+                }
+            ],
+            "PreToolUse": [
+                {
+                    "matcher": "Write",
+                    "hooks": [
+                        {
+                            "command": f"python3 {wrong_matcher}",
+                            "statusMessage": LEGACY_STATUS[wrong_matcher.name],
+                            "timeout": 30,
+                            "type": "command",
+                        }
+                    ],
+                },
+                {
+                    "matcher": "Bash",
+                    "hooks": [
+                        {
+                            "command": f"python3 {wrong_timeout}",
+                            "statusMessage": LEGACY_STATUS[wrong_timeout.name],
+                            "timeout": 31,
+                            "type": "command",
+                        },
+                        {
+                            "command": f"python3 {wrong_status}",
+                            "statusMessage": "personal status",
+                            "timeout": 10,
+                            "type": "command",
+                        },
+                        {
+                            "command": f"python3 {wrong_event}",
+                            "statusMessage": LEGACY_STATUS[wrong_event.name],
+                            "timeout": 30,
+                            "type": "personal-command",
+                        },
+                    ],
+                },
+            ],
+        }
+    }
+
+    assert module.prune_hooks(
+        live,
+        module.plugin_owned_gate_scripts(_plugin_hooks()),
+        codex_home=codex_home,
+        home=home,
+    ) == live
+
+
+def test_personal_and_symlinked_same_name_hooks_inside_roots_survive(
+    tmp_path: Path,
+) -> None:
+    module = _module()
+    codex_home = tmp_path / ".codex"
+    home = tmp_path / "home"
+    personal = codex_home / "hooks" / "test_oracle_brief_gate.py"
+    personal.parent.mkdir(parents=True)
+    personal.write_text("# personal same-name policy\n", encoding="utf-8")
+    symlink = home / ".claude" / "hooks" / "beads_worktree_guard.py"
+    symlink.parent.mkdir(parents=True)
+    symlink.symlink_to(ROOT / "claude" / "hooks" / "beads_worktree_guard.py")
+    live = {
+        "hooks": {
+            "PreToolUse": [
+                {
+                    "matcher": "Bash",
+                    "hooks": [
+                        {
+                            "command": f"python3 {personal}",
+                            "statusMessage": LEGACY_STATUS[personal.name],
+                            "timeout": 30,
+                            "type": "command",
+                        },
+                        {
+                            "command": f"python3 {symlink}",
+                            "statusMessage": LEGACY_STATUS[symlink.name],
+                            "timeout": 10,
+                            "type": "command",
+                        },
+                    ],
+                }
+            ]
+        }
+    }
+
+    assert module.prune_hooks(
+        live,
+        module.plugin_owned_gate_scripts(_plugin_hooks()),
+        codex_home=codex_home,
+        home=home,
+    ) == live
 
 
 def test_cli_backs_up_original_bytes_and_is_idempotent(tmp_path: Path) -> None:
@@ -281,3 +444,61 @@ def test_cli_dry_run_is_byte_exact_and_creates_no_backup(tmp_path: Path) -> None
     assert live_path.read_text(encoding="utf-8") == original
     assert not list(codex_home.glob("hooks.json.backup-*"))
     assert "would remove" in result.stdout.lower()
+
+
+def test_write_aborts_if_live_hooks_change_after_inspection(tmp_path: Path) -> None:
+    module = _module()
+    live_path = tmp_path / "hooks.json"
+    backup_path = tmp_path / "hooks.json.backup-test"
+    inspected = b'{"hooks": {}}\n'
+    concurrent = b'{"hooks": {}, "concurrent": true}\n'
+    live_path.write_bytes(concurrent)
+
+    with pytest.raises(RuntimeError, match="changed during migration"):
+        module.write_if_unchanged(
+            live_path,
+            inspected=inspected,
+            replacement=b'{"hooks": {"PreToolUse": []}}\n',
+            backup_path=backup_path,
+        )
+
+    assert live_path.read_bytes() == concurrent
+    assert not backup_path.exists()
+
+
+def test_cli_entrypoint_does_not_overwrite_a_concurrent_change(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _module()
+    codex_home = tmp_path / ".codex"
+    codex_home.mkdir()
+    plugin_path = tmp_path / "plugin-hooks.json"
+    live_path = codex_home / "hooks.json"
+    plugin_path.write_text(json.dumps(_plugin_hooks()), encoding="utf-8")
+    live_path.write_text(
+        json.dumps(_live_hooks(codex_home, tmp_path)), encoding="utf-8"
+    )
+    concurrent = b'{"hooks": {}, "concurrent": true}\n'
+    actual_write = module.write_if_unchanged
+
+    def race_before_replace(*args, **kwargs):
+        live_path.write_bytes(concurrent)
+        return actual_write(*args, **kwargs)
+
+    monkeypatch.setattr(module, "write_if_unchanged", race_before_replace)
+
+    with pytest.raises(RuntimeError, match="changed during migration"):
+        module.main(
+            [
+                str(plugin_path),
+                str(live_path),
+                "--codex-home",
+                str(codex_home),
+                "--home",
+                str(tmp_path),
+            ]
+        )
+
+    assert live_path.read_bytes() == concurrent
+    assert not list(codex_home.glob("hooks.json.backup-*"))

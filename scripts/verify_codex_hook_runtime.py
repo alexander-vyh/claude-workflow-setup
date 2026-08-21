@@ -32,6 +32,7 @@ def _installed_plugin_root(codex_home: Path, codex_bin: str) -> Path:
         capture_output=True,
         check=False,
         timeout=15,
+        env=os.environ | {"CODEX_HOME": str(codex_home)},
     )
     if result.returncode != 0:
         _fatal(f"could not inspect installed Codex plugins: {result.stderr.strip()}")
@@ -48,14 +49,16 @@ def _installed_plugin_root(codex_home: Path, codex_bin: str) -> Path:
             for part in parts
         ):
             cached = codex_home / "plugins" / "cache" / Path(*parts)
+            resolved_cache = cached.resolve()
+            selected_root = codex_home.resolve()
+            try:
+                resolved_cache.relative_to(selected_root)
+            except ValueError:
+                _fatal("installed plugin cache escapes selected Codex home")
             if (cached / "hooks" / "hooks.json").is_file():
                 return cached
-        source = item.get("source", {}).get("path")
-        if isinstance(source, str):
-            candidate = Path(source).expanduser()
-            if (candidate / "hooks" / "hooks.json").is_file():
-                return candidate
-    _fatal("enabled Escapement plugin is not installed")
+        _fatal("enabled Escapement plugin has no cache in selected Codex home")
+    _fatal("enabled Escapement plugin is not installed in selected Codex home")
 
 
 def _bash_command(plugin: dict[str, Any]) -> str:

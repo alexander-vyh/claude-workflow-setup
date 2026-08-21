@@ -81,8 +81,7 @@ def test_dispatcher_preserves_context_and_strongest_public_decision(tmp_path: Pa
     output = json.loads(result.stdout)
     hook = output["hookSpecificOutput"]
     assert hook["permissionDecision"] == "deny"
-    assert "deny reason" in hook["permissionDecisionReason"]
-    assert "ask reason" not in hook["permissionDecisionReason"]
+    assert hook["permissionDecisionReason"] == "[ask] ask reason\n\n[deny] deny reason"
     assert hook["additionalContext"] == "first context: pwd\n\nsecond context"
 
 
@@ -117,8 +116,9 @@ def test_dispatcher_preserves_healthy_messages_and_equal_precedence_reasons(
     output = json.loads(result.stdout)
     hook = output["hookSpecificOutput"]
     assert hook["permissionDecision"] == "ask"
-    assert hook["permissionDecisionReason"] == "first ask\n\nsecond ask"
-    assert "weaker allow" not in hook["permissionDecisionReason"]
+    assert hook["permissionDecisionReason"] == (
+        "[ask] first ask\n\n[ask] second ask\n\n[allow] weaker allow"
+    )
     assert output["systemMessage"] == "first message\n\nsecond message"
 
 
@@ -151,7 +151,7 @@ def test_dispatcher_never_short_circuits_later_deny_or_advisory_output(
     assert result.returncode == 0, result.stderr
     output = json.loads(result.stdout)
     hook = output["hookSpecificOutput"]
-    assert hook["permissionDecisionReason"] == "deny A\n\ndeny B"
+    assert hook["permissionDecisionReason"] == "[deny] deny A\n\n[deny] deny B"
     assert hook["additionalContext"] == "middle context"
     assert output["systemMessage"] == "middle message"
 
@@ -251,6 +251,231 @@ def test_dispatcher_runs_gates_in_its_own_process_from_an_unrelated_cwd(
         process.pid,
     ]
     assert json.loads(stdout)["hookSpecificOutput"]["additionalContext"] == str(workspace)
+
+
+def test_dispatcher_restores_process_state_between_gates(tmp_path: Path) -> None:
+    plugin_root = tmp_path / "plugin"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    baseline_file = tmp_path / "baseline.json"
+    baseline = _gate(
+        plugin_root / "baseline.py",
+        f"open({str(baseline_file)!r}, 'w', encoding='utf-8').write(json.dumps({{"
+        "'cwd': os.getcwd(), 'environment': dict(os.environ), "
+        "'sys_path': list(sys.path), 'json_id': id(sys.modules['json']), "
+        "'pathlib_id': id(sys.modules['pathlib'])})); "
+        "print(json.dumps({'hookSpecificOutput': {"
+        "'hookEventName': 'PreToolUse', 'additionalContext': 'baseline ran'}}))",
+    )
+    baseline.write_text(
+        "import os\n" + baseline.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    mutator = _gate(
+        plugin_root / "mutator.py",
+        "os.chdir(payload['tool_input']['poison_cwd']); "
+        "os.environ['ESCAPEMENT_DISPATCH_BASELINE'] = 'overwritten'; "
+        "del os.environ['ESCAPEMENT_DISPATCH_DELETE']; "
+        "os.environ['ESCAPEMENT_DISPATCH_ADDED'] = 'present'; "
+        "sys.path[:] = ['/poison/path']; "
+        "sys.modules['json'] = None; "
+        "del sys.modules['pathlib']; "
+        "sys.modules['escapement_poison_module'] = types.ModuleType('poison'); "
+        "print(json_module.dumps({'hookSpecificOutput': {"
+        "'hookEventName': 'PreToolUse', 'additionalContext': 'mutator ran'}}))",
+    )
+    mutator.write_text(
+        "import os, types\nimport json as json_module\n"
+        + mutator.read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    witness = _gate(
+        plugin_root / "witness.py",
+        f"baseline = json.loads(open({str(baseline_file)!r}, encoding='utf-8').read()); "
+        "assert os.getcwd() == baseline['cwd']; "
+        "assert dict(os.environ) == baseline['environment']; "
+        "assert list(sys.path) == baseline['sys_path']; "
+        "assert 'escapement_poison_module' not in sys.modules; "
+        "assert id(sys.modules['json']) == baseline['json_id']; "
+        "assert id(sys.modules['pathlib']) == baseline['pathlib_id']; "
+        "print(json.dumps({'hookSpecificOutput': {"
+        "'hookEventName': 'PreToolUse', 'additionalContext': 'state isolated'}}))",
+    )
+    witness.write_text(
+        "import json, os\n" + witness.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    payload = {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": "pwd", "poison_cwd": str(plugin_root)},
+        "cwd": str(workspace),
+    }
+    dispatcher = _installed_dispatcher(plugin_root)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-B",
+            str(dispatcher),
+            "--gate",
+            "baseline.py",
+            "--gate",
+            "mutator.py",
+            "--gate",
+            "witness.py",
+        ],
+        input=json.dumps(payload),
+        text=True,
+        capture_output=True,
+        cwd=workspace,
+        check=False,
+        timeout=5,
+        env=os.environ
+        | {
+            "ESCAPEMENT_DISPATCH_BASELINE": "original",
+            "ESCAPEMENT_DISPATCH_DELETE": "keep",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    output = json.loads(result.stdout)
+    assert output["hookSpecificOutput"]["additionalContext"] == (
+        "baseline ran\n\nmutator ran\n\nstate isolated"
+    )
+    assert "failed" not in output.get("systemMessage", "")
+
+
+def test_dispatcher_bounds_each_gate_and_continues_after_timeout(tmp_path: Path) -> None:
+    plugin_root = tmp_path / "plugin"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    first = _gate(
+        plugin_root / "first.py",
+        "time.sleep(0.1); print(json.dumps({'hookSpecificOutput': {"
+        "'hookEventName': 'PreToolUse', 'additionalContext': 'first gate ran'}}))",
+    )
+    first.write_text(
+        "import time\n" + first.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    slow = _gate(plugin_root / "slow.py", "time.sleep(0.2)")
+    slow.write_text("import time\n" + slow.read_text(encoding="utf-8"), encoding="utf-8")
+    _gate(
+        plugin_root / "valid.py",
+        "print(json.dumps({'hookSpecificOutput': {"
+        "'hookEventName': 'PreToolUse', 'additionalContext': 'later gate ran'}}))",
+    )
+    dispatcher = _installed_dispatcher(plugin_root)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-B",
+            str(dispatcher),
+            "--gate",
+            "first.py",
+            "--gate-timeout",
+            "1",
+            "--gate",
+            "slow.py",
+            "--gate-timeout",
+            "0.05",
+            "--gate",
+            "valid.py",
+            "--gate-timeout",
+            "1",
+        ],
+        input=json.dumps({"hook_event_name": "PreToolUse"}),
+        text=True,
+        capture_output=True,
+        cwd=workspace,
+        check=False,
+        timeout=2,
+    )
+
+    assert result.returncode == 0, result.stderr
+    output = json.loads(result.stdout)
+    assert output["hookSpecificOutput"]["additionalContext"] == (
+        "first gate ran\n\nlater gate ran"
+    )
+    assert "slow.py" in output["systemMessage"]
+    assert "timed out after 0.05s" in output["systemMessage"]
+
+
+def test_dispatcher_rejects_multibyte_payload_over_one_mib_before_gates(
+    tmp_path: Path,
+) -> None:
+    plugin_root = tmp_path / "plugin"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    marker = tmp_path / "gate-ran"
+    gate = _gate(
+        plugin_root / "unused.py",
+        f"open({str(marker)!r}, 'w', encoding='utf-8').write('ran')",
+    )
+    payload = json.dumps(
+        {"padding": "é" * 600_000}, ensure_ascii=False
+    ).encode("utf-8")
+    assert len("é" * 600_000) < 1_048_576 < len(payload)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-B",
+            str(_installed_dispatcher(plugin_root)),
+            "--gate",
+            str(gate.relative_to(plugin_root)),
+        ],
+        input=payload,
+        capture_output=True,
+        cwd=workspace,
+        check=False,
+        timeout=5,
+    )
+
+    assert result.returncode != 0
+    assert b"payload exceeds 1048576 bytes" in result.stderr.lower()
+    assert not marker.exists()
+
+
+def test_dispatcher_stops_reading_after_limit_without_waiting_for_eof(
+    tmp_path: Path,
+) -> None:
+    plugin_root = tmp_path / "plugin"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    marker = tmp_path / "gate-ran"
+    gate = _gate(
+        plugin_root / "unused.py",
+        f"open({str(marker)!r}, 'w', encoding='utf-8').write('ran')",
+    )
+    payload = json.dumps({"padding": "x" * 1_048_576}).encode()
+    read_descriptor, write_descriptor = os.pipe()
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-B",
+            str(_installed_dispatcher(plugin_root)),
+            "--gate",
+            str(gate.relative_to(plugin_root)),
+        ],
+        stdin=read_descriptor,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        cwd=workspace,
+    )
+    os.close(read_descriptor)
+    try:
+        written = 0
+        while written < len(payload):
+            written += os.write(write_descriptor, payload[written:])
+        process.wait(timeout=3)
+        stdout, stderr = process.communicate(timeout=1)
+    finally:
+        os.close(write_descriptor)
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=1)
+
+    assert process.returncode != 0, stdout
+    assert b"payload exceeds 1048576 bytes" in stderr.lower()
+    assert not marker.exists()
 
 
 def test_dispatcher_rejects_gate_outside_plugin_root(tmp_path: Path) -> None:
