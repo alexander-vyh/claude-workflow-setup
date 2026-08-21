@@ -502,3 +502,78 @@ def test_cli_entrypoint_does_not_overwrite_a_concurrent_change(
 
     assert live_path.read_bytes() == concurrent
     assert not list(codex_home.glob("hooks.json.backup-*"))
+
+
+def test_cli_detects_race_at_prepared_replace_boundary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _module()
+    codex_home = tmp_path / ".codex"
+    codex_home.mkdir()
+    plugin_path = tmp_path / "plugin-hooks.json"
+    live_path = codex_home / "hooks.json"
+    plugin_path.write_text(json.dumps(_plugin_hooks()), encoding="utf-8")
+    original = json.dumps(_live_hooks(codex_home, tmp_path)).encode()
+    live_path.write_bytes(original)
+    concurrent = b'{"hooks": {}, "late_concurrent": true}\n'
+    actual_replace = module._replace_prepared
+
+    def race_at_replace(*args, **kwargs):
+        live_path.write_bytes(concurrent)
+        return actual_replace(*args, **kwargs)
+
+    monkeypatch.setattr(module, "_replace_prepared", race_at_replace)
+
+    with pytest.raises(RuntimeError, match="changed during migration"):
+        module.main(
+            [
+                str(plugin_path),
+                str(live_path),
+                "--codex-home",
+                str(codex_home),
+                "--home",
+                str(tmp_path),
+            ]
+        )
+
+    assert live_path.read_bytes() == concurrent
+    [conflict] = list(codex_home.glob("hooks.json.conflict-*"))
+    assert conflict.read_bytes() == concurrent
+    [backup] = list(codex_home.glob("hooks.json.backup-*"))
+    assert backup.read_bytes() == original
+
+
+def test_cli_refuses_to_detach_symlinked_global_config(tmp_path: Path) -> None:
+    codex_home = tmp_path / ".codex"
+    codex_home.mkdir()
+    plugin_path = tmp_path / "plugin-hooks.json"
+    target = tmp_path / "dotfiles" / "hooks.json"
+    target.parent.mkdir()
+    plugin_path.write_text(json.dumps(_plugin_hooks()), encoding="utf-8")
+    target.write_text(json.dumps(_live_hooks(codex_home, tmp_path)), encoding="utf-8")
+    live_path = codex_home / "hooks.json"
+    live_path.symlink_to(target)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(PRUNER),
+            str(plugin_path),
+            str(live_path),
+            "--codex-home",
+            str(codex_home),
+            "--home",
+            str(tmp_path),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "symlinked" in result.stderr.lower()
+    assert live_path.is_symlink()
+    assert target.read_text(encoding="utf-8") == json.dumps(
+        _live_hooks(codex_home, tmp_path)
+    )

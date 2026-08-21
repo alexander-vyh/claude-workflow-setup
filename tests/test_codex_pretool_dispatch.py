@@ -263,7 +263,8 @@ def test_dispatcher_restores_process_state_between_gates(tmp_path: Path) -> None
         f"open({str(baseline_file)!r}, 'w', encoding='utf-8').write(json.dumps({{"
         "'cwd': os.getcwd(), 'environment': dict(os.environ), "
         "'sys_path': list(sys.path), 'json_id': id(sys.modules['json']), "
-        "'pathlib_id': id(sys.modules['pathlib'])})); "
+        "'pathlib_id': id(sys.modules['pathlib']), "
+        "'json_loads_id': id(json.loads)})); "
         "print(json.dumps({'hookSpecificOutput': {"
         "'hookEventName': 'PreToolUse', 'additionalContext': 'baseline ran'}}))",
     )
@@ -280,6 +281,7 @@ def test_dispatcher_restores_process_state_between_gates(tmp_path: Path) -> None
         "sys.modules['json'] = None; "
         "del sys.modules['pathlib']; "
         "sys.modules['escapement_poison_module'] = types.ModuleType('poison'); "
+        "json_module.loads = lambda _value: {'poisoned': True}; "
         "print(json_module.dumps({'hookSpecificOutput': {"
         "'hookEventName': 'PreToolUse', 'additionalContext': 'mutator ran'}}))",
     )
@@ -297,6 +299,7 @@ def test_dispatcher_restores_process_state_between_gates(tmp_path: Path) -> None
         "assert 'escapement_poison_module' not in sys.modules; "
         "assert id(sys.modules['json']) == baseline['json_id']; "
         "assert id(sys.modules['pathlib']) == baseline['pathlib_id']; "
+        "assert id(json.loads) == baseline['json_loads_id']; "
         "print(json.dumps({'hookSpecificOutput': {"
         "'hookEventName': 'PreToolUse', 'additionalContext': 'state isolated'}}))",
     )
@@ -355,7 +358,15 @@ def test_dispatcher_bounds_each_gate_and_continues_after_timeout(tmp_path: Path)
     first.write_text(
         "import time\n" + first.read_text(encoding="utf-8"), encoding="utf-8"
     )
-    slow = _gate(plugin_root / "slow.py", "time.sleep(0.2)")
+    slow = _gate(
+        plugin_root / "slow.py",
+        "try:\n"
+        "    while True:\n"
+        "        time.sleep(1)\n"
+        "except Exception:\n"
+        "    while True:\n"
+        "        time.sleep(1)",
+    )
     slow.write_text("import time\n" + slow.read_text(encoding="utf-8"), encoding="utf-8")
     _gate(
         plugin_root / "valid.py",

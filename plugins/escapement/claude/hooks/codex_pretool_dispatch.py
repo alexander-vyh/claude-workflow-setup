@@ -11,6 +11,7 @@ import runpy
 import signal
 import sys
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 
@@ -18,7 +19,7 @@ DECISION_STRENGTH = {"allow": 1, "ask": 2, "deny": 3}
 MAX_PAYLOAD_BYTES = 1_048_576
 
 
-class GateTimeoutError(TimeoutError):
+class GateTimeoutError(BaseException):
     """Raised when one gate exceeds its manifest-declared budget."""
 
 
@@ -53,8 +54,20 @@ def _run_gate(
     prior_environment = dict(os.environ)
     prior_path = list(sys.path)
     prior_modules = dict(sys.modules)
+    prior_module_namespaces = []
+    seen_modules: set[int] = set()
+    for module in prior_modules.values():
+        if not isinstance(module, ModuleType) or id(module) in seen_modules:
+            continue
+        seen_modules.add(id(module))
+        prior_module_namespaces.append((module, dict(vars(module))))
     prior_alarm_handler = signal.getsignal(signal.SIGALRM)
     prior_timer = signal.getitimer(signal.ITIMER_REAL)
+    set_timer = signal.setitimer
+    set_signal = signal.signal
+    change_directory = os.chdir
+    environment = os.environ
+    module_registry = sys.modules
     exit_status: object = 0
     failure: str | None = None
 
@@ -67,8 +80,8 @@ def _run_gate(
         sys.stderr = stderr
         sys.argv = [str(path)]
         if timeout_seconds is not None:
-            signal.signal(signal.SIGALRM, timeout_handler)
-            signal.setitimer(signal.ITIMER_REAL, timeout_seconds)
+            set_signal(signal.SIGALRM, timeout_handler)
+            set_timer(signal.ITIMER_REAL, timeout_seconds)
         try:
             runpy.run_path(str(path), run_name="__main__")
         except SystemExit as exc:
@@ -78,17 +91,23 @@ def _run_gate(
         except Exception as exc:  # A single gate remains host-compatible fail-open.
             failure = f"{type(exc).__name__}: {exc}"
     finally:
-        signal.setitimer(signal.ITIMER_REAL, 0)
-        signal.signal(signal.SIGALRM, prior_alarm_handler)
-        signal.setitimer(signal.ITIMER_REAL, *prior_timer)
+        set_timer(signal.ITIMER_REAL, 0)
+        set_signal(signal.SIGALRM, prior_alarm_handler)
+        set_timer(signal.ITIMER_REAL, *prior_timer)
+        change_directory(prior_cwd)
+        environment.clear()
+        environment.update(prior_environment)
+        for module, namespace in prior_module_namespaces:
+            current = vars(module)
+            for name in tuple(current):
+                if name not in namespace:
+                    del current[name]
+            current.update(namespace)
+        module_registry.clear()
+        module_registry.update(prior_modules)
         sys.stdin, sys.stdout, sys.stderr = prior_streams
         sys.argv = prior_argv
-        os.chdir(prior_cwd)
-        os.environ.clear()
-        os.environ.update(prior_environment)
         sys.path[:] = prior_path
-        sys.modules.clear()
-        sys.modules.update(prior_modules)
 
     if failure is None and exit_status not in (None, 0):
         failure = f"exited with status {exit_status}"

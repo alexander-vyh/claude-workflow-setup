@@ -57,17 +57,28 @@ def _installed_fixture(
     command = (
         'python3 -B "${PLUGIN_ROOT}/claude/hooks/codex_pretool_dispatch.py" '
         + (
-            "--gate ../outside.py"
+            "--gate ../outside.py --gate-timeout 5"
             if traversal
-            else "--gate claude/hooks/allow_gate.py"
+            else "--gate claude/hooks/allow_gate.py --gate-timeout 5"
         )
     )
+    declared_gate_count = 1
     if overlap:
         legacy_name = "test_oracle_brief_gate.py"
         shutil.copy2(ROOT / "claude" / "hooks" / legacy_name, hook_dir / legacy_name)
-        command += f" --gate claude/hooks/{legacy_name}"
+        command += f" --gate claude/hooks/{legacy_name} --gate-timeout 5"
+        declared_gate_count += 1
     bash_groups = [
-        {"matcher": "Bash", "hooks": [{"type": "command", "command": command, "timeout": 10}]}
+        {
+            "matcher": "Bash",
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": command,
+                    "timeout": (5 * declared_gate_count) + declared_gate_count,
+                }
+            ],
+        }
     ]
     if two_bash:
         bash_groups.append(
@@ -116,8 +127,14 @@ def _installed_fixture(
     return codex_home, plugin_root
 
 
-def _run(codex_home: Path, plugin_root: Path) -> subprocess.CompletedProcess[str]:
+def _run(
+    codex_home: Path,
+    plugin_root: Path,
+    *,
+    home: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
     barrier = codex_home.parent / "probe-barrier.txt"
+    selected_home = home or codex_home.parent
     return subprocess.run(
         [
             sys.executable,
@@ -126,6 +143,8 @@ def _run(codex_home: Path, plugin_root: Path) -> subprocess.CompletedProcess[str
             str(codex_home),
             "--plugin-root",
             str(plugin_root),
+            "--home",
+            str(selected_home),
             "--concurrency",
             "4",
         ],
@@ -171,6 +190,8 @@ def _run_require_installed(
             "--codex-home",
             str(codex_home),
             "--require-installed",
+            "--home",
+            str(codex_home.parent),
             "--codex-bin",
             str(fake_codex),
             "--concurrency",
@@ -223,6 +244,59 @@ def test_verifier_rejects_legacy_global_overlap(tmp_path: Path) -> None:
     assert "legacy global overlap" in result.stderr.lower()
 
 
+def test_verifier_uses_explicit_home_for_claude_legacy_overlap(
+    tmp_path: Path,
+) -> None:
+    codex_home, plugin_root = _installed_fixture(tmp_path, overlap=True)
+    document = json.loads((codex_home / "hooks.json").read_text(encoding="utf-8"))
+    [group] = document["hooks"]["PreToolUse"]
+    [hook] = group["hooks"]
+    old_script = codex_home / "hooks" / "test_oracle_brief_gate.py"
+    explicit_home = tmp_path / "actual-home"
+    new_script = explicit_home / ".claude" / "hooks" / old_script.name
+    new_script.parent.mkdir(parents=True)
+    shutil.copy2(old_script, new_script)
+    old_script.unlink()
+    hook["command"] = f"python3 {new_script}"
+    (codex_home / "hooks.json").write_text(json.dumps(document), encoding="utf-8")
+
+    result = _run(codex_home, plugin_root, home=explicit_home)
+
+    assert result.returncode != 0
+    assert "legacy global overlap" in result.stderr.lower()
+
+
+def test_verifier_does_not_treat_a_nonselected_home_as_legacy_overlap(
+    tmp_path: Path,
+) -> None:
+    codex_home, plugin_root = _installed_fixture(tmp_path, overlap=True)
+    plugin_hooks = plugin_root / "claude" / "hooks"
+    shutil.copy2(
+        plugin_hooks / "allow_gate.py",
+        plugin_hooks / "test_oracle_brief_gate.py",
+    )
+    document = json.loads((codex_home / "hooks.json").read_text(encoding="utf-8"))
+    [group] = document["hooks"]["PreToolUse"]
+    [hook] = group["hooks"]
+    old_script = codex_home / "hooks" / "test_oracle_brief_gate.py"
+    other_home = tmp_path / "other-home"
+    other_script = other_home / ".claude" / "hooks" / old_script.name
+    other_script.parent.mkdir(parents=True)
+    shutil.copy2(old_script, other_script)
+    old_script.unlink()
+    hook["command"] = f"python3 {other_script}"
+    (codex_home / "hooks.json").write_text(json.dumps(document), encoding="utf-8")
+    selected_home = tmp_path / "selected-home"
+    selected_home.mkdir()
+
+    unrelated = _run(codex_home, plugin_root, home=selected_home)
+    selected = _run(codex_home, plugin_root, home=other_home)
+
+    assert unrelated.returncode == 0, unrelated.stderr
+    assert selected.returncode != 0
+    assert "legacy global overlap" in selected.stderr.lower()
+
+
 def test_verifier_rejects_dispatcher_gate_path_traversal(tmp_path: Path) -> None:
     codex_home, plugin_root = _installed_fixture(tmp_path, traversal=True)
 
@@ -239,6 +313,37 @@ def test_verifier_rejects_dispatcher_that_loses_advisory_output(tmp_path: Path) 
 
     assert result.returncode != 0
     assert "advisory output" in result.stderr.lower()
+
+
+def test_verifier_rejects_missing_per_gate_deadline_metadata(tmp_path: Path) -> None:
+    codex_home, plugin_root = _installed_fixture(tmp_path)
+    hook_path = plugin_root / "hooks" / "hooks.json"
+    document = json.loads(hook_path.read_text(encoding="utf-8"))
+    [group] = document["hooks"]["PreToolUse"]
+    [hook] = group["hooks"]
+    hook["command"] = hook["command"].replace(" --gate-timeout 5", "")
+    hook_path.write_text(json.dumps(document), encoding="utf-8")
+
+    result = _run(codex_home, plugin_root)
+
+    assert result.returncode != 0
+    assert "one timeout per gate" in result.stderr.lower()
+
+
+def test_verifier_rejects_host_timeout_below_serial_gate_budget(tmp_path: Path) -> None:
+    codex_home, plugin_root = _installed_fixture(tmp_path)
+    hook_path = plugin_root / "hooks" / "hooks.json"
+    document = json.loads(hook_path.read_text(encoding="utf-8"))
+    [group] = document["hooks"]["PreToolUse"]
+    [hook] = group["hooks"]
+    hook["command"] += " --gate claude/hooks/allow_gate.py --gate-timeout 7"
+    hook["timeout"] = 13
+    hook_path.write_text(json.dumps(document), encoding="utf-8")
+
+    result = _run(codex_home, plugin_root)
+
+    assert result.returncode != 0
+    assert "serial gate budget" in result.stderr.lower()
 
 
 def test_require_installed_binds_cli_and_cache_to_selected_codex_home(

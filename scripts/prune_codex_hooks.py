@@ -164,7 +164,7 @@ def prune_hooks(
     return pruned
 
 
-def _atomic_write(path: Path, content: bytes, mode: int) -> None:
+def _prepare_atomic(path: Path, content: bytes, mode: int) -> Path:
     descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     temporary_path = Path(temporary)
     try:
@@ -173,20 +173,51 @@ def _atomic_write(path: Path, content: bytes, mode: int) -> None:
             stream.flush()
             os.fsync(stream.fileno())
         temporary_path.chmod(mode)
-        os.replace(temporary_path, path)
-        directory = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
-    finally:
+        return temporary_path
+    except BaseException:
         if temporary_path.exists():
             temporary_path.unlink()
+        raise
+
+
+def _sync_directory(path: Path) -> None:
+    directory = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
+def _atomic_write(path: Path, content: bytes, mode: int) -> None:
+    prepared = _prepare_atomic(path, content, mode)
+    try:
+        os.replace(prepared, path)
+        _sync_directory(path.parent)
+    finally:
+        prepared.unlink(missing_ok=True)
 
 
 def _backup_path(path: Path) -> Path:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
     return path.with_name(f"{path.name}.backup-{stamp}")
+
+
+def _conflict_path(path: Path) -> Path:
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+    return path.with_name(f"{path.name}.conflict-{stamp}")
+
+
+def _replace_prepared(path: Path, prepared: Path, inspected: bytes) -> None:
+    current = path.read_bytes()
+    if current != inspected:
+        conflict = _conflict_path(path)
+        _atomic_write(conflict, current, path.stat().st_mode & 0o777)
+        raise RuntimeError(
+            "Codex hooks changed during migration; refusing overwrite; "
+            f"concurrent bytes preserved at {conflict}"
+        )
+    os.replace(prepared, path)
+    _sync_directory(path.parent)
 
 
 def write_if_unchanged(
@@ -202,10 +233,11 @@ def write_if_unchanged(
         raise RuntimeError("Codex hooks changed during migration; refusing overwrite")
     mode = path.stat().st_mode & 0o777
     _atomic_write(backup_path, inspected, mode)
-    if path.read_bytes() != inspected:
-        backup_path.unlink(missing_ok=True)
-        raise RuntimeError("Codex hooks changed during migration; refusing overwrite")
-    _atomic_write(path, replacement, mode)
+    prepared = _prepare_atomic(path, replacement, mode)
+    try:
+        _replace_prepared(path, prepared, inspected)
+    finally:
+        prepared.unlink(missing_ok=True)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -221,6 +253,10 @@ def main(argv: list[str] | None = None) -> int:
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open("a+b") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
+        if args.live_hooks.is_symlink():
+            raise SystemExit(
+                f"FATAL: refusing to detach symlinked Codex hooks: {args.live_hooks}"
+            )
         if not args.live_hooks.exists():
             print(f"Codex global hooks already clean: {args.live_hooks} does not exist")
             return 0

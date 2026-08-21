@@ -61,7 +61,7 @@ def _installed_plugin_root(codex_home: Path, codex_bin: str) -> Path:
     _fatal("enabled Escapement plugin is not installed in selected Codex home")
 
 
-def _bash_command(plugin: dict[str, Any]) -> str:
+def _bash_hook(plugin: dict[str, Any]) -> tuple[str, float]:
     hooks = [
         hook
         for group in plugin.get("hooks", {}).get("PreToolUse", [])
@@ -73,32 +73,47 @@ def _bash_command(plugin: dict[str, Any]) -> str:
     command = hooks[0].get("command")
     if not isinstance(command, str) or "codex_pretool_dispatch.py" not in command:
         _fatal("the sole Escapement Bash hook is not the dispatcher")
-    return command
+    timeout = hooks[0].get("timeout")
+    if not isinstance(timeout, (int, float)) or timeout <= 0:
+        _fatal("Escapement Bash hook has no positive host timeout")
+    return command, float(timeout)
 
 
 def _command_argv(command: str, plugin_root: Path) -> list[str]:
     return shlex.split(command.replace("${PLUGIN_ROOT}", str(plugin_root)))
 
 
-def _declared_gates(argv: list[str], plugin_root: Path) -> list[Path]:
+def _declared_gates(
+    argv: list[str], plugin_root: Path
+) -> list[tuple[Path, float]]:
     gates = []
+    timeouts = []
     for index, token in enumerate(argv[:-1]):
-        if token != "--gate":
-            continue
-        relative = Path(argv[index + 1])
-        if relative.is_absolute() or ".." in relative.parts:
-            _fatal(f"dispatcher gate is outside plugin root: {relative}")
-        gate = (plugin_root / relative).resolve()
-        try:
-            gate.relative_to(plugin_root.resolve())
-        except ValueError:
-            _fatal(f"dispatcher gate is outside plugin root: {relative}")
-        if not gate.is_file():
-            _fatal(f"dispatcher gate is missing: {relative}")
-        gates.append(gate)
+        if token == "--gate":
+            relative = Path(argv[index + 1])
+            if relative.is_absolute() or ".." in relative.parts:
+                _fatal(f"dispatcher gate is outside plugin root: {relative}")
+            gate = (plugin_root / relative).resolve()
+            try:
+                gate.relative_to(plugin_root.resolve())
+            except ValueError:
+                _fatal(f"dispatcher gate is outside plugin root: {relative}")
+            if not gate.is_file():
+                _fatal(f"dispatcher gate is missing: {relative}")
+            gates.append(gate)
+        elif token == "--gate-timeout":
+            try:
+                timeout = float(argv[index + 1])
+            except ValueError:
+                _fatal(f"dispatcher gate timeout is invalid: {argv[index + 1]}")
+            if timeout <= 0:
+                _fatal("dispatcher gate timeouts must be positive")
+            timeouts.append(timeout)
     if not gates:
         _fatal("dispatcher declares no gates")
-    return gates
+    if len(timeouts) != len(gates):
+        _fatal("dispatcher must declare one timeout per gate")
+    return list(zip(gates, timeouts, strict=True))
 
 
 def _run_probe(argv: list[str], cwd: Path, deadline: float) -> dict[str, Any]:
@@ -165,6 +180,7 @@ def _verify_public_output(dispatcher: Path, deadline: float) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--codex-home", type=Path, required=True)
+    parser.add_argument("--home", type=Path, default=Path.home())
     parser.add_argument("--plugin-root", type=Path)
     parser.add_argument("--require-installed", action="store_true")
     parser.add_argument("--codex-bin", default=os.environ.get("CODEX_BIN", "codex"))
@@ -184,9 +200,15 @@ def main(argv: list[str] | None = None) -> int:
 
     hook_path = plugin_root / "hooks" / "hooks.json"
     plugin = json.loads(hook_path.read_text(encoding="utf-8"))
-    command = _bash_command(plugin)
+    command, host_timeout = _bash_hook(plugin)
     command_argv = _command_argv(command, plugin_root)
     gates = _declared_gates(command_argv, plugin_root)
+    serial_budget = sum(timeout for _gate, timeout in gates) + len(gates)
+    if host_timeout < serial_budget:
+        _fatal(
+            f"host timeout {host_timeout:g}s is below serial gate budget "
+            f"{serial_budget:g}s"
+        )
     dispatcher = Path(command_argv[2]).resolve()
     if not dispatcher.is_file():
         _fatal(f"installed dispatcher is missing: {dispatcher}")
@@ -195,17 +217,16 @@ def main(argv: list[str] | None = None) -> int:
     if global_path.is_file():
         global_hooks = json.loads(global_path.read_text(encoding="utf-8"))
         owned = plugin_owned_gate_scripts(plugin)
-        home = args.codex_home.parent
         if prune_hooks(
             global_hooks,
             owned,
             codex_home=args.codex_home,
-            home=home,
+            home=args.home,
         ) != global_hooks:
             _fatal("legacy global overlap remains in Codex hooks")
 
     _verify_public_output(dispatcher, args.deadline_seconds)
-    workspace = args.codex_home.parent
+    workspace = args.home
     with ThreadPoolExecutor(max_workers=args.concurrency) as pool:
         futures = [
             pool.submit(
