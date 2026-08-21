@@ -15,28 +15,8 @@
       {
         "hooks": [
           {
-            "command": "python3 -B \"${PLUGIN_ROOT}/claude/hooks/test_oracle_brief_gate.py\"",
-            "timeout": 5,
-            "type": "command"
-          }
-        ],
-        "matcher": "Bash"
-      },
-      {
-        "hooks": [
-          {
-            "command": "python3 -B \"${PLUGIN_ROOT}/claude/hooks/beads_worktree_guard.py\"",
-            "timeout": 10,
-            "type": "command"
-          }
-        ],
-        "matcher": "Bash"
-      },
-      {
-        "hooks": [
-          {
-            "command": "python3 -B \"${PLUGIN_ROOT}/claude/hooks/root_checkout_guard.py\"",
-            "timeout": 10,
+            "command": "python3 -B \"${PLUGIN_ROOT}/claude/hooks/codex_pretool_dispatch.py\" --gate claude/hooks/test_oracle_brief_gate.py --gate-timeout 5 --gate claude/hooks/beads_worktree_guard.py --gate-timeout 10 --gate claude/hooks/root_checkout_guard.py --gate-timeout 10 --gate claude/hooks/discovery-close-gate.py --gate-timeout 10 --gate claude/hooks/discovery-gate.py --gate-timeout 10 --gate claude/hooks/epic_coverage_gate.py --gate-timeout 10 --gate claude/hooks/implementation_echo_test_gate.py --gate-timeout 10 --gate claude/hooks/openspec_init_guard.py --gate-timeout 10 --gate claude/hooks/openspec_task_reconciliation_gate.py --gate-timeout 10 --gate claude/hooks/oracle_downgrade_warning_gate.py --gate-timeout 10 --gate claude/hooks/outcome_assertion_gate.py --gate-timeout 10 --gate claude/hooks/merge_authorization_gate.py --gate-timeout 10 --gate claude/hooks/outcome_ownership_nudge.py --gate-timeout 5 --gate claude/hooks/bead_verify_nudge.py --gate-timeout 5 --gate claude/hooks/spec_id_enforcement.py --gate-timeout 10",
+            "timeout": 150,
             "type": "command"
           }
         ],
@@ -71,126 +51,6 @@
           }
         ],
         "matcher": "NotebookEdit"
-      },
-      {
-        "hooks": [
-          {
-            "command": "python3 -B \"${PLUGIN_ROOT}/claude/hooks/discovery-close-gate.py\"",
-            "timeout": 10,
-            "type": "command"
-          }
-        ],
-        "matcher": "Bash"
-      },
-      {
-        "hooks": [
-          {
-            "command": "python3 -B \"${PLUGIN_ROOT}/claude/hooks/discovery-gate.py\"",
-            "timeout": 10,
-            "type": "command"
-          }
-        ],
-        "matcher": "Bash"
-      },
-      {
-        "hooks": [
-          {
-            "command": "python3 -B \"${PLUGIN_ROOT}/claude/hooks/epic_coverage_gate.py\"",
-            "timeout": 10,
-            "type": "command"
-          }
-        ],
-        "matcher": "Bash"
-      },
-      {
-        "hooks": [
-          {
-            "command": "python3 -B \"${PLUGIN_ROOT}/claude/hooks/implementation_echo_test_gate.py\"",
-            "timeout": 10,
-            "type": "command"
-          }
-        ],
-        "matcher": "Bash"
-      },
-      {
-        "hooks": [
-          {
-            "command": "python3 -B \"${PLUGIN_ROOT}/claude/hooks/openspec_init_guard.py\"",
-            "timeout": 10,
-            "type": "command"
-          }
-        ],
-        "matcher": "Bash"
-      },
-      {
-        "hooks": [
-          {
-            "command": "python3 -B \"${PLUGIN_ROOT}/claude/hooks/openspec_task_reconciliation_gate.py\"",
-            "timeout": 10,
-            "type": "command"
-          }
-        ],
-        "matcher": "Bash"
-      },
-      {
-        "hooks": [
-          {
-            "command": "python3 -B \"${PLUGIN_ROOT}/claude/hooks/oracle_downgrade_warning_gate.py\"",
-            "timeout": 10,
-            "type": "command"
-          }
-        ],
-        "matcher": "Bash"
-      },
-      {
-        "hooks": [
-          {
-            "command": "python3 -B \"${PLUGIN_ROOT}/claude/hooks/outcome_assertion_gate.py\"",
-            "timeout": 10,
-            "type": "command"
-          }
-        ],
-        "matcher": "Bash"
-      },
-      {
-        "hooks": [
-          {
-            "command": "python3 -B \"${PLUGIN_ROOT}/claude/hooks/merge_authorization_gate.py\"",
-            "timeout": 10,
-            "type": "command"
-          }
-        ],
-        "matcher": "Bash"
-      },
-      {
-        "hooks": [
-          {
-            "command": "python3 -B \"${PLUGIN_ROOT}/claude/hooks/outcome_ownership_nudge.py\"",
-            "timeout": 5,
-            "type": "command"
-          }
-        ],
-        "matcher": "Bash"
-      },
-      {
-        "hooks": [
-          {
-            "command": "python3 -B \"${PLUGIN_ROOT}/claude/hooks/bead_verify_nudge.py\"",
-            "timeout": 5,
-            "type": "command"
-          }
-        ],
-        "matcher": "Bash"
-      },
-      {
-        "hooks": [
-          {
-            "command": "python3 -B \"${PLUGIN_ROOT}/claude/hooks/spec_id_enforcement.py\"",
-            "timeout": 10,
-            "type": "command"
-          }
-        ],
-        "matcher": "Bash"
       }
     ],
     "SessionStart": [

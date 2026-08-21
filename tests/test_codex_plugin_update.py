@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import plistlib
 import shutil
@@ -30,6 +31,7 @@ def test_updater_refreshes_plugin_migrates_legacy_and_preserves_siblings(
     plugin_root = codex_home / "plugins" / "cache" / "escapement" / "escapement" / "1.0.0"
     harness = tmp_path / "shared-harness"
     global_skill = tmp_path / ".agents" / "skills" / "beads-execution" / "SKILL.md"
+    global_hooks = codex_home / "hooks.json"
     sibling = tmp_path / ".agents" / "skills" / "user-skill" / "notes.txt"
     shutil.copytree(ROOT / "plugins" / "escapement", plugin_root)
     shutil.copytree(ROOT / "plugins" / "escapement", plugin_source)
@@ -43,6 +45,7 @@ def test_updater_refreshes_plugin_migrates_legacy_and_preserves_siblings(
         prior_runtime / "schemas", target_is_directory=True
     )
     global_skill.parent.mkdir(parents=True)
+    global_hooks.parent.mkdir(parents=True, exist_ok=True)
     sibling.parent.mkdir(parents=True)
     safe = (
         ROOT / "plugins" / "escapement" / "skills" / "beads-execution" / "SKILL.md"
@@ -50,6 +53,61 @@ def test_updater_refreshes_plugin_migrates_legacy_and_preserves_siblings(
     legacy = historical_legacy_skill_bytes()
     global_skill.write_bytes(legacy)
     sibling.write_bytes(b"user-owned sibling\n")
+    for directory, name in (
+        (codex_home / "hooks", "test_oracle_brief_gate.py"),
+        (codex_home / "hooks", "implementation_echo_test_gate.py"),
+        (codex_home / "hooks", "oracle_downgrade_warning_gate.py"),
+        (home / ".claude" / "hooks", "beads_worktree_guard.py"),
+    ):
+        directory.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / "claude" / "hooks" / name, directory / name)
+    legacy_hooks = {
+        "hooks": {
+            "PreToolUse": [
+                {
+                    "matcher": "Bash",
+                    "hooks": [
+                        {
+                            "command": f"python3 {codex_home}/hooks/test_oracle_brief_gate.py",
+                            "statusMessage": "Checking Test Oracle Brief gate",
+                            "timeout": 30,
+                            "type": "command",
+                        },
+                        {
+                            "command": f"python3 {codex_home}/hooks/implementation_echo_test_gate.py",
+                            "statusMessage": "Checking implementation-echo tests",
+                            "timeout": 30,
+                            "type": "command",
+                        },
+                        {
+                            "command": f"python3 {codex_home}/hooks/oracle_downgrade_warning_gate.py",
+                            "statusMessage": "Checking oracle downgrade warnings",
+                            "timeout": 30,
+                            "type": "command",
+                        },
+                        {
+                            "command": (
+                                "python3 /repo/.git/codex-hooks/sifi_pr_policy.py"
+                            ),
+                            "statusMessage": "preserve Sifi",
+                        },
+                        {
+                            "command": f"python3 {codex_home}/hooks/pr_create_guard.py",
+                            "statusMessage": "preserve PR guard",
+                        },
+                        {
+                            "command": f"python3 {home}/.claude/hooks/beads_worktree_guard.py",
+                            "statusMessage": "Checking bd worktree location (.worktrees/)",
+                            "timeout": 10,
+                            "type": "command",
+                        },
+                    ],
+                }
+            ]
+        }
+    }
+    original_hooks = json.dumps(legacy_hooks, indent=2) + "\n"
+    global_hooks.write_text(original_hooks, encoding="utf-8")
     fake_codex.write_text(
         """#!/bin/bash
 set -eu
@@ -108,6 +166,14 @@ fi
     assert len(backups) == 1
     assert backups[0].read_bytes() == legacy
     assert sibling.read_bytes() == b"user-owned sibling\n"
+    [surviving_group] = json.loads(global_hooks.read_text(encoding="utf-8"))["hooks"]["PreToolUse"]
+    assert [hook["statusMessage"] for hook in surviving_group["hooks"]] == [
+        "preserve Sifi",
+        "preserve PR guard",
+    ]
+    hook_backups = list(codex_home.glob("hooks.json.backup-*"))
+    assert len(hook_backups) == 1
+    assert hook_backups[0].read_text(encoding="utf-8") == original_hooks
     commands = command_log.read_text(encoding="utf-8")
     assert "plugin remove escapement@escapement" in commands
     assert "plugin add escapement@escapement" in commands

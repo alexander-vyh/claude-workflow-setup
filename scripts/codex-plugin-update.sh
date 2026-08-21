@@ -79,6 +79,7 @@ expected_root = Path(sys.argv[1])
 installed_root = Path(sys.argv[2])
 relative_paths = {
     Path(".codex-plugin/plugin.json"),
+    Path("claude/hooks/codex_pretool_dispatch.py"),
     Path("hooks/hooks.json"),
     Path("skills/beads-execution/SKILL.md"),
 }
@@ -146,6 +147,12 @@ authoritative_hooks="$REPO_DIR/plugins/escapement/hooks/hooks.json"
 python3 "$REPO_DIR/scripts/migrate_codex_beads_skill.py" \
   "$authoritative_skill" \
   "$GLOBAL_SKILL"
+
+python3 "$REPO_DIR/scripts/prune_codex_hooks.py" \
+  "$plugin_root/hooks/hooks.json" \
+  "$CODEX_STATE_HOME/hooks.json" \
+  --codex-home "$CODEX_STATE_HOME" \
+  --home "$HOME"
 
 if [[ -f "$GLOBAL_SKILL" ]] && ! cmp -s "$authoritative_skill" "$GLOBAL_SKILL"; then
   echo "FATAL: effective global Beads skill does not match the installed plugin" >&2

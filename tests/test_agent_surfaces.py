@@ -19,8 +19,9 @@ CODEX_WRAPPER = ROOT / "plugins" / "escapement"
 EXPECTED_CODEX_GATE = {
     "event": "PreToolUse",
     "matcher": "Bash",
-    "command": 'python3 -B "${PLUGIN_ROOT}/claude/hooks/test_oracle_brief_gate.py"',
-    "timeout": 5,
+    "dispatcher": "codex_pretool_dispatch.py",
+    "gate": "claude/hooks/test_oracle_brief_gate.py",
+    "timeout": 150,
 }
 CODEX_PLUGIN_FINAL_RESPONSE_GAP_FRAGMENT = 'python3 -B "${PLUGIN_ROOT}/claude/hooks/codex_final_response_gap.py"'
 CODEX_PLUGIN_CONTEXT_FRAGMENT = (
@@ -461,6 +462,52 @@ def _manifest_codex_registrations():
     return registrations
 
 
+def _dispatcher_gate_paths(command):
+    tokens = shlex.split(command)
+    return [
+        tokens[index + 1]
+        for index, token in enumerate(tokens[:-1])
+        if token == "--gate"
+    ]
+
+
+def _dispatcher_gate_timeouts(command):
+    tokens = shlex.split(command)
+    return [
+        float(tokens[index + 1])
+        for index, token in enumerate(tokens[:-1])
+        if token == "--gate-timeout"
+    ]
+
+
+def _manifest_codex_bash_gate_paths():
+    manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    paths = []
+    for hook in manifest["hooks"]:
+        codex = hook["hosts"]["codex"]
+        if codex["status"] != "ready":
+            continue
+        for event in codex["events"]:
+            if event["event"] != "PreToolUse" or event.get("matcher", "") != "Bash":
+                continue
+            tokens = shlex.split(event["command"])
+            paths.append(tokens[2] if tokens[:2] == ["python3", "-B"] else tokens[1])
+    return paths
+
+
+def _manifest_codex_bash_gate_timeouts():
+    manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    timeouts = []
+    for hook in manifest["hooks"]:
+        codex = hook["hosts"]["codex"]
+        if codex["status"] != "ready":
+            continue
+        for event in codex["events"]:
+            if event["event"] == "PreToolUse" and event.get("matcher", "") == "Bash":
+                timeouts.append(float(event["timeout_seconds"]))
+    return timeouts
+
+
 def test_codex_plugin_is_the_sole_hook_owner():
     """A repo plus the installed plugin must not execute every Codex hook twice."""
     repo_hooks = json.loads((ROOT / ".codex" / "hooks.json").read_text())["hooks"]
@@ -480,23 +527,22 @@ def test_codex_plugin_is_the_sole_hook_owner():
     )
     assert ("SessionStart", "", "escapement_session_context.py") in registrations
     assert ("PreCompact", "", "escapement_session_context.py") in registrations
-    assert ("PreToolUse", "Bash", "test_oracle_brief_gate.py") in registrations
-
-    actual_inventory = [
-        (
-            event,
-            group.get("matcher", ""),
-            hook["command"],
-            hook.get("timeout"),
-        )
-        for event, groups in plugin_hooks.items()
-        for group in groups
-        for hook in group.get("hooks", [])
+    bash_hooks = [
+        hook
+        for group in plugin_hooks["PreToolUse"]
+        if group.get("matcher") == "Bash"
+        for hook in group["hooks"]
     ]
-    assert sorted(actual_inventory) == sorted(_manifest_codex_registrations()), (
-        "plugin hook inventory must exactly match the manifest; aliases, wrappers, "
-        "and extra commands would reintroduce duplicate effective execution"
+    assert len(bash_hooks) == 1, (
+        "ordinary Bash calls must start one Escapement process, not one process per gate"
     )
+    [bash_hook] = bash_hooks
+    assert "codex_pretool_dispatch.py" in bash_hook["command"]
+    assert _dispatcher_gate_paths(bash_hook["command"]) == _manifest_codex_bash_gate_paths()
+    gate_timeouts = _dispatcher_gate_timeouts(bash_hook["command"])
+    assert gate_timeouts == _manifest_codex_bash_gate_timeouts()
+    assert bash_hook["timeout"] >= sum(gate_timeouts) + len(gate_timeouts)
+    assert bash_hook["timeout"] > max(gate_timeouts)
 
 
 def test_codex_beads_execution_skill_requires_explicit_execution_intent():
@@ -807,14 +853,15 @@ def test_codex_behavioral_gate_has_exact_event_shape():
     hooks = json.loads((CODEX_WRAPPER / "hooks" / "hooks.json").read_text())["hooks"]
     entries = hooks.get(EXPECTED_CODEX_GATE["event"], [])
     matches = [
-        item
+        hook
         for item in entries
         if item.get("matcher") == EXPECTED_CODEX_GATE["matcher"]
         for hook in item.get("hooks", [])
-        if hook.get("command") == EXPECTED_CODEX_GATE["command"]
+        if EXPECTED_CODEX_GATE["dispatcher"] in hook.get("command", "")
+        and EXPECTED_CODEX_GATE["gate"] in _dispatcher_gate_paths(hook["command"])
         and hook.get("timeout") == EXPECTED_CODEX_GATE["timeout"]
     ]
-    assert matches, "Codex Test Oracle Brief gate must be PreToolUse/Bash with timeout"
+    assert len(matches) == 1, "Codex Test Oracle Brief gate must run through one Bash dispatcher"
 
 
 def test_root_checkout_guard_is_manifested_and_rendered_for_claude_and_codex():
@@ -836,7 +883,17 @@ def test_root_checkout_guard_is_manifested_and_rendered_for_claude_and_codex():
         for hook in item.get("hooks", [])
         if hook.get("command") == CODEX_PLUGIN_ROOT_CHECKOUT_GUARD_FRAGMENT
     }
-    assert {"Bash", "Write", "Edit", "NotebookEdit"} <= codex_matchers
+    assert {"Write", "Edit", "NotebookEdit"} <= codex_matchers
+    bash_dispatchers = [
+        hook["command"]
+        for item in codex_hooks.get("PreToolUse", [])
+        if item.get("matcher") == "Bash"
+        for hook in item.get("hooks", [])
+    ]
+    assert len(bash_dispatchers) == 1
+    assert "claude/hooks/root_checkout_guard.py" in _dispatcher_gate_paths(
+        bash_dispatchers[0]
+    )
 
     # The Claude PLUGIN is the sole owner of hook registration (escapement-ptzz).
     # This assertion is re-pointed from settings.template.json, not weakened: the
@@ -858,7 +915,11 @@ def test_root_checkout_guard_is_manifested_and_rendered_for_claude_and_codex():
         for item in plugin_hooks.get("PreToolUse", [])
         for hook in item.get("hooks", [])
     ]
-    assert CODEX_PLUGIN_ROOT_CHECKOUT_GUARD_FRAGMENT in plugin_commands
+    assert any(
+        "codex_pretool_dispatch.py" in command
+        and "claude/hooks/root_checkout_guard.py" in _dispatcher_gate_paths(command)
+        for command in plugin_commands
+    )
 
 
 def test_codex_generated_surfaces_do_not_use_claude_user_paths():
