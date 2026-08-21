@@ -11,7 +11,7 @@ Decision rules:
   ("allow", "wakeup_registered")    -- scheduled.json has at least one future-dated entry
   ("allow", "user_released")        -- recent user message matches explicit-stop set
   ("block", "no_completion_or_resumption_proof") -- none of the above; contract EXISTS (committed task, unverified)
-  ("allow", "conversational")       -- no contract = no committed task in flight = free to stop (teeth: a declared contract, ready bd work, and validate_no_shirking still block)
+  ("allow", "conversational")       -- no contract = no committed task in flight = free to stop (teeth: a declared contract and ready bd work still block)
 """
 
 from __future__ import annotations

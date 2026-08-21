@@ -105,16 +105,6 @@
       {
         "hooks": [
           {
-            "command": "python3 -B \"${PLUGIN_ROOT}/claude/hooks/implementation_echo_test_gate.py\"",
-            "timeout": 10,
-            "type": "command"
-          }
-        ],
-        "matcher": "Bash"
-      },
-      {
-        "hooks": [
-          {
             "command": "python3 -B \"${PLUGIN_ROOT}/claude/hooks/openspec_init_guard.py\"",
             "timeout": 10,
             "type": "command"
@@ -126,16 +116,6 @@
         "hooks": [
           {
             "command": "python3 -B \"${PLUGIN_ROOT}/claude/hooks/openspec_task_reconciliation_gate.py\"",
-            "timeout": 10,
-            "type": "command"
-          }
-        ],
-        "matcher": "Bash"
-      },
-      {
-        "hooks": [
-          {
-            "command": "python3 -B \"${PLUGIN_ROOT}/claude/hooks/oracle_downgrade_warning_gate.py\"",
             "timeout": 10,
             "type": "command"
           }

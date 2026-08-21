@@ -29,7 +29,7 @@ Consequence of the gap: no verify block means no derivable contract, which means
 Wiring note: broad `Bash` matcher with self-filtering, not `Bash(bd create:*)`.
 Claude's argument-scoped matchers are command-PREFIX matchers and miss
 `cd /repo\nbd create …`, the newline-compound shape. Same reasoning as
-`outcome_ownership_nudge.py` and `validate_no_shirking.py`.
+`outcome_ownership_nudge.py`.
 
 Portability: the input is the command string plus the bead's own acceptance text —
 durable artifact state, no transcript and no host-specific runtime payload — so this
