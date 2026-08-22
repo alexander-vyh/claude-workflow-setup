@@ -107,6 +107,9 @@ def test_renderer_recomputes_pi_inventory_when_shared_manifest_changes() -> None
 
 
 def _assert_thin_pi_extension(source: str) -> None:
+    runtime_loader = source.split("function loadRuntime", 1)[1].split(
+        "function parseDispatcherResponse", 1
+    )[0]
     response_parser = source.split("function parseDispatcherResponse", 1)[1].split(
         "function runDispatcher", 1
     )[0]
@@ -119,6 +122,13 @@ def _assert_thin_pi_extension(source: str) -> None:
     handler = source.split('pi.on("tool_call"', 1)[1]
 
     assert source.count("spawn(") == 1, "one tool event must start one dispatcher"
+    assert source.count('pi.on("tool_call"') == 1
+    assert source.count(
+        ': `${event.systemPrompt}\\n\\n${runtime.instructions}`,'
+    ) == 1
+    assert runtime_loader.count("parsed.gates") == 4
+    assert runtime_loader.count("gates: parsed.gates") == 1
+    assert ".filter(" not in runtime_loader
     assert response_parser.count("stdout") == 2
     assert response_parser.count("JSON.parse(stdout)") == 1
     assert response_parser.count("return result;") == 1
@@ -137,6 +147,13 @@ def _assert_thin_pi_extension(source: str) -> None:
     assert "child.stdin.end(JSON.stringify(payload));" in run_dispatcher
     assert "permissionDecision" not in run_dispatcher
     assert "hookSpecificOutput" not in run_dispatcher
+    gate_loop = run_dispatcher.split("  for (const gate of runtime.gates) {", 1)[1].split(
+        "  const deadlineMs", 1
+    )[0]
+    assert gate_loop == (
+        "\n    args.push(\"--gate\", gate.source, \"--gate-timeout\", "
+        "String(gate.timeout_seconds));\n  }\n"
+    )
     assert diagnostics.count("result") == 3
     assert "throw " not in diagnostics
     assert "permissionDecision" not in diagnostics
@@ -277,6 +294,54 @@ def test_pi_architecture_check_rejects_selective_typescript_policy() -> None:
     with pytest.raises(AssertionError):
         _assert_thin_pi_extension(diagnostics_mutant)
 
+    gate_filter_mutant = source.replace(
+        "    gates: parsed.gates,",
+        "    gates: parsed.gates.filter(\n"
+        "      (gate: Gate) => gate.id !== \"merge_authorization_gate\",\n"
+        "    ),",
+        1,
+    )
+    with pytest.raises(AssertionError):
+        _assert_thin_pi_extension(gate_filter_mutant)
+
+    transport_filter_mutant = source.replace(
+        "  for (const gate of runtime.gates) {\n"
+        "    args.push(\"--gate\", gate.source, \"--gate-timeout\", "
+        "String(gate.timeout_seconds));\n"
+        "  }",
+        "  for (const gate of runtime.gates) {\n"
+        "    if (gate.id === \"merge_authorization_gate\") continue;\n"
+        "    args.push(\"--gate\", gate.source, \"--gate-timeout\", "
+        "String(gate.timeout_seconds));\n"
+        "  }",
+        1,
+    )
+    with pytest.raises(AssertionError):
+        _assert_thin_pi_extension(transport_filter_mutant)
+
+    prompt_policy_mutant = source.replace(
+        ': `${event.systemPrompt}\\n\\n${runtime.instructions}`,',
+        ': `${event.systemPrompt}\\n\\n${runtime.instructions}'
+        '\\n\\nPi-only policy: never execute sudo`,',
+        1,
+    )
+    with pytest.raises(AssertionError):
+        _assert_thin_pi_extension(prompt_policy_mutant)
+
+    duplicate_handler_mutant = source.replace(
+        '  pi.on("before_agent_start",',
+        '  pi.on("tool_call", async ({ input }) => {\n'
+        '    const value = Object.values(input ?? {})[0];\n'
+        '    return value === "sudo"\n'
+        '      ? { block: true, reason: "Pi-only policy" }\n'
+        '      : undefined;\n'
+        '  });\n\n'
+        '  pi.on("before_agent_start",',
+        1,
+    )
+    with pytest.raises(AssertionError):
+        _assert_thin_pi_extension(duplicate_handler_mutant)
+
 
 def test_pi_extension_runs_one_dispatcher_per_tool_call_for_allow_and_deny(
     tmp_path,
@@ -298,11 +363,26 @@ def test_pi_extension_runs_one_dispatcher_per_tool_call_for_allow_and_deny(
 const { default: extension } = await import(process.argv[2]);
 
 const handlers = new Map();
-extension({ on(event, handler) { handlers.set(event, handler); } });
-const toolCall = handlers.get("tool_call");
-if (!toolCall) throw new Error("Pi extension did not register tool_call");
+extension({
+  on(event, handler) {
+    const registered = handlers.get(event) ?? [];
+    registered.push(handler);
+    handlers.set(event, registered);
+  },
+});
+const toolCalls = handlers.get("tool_call") ?? [];
+if (toolCalls.length !== 1) {
+  throw new Error(`Expected one Pi tool_call handler, got ${toolCalls.length}`);
+}
+const toolCall = toolCalls[0];
 const context = { cwd: process.argv[3] };
-const beforeAgentStart = handlers.get("before_agent_start");
+const beforeAgentStarts = handlers.get("before_agent_start") ?? [];
+if (beforeAgentStarts.length !== 1) {
+  throw new Error(
+    `Expected one Pi before_agent_start handler, got ${beforeAgentStarts.length}`,
+  );
+}
+const beforeAgentStart = beforeAgentStarts[0];
 const injected = await beforeAgentStart({
   type: "before_agent_start", systemPrompt: "base prompt",
 }, context);
@@ -339,8 +419,9 @@ console.log(JSON.stringify({ safe: safe ?? null, denied, injected }));
     assert output["safe"] is None
     assert output["denied"]["block"] is True
     assert "escapement-worktree create" in output["denied"]["reason"]
-    assert output["injected"]["systemPrompt"].startswith("base prompt\n\n")
-    assert "# Escapement Shared Workflow" in output["injected"]["systemPrompt"]
+    assert output["injected"]["systemPrompt"] == (
+        "base prompt\n\n" + (PI_ROOT / "PI.md").read_text(encoding="utf-8")
+    )
     assert process_log.read_text(encoding="utf-8").splitlines() == [
         "dispatch",
         "dispatch",
