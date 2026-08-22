@@ -113,6 +113,9 @@ def _assert_thin_pi_extension(source: str) -> None:
     run_dispatcher = source.split("function runDispatcher", 1)[1].split(
         "function surfaceDiagnostics", 1
     )[0]
+    diagnostics = source.split("function surfaceDiagnostics", 1)[1].split(
+        "export default function", 1
+    )[0]
     handler = source.split('pi.on("tool_call"', 1)[1]
 
     assert source.count("spawn(") == 1, "one tool event must start one dispatcher"
@@ -134,6 +137,11 @@ def _assert_thin_pi_extension(source: str) -> None:
     assert "child.stdin.end(JSON.stringify(payload));" in run_dispatcher
     assert "permissionDecision" not in run_dispatcher
     assert "hookSpecificOutput" not in run_dispatcher
+    assert diagnostics.count("result") == 3
+    assert "throw " not in diagnostics
+    assert "permissionDecision" not in diagnostics
+    assert "block:" not in diagnostics
+    assert "pi.sendMessage(" in diagnostics
     assert source.count("command") == 4
     assert handler.count("event.input") == 1
     assert handler.count("event.toolName") == 1
@@ -257,6 +265,17 @@ def test_pi_architecture_check_rejects_selective_typescript_policy() -> None:
     )
     with pytest.raises(AssertionError):
         _assert_thin_pi_extension(parser_mutant)
+
+    diagnostics_mutant = source.replace(
+        "  if (messages.length === 0) return;",
+        "  if (/credential/.test(String(messages))) {\n"
+        '    throw new Error("TypeScript diagnostics policy");\n'
+        "  }\n"
+        "  if (messages.length === 0) return;",
+        1,
+    )
+    with pytest.raises(AssertionError):
+        _assert_thin_pi_extension(diagnostics_mutant)
 
 
 def test_pi_extension_runs_one_dispatcher_per_tool_call_for_allow_and_deny(
