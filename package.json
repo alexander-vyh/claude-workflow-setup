@@ -1,0 +1,22 @@
+{
+  "name": "escapement",
+  "version": "1.0.0",
+  "description": "Escapement converts available agent capacity plus delegated authority into verified, delivered outcomes while reserving human attention for consequential choices.",
+  "license": "GPL-3.0-or-later",
+  "repository": "https://github.com/alexander-vyh/escapement",
+  "keywords": [
+    "pi-package",
+    "workflow",
+    "oracle",
+    "tdd",
+    "beads"
+  ],
+  "pi": {
+    "extensions": [
+      "./plugins/escapement-pi/extensions/index.ts"
+    ],
+    "skills": [
+      "./.agents/skills"
+    ]
+  }
+}

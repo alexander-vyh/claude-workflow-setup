@@ -1,0 +1,81 @@
+{
+  "version": 1,
+  "dispatcher": "claude/hooks/codex_pretool_dispatch.py",
+  "gates": [
+    {
+      "id": "test_oracle_brief_gate",
+      "source": "claude/hooks/test_oracle_brief_gate.py",
+      "timeout_seconds": 5
+    },
+    {
+      "id": "beads_worktree_guard",
+      "source": "claude/hooks/beads_worktree_guard.py",
+      "timeout_seconds": 10
+    },
+    {
+      "id": "root_checkout_guard",
+      "source": "claude/hooks/root_checkout_guard.py",
+      "timeout_seconds": 10
+    },
+    {
+      "id": "discovery-close-gate",
+      "source": "claude/hooks/discovery-close-gate.py",
+      "timeout_seconds": 10
+    },
+    {
+      "id": "discovery-gate",
+      "source": "claude/hooks/discovery-gate.py",
+      "timeout_seconds": 10
+    },
+    {
+      "id": "epic_coverage_gate",
+      "source": "claude/hooks/epic_coverage_gate.py",
+      "timeout_seconds": 10
+    },
+    {
+      "id": "implementation_echo_test_gate",
+      "source": "claude/hooks/implementation_echo_test_gate.py",
+      "timeout_seconds": 10
+    },
+    {
+      "id": "openspec_init_guard",
+      "source": "claude/hooks/openspec_init_guard.py",
+      "timeout_seconds": 10
+    },
+    {
+      "id": "openspec_task_reconciliation_gate",
+      "source": "claude/hooks/openspec_task_reconciliation_gate.py",
+      "timeout_seconds": 10
+    },
+    {
+      "id": "oracle_downgrade_warning_gate",
+      "source": "claude/hooks/oracle_downgrade_warning_gate.py",
+      "timeout_seconds": 10
+    },
+    {
+      "id": "outcome_assertion_gate",
+      "source": "claude/hooks/outcome_assertion_gate.py",
+      "timeout_seconds": 10
+    },
+    {
+      "id": "merge_authorization_gate",
+      "source": "claude/hooks/merge_authorization_gate.py",
+      "timeout_seconds": 10
+    },
+    {
+      "id": "outcome_ownership_nudge",
+      "source": "claude/hooks/outcome_ownership_nudge.py",
+      "timeout_seconds": 5
+    },
+    {
+      "id": "bead_verify_nudge",
+      "source": "claude/hooks/bead_verify_nudge.py",
+      "timeout_seconds": 5
+    },
+    {
+      "id": "spec_id_enforcement",
+      "source": "claude/hooks/spec_id_enforcement.py",
+      "timeout_seconds": 10
+    }
+  ]
+}
