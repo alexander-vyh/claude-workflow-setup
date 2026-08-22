@@ -107,12 +107,19 @@ def test_renderer_recomputes_pi_inventory_when_shared_manifest_changes() -> None
 
 
 def _assert_thin_pi_extension(source: str) -> None:
+    response_parser = source.split("function parseDispatcherResponse", 1)[1].split(
+        "function runDispatcher", 1
+    )[0]
     run_dispatcher = source.split("function runDispatcher", 1)[1].split(
         "function surfaceDiagnostics", 1
     )[0]
     handler = source.split('pi.on("tool_call"', 1)[1]
 
     assert source.count("spawn(") == 1, "one tool event must start one dispatcher"
+    assert response_parser.count("stdout") == 2
+    assert response_parser.count("JSON.parse(stdout)") == 1
+    assert response_parser.count("return result;") == 1
+    assert "return {" not in response_parser
     assert "codex_pretool_dispatch.py" not in source, (
         "the generated inventory, not TypeScript, owns the dispatcher path"
     )
@@ -238,6 +245,18 @@ def test_pi_architecture_check_rejects_selective_typescript_policy() -> None:
     )
     with pytest.raises(AssertionError):
         _assert_thin_pi_extension(cwd_mutant)
+
+    parser_mutant = source.replace(
+        "  const result = JSON.parse(stdout);",
+        "  const result = JSON.parse(stdout);\n"
+        "  if (/sudo/.test(stdout)) {\n"
+        "    return { hookSpecificOutput: { hookEventName: \"PreToolUse\", "
+        'permissionDecision: "deny" } };\n'
+        "  }",
+        1,
+    )
+    with pytest.raises(AssertionError):
+        _assert_thin_pi_extension(parser_mutant)
 
 
 def test_pi_extension_runs_one_dispatcher_per_tool_call_for_allow_and_deny(

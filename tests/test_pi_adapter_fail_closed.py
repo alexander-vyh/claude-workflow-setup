@@ -305,7 +305,7 @@ def test_advisory_and_timeout_are_surfaced_before_later_deny(tmp_path) -> None:
     gates.mkdir()
     (gates / "advisory.py").write_text(
         "import json\nprint(json.dumps({'hookSpecificOutput': {"
-        "'hookEventName': 'PreToolUse', 'additionalContext': 'pi-advisory'}}))\n",
+        "'hookEventName': 'PreToolUse', 'additionalContext': 'sudo advisory'}}))\n",
         encoding="utf-8",
     )
     (gates / "slow.py").write_text(
@@ -330,5 +330,5 @@ def test_advisory_and_timeout_are_surfaced_before_later_deny(tmp_path) -> None:
     assert output["result"] == {"block": True, "reason": "[deny] pi-denial"}
     assert output["messages"][0]["options"] == {"deliverAs": "steer"}
     surfaced = "\n".join(message["content"] for message in output["messages"])
-    assert "pi-advisory" in surfaced
+    assert "sudo advisory" in surfaced
     assert "timed out after 0.01s" in surfaced
