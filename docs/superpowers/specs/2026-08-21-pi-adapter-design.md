@@ -12,8 +12,10 @@ to produce its Claude and Codex packages:
 pi install git:github.com/alexander-vyh/escapement
 ```
 
-The installed Pi package receives Escapement's shared instructions, skills, and
+The installed Pi package receives Escapement's shared instructions and
 Codex-ready Bash tool gates without a second implementation of workflow policy.
+Skills continue to load through Pi's native user/project `.agents/skills`
+discovery so the Git package does not register duplicate names.
 
 ## Source of Truth
 
@@ -57,16 +59,16 @@ The renderer owns these Pi distribution artifacts:
 - `plugins/escapement-pi/extensions/index.ts`, the thin host adapter;
 - `plugins/escapement-pi/gates.json`, the generated ready-gate inventory;
 - `plugins/escapement-pi/PI.md`, rendered shared instructions;
-- Pi skill paths selected from the same canonical skill sources already used by
-  Claude and Codex.
+- no package-level skill resource; Pi uses the generated native user/project
+  `.agents/skills` surfaces already shared with Claude and Codex.
 
-The root manifest points into `plugins/escapement-pi/` and the shared skill
-tree. Pi therefore installs the repository root rather than a separate release
-repository or copied subtree.
+The root manifest points into `plugins/escapement-pi/`. Pi therefore installs
+the repository root rather than a separate release repository or copied
+subtree, without reporting collisions against native skill copies.
 
 The TypeScript extension is maintained host-specific code. Its gate inventory,
-instruction document, package metadata, and skill selection are generated from
-the neutral root and checked for drift.
+instruction document and package metadata are generated from the neutral root
+and checked for drift.
 
 ## Runtime Components
 
@@ -170,8 +172,8 @@ extension or pointing at a stale copied gate inventory.
 ### Positive controls
 
 - a safe Bash command executes;
-- instructions and at least one shared skill are visible in an installed Pi
-  session;
+- instructions are visible and package loading does not duplicate native
+  user/project skills in an installed Pi session;
 - multiple applicable gates execute inside one dispatcher PID.
 
 ### Missing or unresolved handling
@@ -182,10 +184,10 @@ Missing runtime/package evidence fails closed for a capability claimed ready.
 
 Using an isolated `PI_CODING_AGENT_DIR`, install Escapement from the merged Git
 root, inspect `pi list`, create a real model-free Pi SDK session, prove the
-installed extension and a packaged skill loaded, observe a safe Bash call
-complete, and observe a runtime-generated denial from two shared Python gates
-with one dispatcher PID. Then verify a normal user-scope install/update path
-from the same Git root.
+installed extension loaded without package-owned skill duplicates, observe a
+safe Bash call complete, and observe a runtime-generated denial from two shared
+Python gates with one dispatcher PID. Then verify a normal user-scope
+install/update path from the same Git root.
 
 ## Non-goals
 
@@ -201,4 +203,4 @@ from the same Git root.
 The change follows the repository's declared feature-branch, pull-request,
 merge, and post-merge verification path. Delivery is complete only when a fresh
 Pi configuration installs the merged repository root and the real allow, deny,
-instruction, and skill outcomes are observed.
+instruction, and collision-free native-skill outcomes are observed.
