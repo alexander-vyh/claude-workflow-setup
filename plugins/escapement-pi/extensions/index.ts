@@ -108,7 +108,11 @@ function parseDispatcherResponse(stdout: string): DispatcherResponse {
   return result;
 }
 
-function runDispatcher(runtime: Runtime, payload: Record<string, unknown>): Promise<DispatcherResponse> {
+function runDispatcher(
+  runtime: Runtime,
+  payload: Record<string, unknown>,
+  signal?: AbortSignal,
+): Promise<DispatcherResponse> {
   const args = ["-B", runtime.dispatcherPath];
   for (const gate of runtime.gates) {
     args.push("--gate", gate.source, "--gate-timeout", String(gate.timeout_seconds));
@@ -128,7 +132,12 @@ function runDispatcher(runtime: Runtime, payload: Record<string, unknown>): Prom
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
       callback();
+    };
+    const abort = () => {
+      child.kill("SIGKILL");
+      finish(() => reject(new Error("Escapement Pi dispatcher aborted")));
     };
     const collect = (target: Buffer[], chunk: Buffer) => {
       outputBytes += chunk.length;
@@ -143,9 +152,14 @@ function runDispatcher(runtime: Runtime, payload: Record<string, unknown>): Prom
       child.kill("SIGKILL");
       finish(() => reject(new Error("Escapement Pi dispatcher timed out")));
     }, deadlineMs);
+    if (signal?.aborted) abort();
+    else signal?.addEventListener("abort", abort, { once: true });
 
     child.stdout.on("data", (chunk: Buffer) => collect(stdout, chunk));
     child.stderr.on("data", (chunk: Buffer) => collect(stderr, chunk));
+    child.stdin.on("error", (error: NodeJS.ErrnoException) => {
+      if (error.code !== "EPIPE") finish(() => reject(error));
+    });
     child.on("error", (error) => finish(() => reject(error)));
     child.on("close", (code) => finish(() => {
       const renderedError = Buffer.concat(stderr).toString("utf8").trim();
@@ -169,7 +183,7 @@ function surfaceDiagnostics(pi: PiAPI, result: DispatcherResponse): void {
   if (messages.length === 0) return;
   pi.sendMessage(
     { customType: "escapement", content: messages.join("\n\n"), display: true },
-    { deliverAs: "followUp", triggerTurn: false },
+    { deliverAs: "steer" },
   );
 }
 
@@ -198,13 +212,17 @@ export default function escapementPi(pi: PiAPI): void {
     }
 
     try {
-      const result = await runDispatcher(runtime, {
-        session_id: event.toolCallId,
-        cwd: context.cwd,
-        hook_event_name: "PreToolUse",
-        tool_name: "Bash",
-        tool_input: { command },
-      });
+      const result = await runDispatcher(
+        runtime,
+        {
+          session_id: event.toolCallId,
+          cwd: context.cwd,
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command },
+        },
+        context.signal,
+      );
       surfaceDiagnostics(pi, result);
       const hook = result.hookSpecificOutput;
       const decision = hook?.permissionDecision;

@@ -107,6 +107,11 @@ def test_renderer_recomputes_pi_inventory_when_shared_manifest_changes() -> None
 
 
 def _assert_thin_pi_extension(source: str) -> None:
+    run_dispatcher = source.split("function runDispatcher", 1)[1].split(
+        "function surfaceDiagnostics", 1
+    )[0]
+    handler = source.split('pi.on("tool_call"', 1)[1]
+
     assert source.count("spawn(") == 1, "one tool event must start one dispatcher"
     assert "codex_pretool_dispatch.py" not in source, (
         "the generated inventory, not TypeScript, owns the dispatcher path"
@@ -117,6 +122,29 @@ def _assert_thin_pi_extension(source: str) -> None:
         "implementation_echo_test_gate.py",
     ):
         assert gate_specific_policy not in source
+    assert run_dispatcher.count("payload") == 2
+    assert run_dispatcher.count("JSON.stringify(payload)") == 1
+    assert "child.stdin.end(JSON.stringify(payload));" in run_dispatcher
+    assert "permissionDecision" not in run_dispatcher
+    assert "hookSpecificOutput" not in run_dispatcher
+    assert source.count("command") == 4
+    assert handler.count("event.input") == 1
+    assert handler.count("event.toolName") == 1
+    assert handler.count("event.toolCallId") == 1
+    assert handler.count("context.cwd") == 1
+    assert handler.count("context.signal") == 1
+    assert "const command = event.input?.command;" in handler
+    assert 'if (typeof command !== "string") {' in handler
+    assert [
+        line.strip()
+        for line in handler.splitlines()
+        if line.strip().startswith("if (")
+    ] == [
+        'if (event.toolName !== "bash") return;',
+        "if (runtime instanceof Error) {",
+        'if (typeof command !== "string") {',
+        'if (decision === "deny" || decision === "ask") {',
+    ]
     for forbidden_policy_syntax in (
         ".includes(",
         ".indexOf(",
@@ -176,6 +204,40 @@ def test_pi_architecture_check_rejects_selective_typescript_policy() -> None:
     )
     with pytest.raises(AssertionError):
         _assert_thin_pi_extension(dispatcher_mutant)
+
+    regex_mutant = source.replace(
+        "  const args =",
+        "  if (/sudo/.test(JSON.stringify(payload))) {\n"
+        "    return Promise.resolve({ hookSpecificOutput: { "
+        'hookEventName: "PreToolUse", permissionDecision: "deny" } });\n'
+        "  }\n"
+        "  const args =",
+        1,
+    )
+    with pytest.raises(AssertionError):
+        _assert_thin_pi_extension(regex_mutant)
+
+    input_mutant = source.replace(
+        "    const command = event.input?.command;",
+        "    if (Object.values(event.input ?? {}).some((value) => value === \"sudo\")) {\n"
+        "      return { block: true, reason: \"TypeScript safety policy\" };\n"
+        "    }\n"
+        "    const command = event.input?.command;",
+        1,
+    )
+    with pytest.raises(AssertionError):
+        _assert_thin_pi_extension(input_mutant)
+
+    cwd_mutant = source.replace(
+        "    const command = event.input?.command;",
+        '    if (context.cwd === "/") {\n'
+        '      return { block: true, reason: "TypeScript root policy" };\n'
+        "    }\n"
+        "    const command = event.input?.command;",
+        1,
+    )
+    with pytest.raises(AssertionError):
+        _assert_thin_pi_extension(cwd_mutant)
 
 
 def test_pi_extension_runs_one_dispatcher_per_tool_call_for_allow_and_deny(

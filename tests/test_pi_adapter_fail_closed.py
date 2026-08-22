@@ -2,6 +2,7 @@ import json
 import os
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -17,21 +18,29 @@ def copy_pi_plugin(tmp_path: Path) -> Path:
     return plugin
 
 
-def run_extension(plugin: Path, command: str, *, env: dict | None = None):
+def run_extension(
+    plugin: Path,
+    command: str,
+    *,
+    env: dict | None = None,
+    abort_after_ms: int | None = None,
+):
     probe = plugin.parent / "probe.mjs"
     probe.write_text(
         """
 const { default: extension } = await import(process.argv[2]);
 const handlers = new Map();
 const messages = [];
+const controller = new AbortController();
 extension({
   on(event, handler) { handlers.set(event, handler); },
-  sendMessage(message) { messages.push(message.content); },
+  sendMessage(message, options) { messages.push({ content: message.content, options }); },
 });
+if (process.argv[5]) setTimeout(() => controller.abort(), Number(process.argv[5]));
 const result = await handlers.get("tool_call")({
   type: "tool_call", toolCallId: "probe", toolName: "bash",
   input: { command: process.argv[3] },
-}, { cwd: process.argv[4] });
+}, { cwd: process.argv[4], signal: controller.signal });
 console.log(JSON.stringify({ result: result ?? null, messages }));
 """,
         encoding="utf-8",
@@ -44,6 +53,7 @@ console.log(JSON.stringify({ result: result ?? null, messages }));
             (plugin / "extensions" / "index.ts").as_uri(),
             command,
             str(ROOT),
+            "" if abort_after_ms is None else str(abort_after_ms),
         ],
         cwd=ROOT,
         capture_output=True,
@@ -131,6 +141,86 @@ console.log(JSON.stringify({
     assert "configuration" in result["blocked"]["reason"].lower()
 
 
+def test_installed_pi_steers_diagnostic_without_mutating_tool_history(
+    tmp_path,
+) -> None:
+    pi = shutil.which("pi")
+    assert pi
+    pi_sdk = Path(pi).resolve().with_name("index.js")
+    package = tmp_path / "package"
+    package.mkdir()
+    shutil.copy2(ROOT / "package.json", package / "package.json")
+    shutil.copytree(ROOT / ".agents", package / ".agents")
+    plugin = package / "plugins" / "escapement-pi"
+    shutil.copytree(PI_ROOT, plugin)
+    gates = plugin / "test-gates"
+    gates.mkdir()
+    (gates / "advisory.py").write_text(
+        "import json\nprint(json.dumps({'hookSpecificOutput': {"
+        "'hookEventName': 'PreToolUse', 'additionalContext': 'queued-advisory'}}))\n",
+        encoding="utf-8",
+    )
+    (gates / "deny.py").write_text(
+        "import json\nprint(json.dumps({'hookSpecificOutput': {"
+        "'hookEventName': 'PreToolUse', 'permissionDecision': 'deny', "
+        "'permissionDecisionReason': 'queue-denial'}}))\n",
+        encoding="utf-8",
+    )
+    payload = inventory(plugin)
+    payload["gates"] = [
+        {"id": "advisory", "source": "test-gates/advisory.py", "timeout_seconds": 1},
+        {"id": "deny", "source": "test-gates/deny.py", "timeout_seconds": 1},
+    ]
+    write_inventory(plugin, payload)
+    agent_dir = tmp_path / "agent"
+    env = {**os.environ, "PI_CODING_AGENT_DIR": str(agent_dir), "PI_OFFLINE": "1"}
+    installed = subprocess.run(
+        [pi, "install", str(package), "--approve"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=env,
+    )
+    assert installed.returncode == 0, installed.stderr
+    probe = tmp_path / "installed-next-turn.mjs"
+    probe.write_text(
+        """
+const { createAgentSession } = await import(process.argv[2]);
+const created = await createAgentSession({
+  agentDir: process.argv[3], cwd: process.argv[4], noTools: "all",
+});
+created.session._isAgentRunActive = true;
+const before = created.session.messages.length;
+const blocked = await created.session.extensionRunner.emitToolCall({
+  type: "tool_call", toolCallId: "queued", toolName: "bash",
+  input: { command: "nonce" },
+});
+created.session._isAgentRunActive = false;
+console.log(JSON.stringify({
+  before,
+  after: created.session.messages.length,
+  steering: created.session.agent.steeringQueue.messages.map((message) => message.content),
+  blocked,
+}));
+""",
+        encoding="utf-8",
+    )
+    loaded = subprocess.run(
+        ["node", str(probe), str(pi_sdk), str(agent_dir), str(tmp_path)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=env,
+    )
+    assert loaded.returncode == 0, loaded.stderr
+    result = json.loads(loaded.stdout)
+    assert result["after"] == result["before"]
+    assert result["steering"] == ["queued-advisory"]
+    assert result["blocked"] == {"block": True, "reason": "[deny] queue-denial"}
+
+
 @pytest.mark.parametrize("escape", ["absolute", "traversal", "symlink"])
 def test_dispatcher_path_escape_blocks_without_execution(tmp_path, escape) -> None:
     plugin = copy_pi_plugin(tmp_path)
@@ -193,6 +283,22 @@ def test_dispatcher_output_is_bounded(tmp_path) -> None:
     assert "exceeded 1048576 bytes" in output["result"]["reason"]
 
 
+def test_pi_cancellation_terminates_dispatcher_promptly(tmp_path) -> None:
+    plugin = copy_pi_plugin(tmp_path)
+    slow = plugin / "slow-dispatcher.py"
+    slow.write_text("import time\ntime.sleep(5)\nprint('{}')\n", encoding="utf-8")
+    payload = inventory(plugin)
+    payload["dispatcher"] = "slow-dispatcher.py"
+    write_inventory(plugin, payload)
+
+    started = time.monotonic()
+    output = run_extension(plugin, "pwd", abort_after_ms=50)
+
+    assert time.monotonic() - started < 2
+    assert output["result"]["block"] is True
+    assert "aborted" in output["result"]["reason"].lower()
+
+
 def test_advisory_and_timeout_are_surfaced_before_later_deny(tmp_path) -> None:
     plugin = copy_pi_plugin(tmp_path)
     gates = plugin / "test-gates"
@@ -222,6 +328,7 @@ def test_advisory_and_timeout_are_surfaced_before_later_deny(tmp_path) -> None:
     output = run_extension(plugin, "nonce-command")
 
     assert output["result"] == {"block": True, "reason": "[deny] pi-denial"}
-    surfaced = "\n".join(output["messages"])
+    assert output["messages"][0]["options"] == {"deliverAs": "steer"}
+    surfaced = "\n".join(message["content"] for message in output["messages"])
     assert "pi-advisory" in surfaced
     assert "timed out after 0.01s" in surfaced
