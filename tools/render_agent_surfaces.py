@@ -29,6 +29,7 @@ except ModuleNotFoundError:  # Imported by a path-based test module from the rep
 
 try:
     from pi_agent_surface import (
+        PI_HOOK_SUPPORT,
         PI_PLUGIN_ROOT,
         ready_bash_gates as _pi_ready_bash_gates,
         render_gate_inventory as _render_pi_gate_inventory,
@@ -37,6 +38,7 @@ try:
     )
 except ModuleNotFoundError:
     from tools.pi_agent_surface import (
+        PI_HOOK_SUPPORT,
         PI_PLUGIN_ROOT,
         ready_bash_gates as _pi_ready_bash_gates,
         render_gate_inventory as _render_pi_gate_inventory,
@@ -118,10 +120,6 @@ CODEX_HOOK_SUPPORT = {
     "harness/schemas/contract.schema.json",
     "harness/schemas/executions.schema.json",
     "harness/schemas/scheduled.schema.json",
-}
-PI_HOOK_SUPPORT = {
-    "claude/hooks/codex_pretool_dispatch.py",
-    "harness/bin/repo_outcome.py",
 }
 CLAUDE_EXTRA_HOOK_SUPPORT = {
     "claude/hooks/local_judge_health.py",

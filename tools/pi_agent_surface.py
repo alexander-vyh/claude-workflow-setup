@@ -8,6 +8,10 @@ from typing import Any
 
 
 PI_PLUGIN_ROOT = Path("plugins/escapement-pi")
+PI_HOOK_SUPPORT = {
+    "claude/hooks/codex_pretool_dispatch.py",
+    "harness/bin/repo_outcome.py",
+}
 
 
 def ready_bash_gates(manifest: dict[str, Any]) -> list[dict[str, Any]]:
