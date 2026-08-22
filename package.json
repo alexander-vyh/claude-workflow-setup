@@ -14,9 +14,6 @@
   "pi": {
     "extensions": [
       "./plugins/escapement-pi/extensions/index.ts"
-    ],
-    "skills": [
-      "./.agents/skills"
     ]
   }
 }
