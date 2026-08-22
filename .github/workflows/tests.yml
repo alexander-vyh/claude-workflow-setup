@@ -15,8 +15,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
       - name: Install test dependencies
         run: python -m pip install --upgrade pip pytest jsonschema
+      - name: Install Pi host contract
+        run: npm install --global @earendil-works/pi-coding-agent@0.84.2
       - name: Deploy hooks to ~/.claude/hooks
         # Most hook test files import from ~/.claude/hooks (the deployed location)
         # and module-skip if it is absent. Without this, CI would silently SKIP
