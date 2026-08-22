@@ -55,7 +55,6 @@ def render_package(identity: dict[str, Any]) -> str:
         "keywords": ["pi-package", "workflow", "oracle", "tdd", "beads"],
         "pi": {
             "extensions": ["./plugins/escapement-pi/extensions/index.ts"],
-            "skills": ["./.agents/skills"],
         },
     }
     return json.dumps(payload, indent=2) + "\n"

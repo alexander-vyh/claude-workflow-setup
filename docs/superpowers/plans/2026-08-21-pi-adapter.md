@@ -2,7 +2,7 @@
 
 > **For Codex:** Execute this plan in order. Tests define the package contract before implementation.
 
-**Goal:** Make the Escapement Git repository root directly installable by Pi, using the same neutral manifest, instructions, skills, and Python gate dispatcher as the Claude and Codex distributions.
+**Goal:** Make the Escapement Git repository root directly installable by Pi, using the same neutral manifest, instructions, and Python gate dispatcher as the Claude and Codex distributions while leaving skills to Pi's native user/project discovery.
 
 **Architecture:** `tools/render_agent_surfaces.py` renders a root Pi package manifest, Pi instructions, and a Pi-ready gate inventory from `agent-surfaces/manifest.json`. A thin TypeScript extension translates Pi Bash calls into the existing dispatcher payload; it contains no workflow policy.
 
@@ -16,7 +16,7 @@
 - Add: `tests/test_pi_adapter.py`
 - Modify: `agent-surfaces/manifest.json`
 
-1. Add failing tests proving the root `package.json` exposes the extension, shared skills, and `pi-package` keyword.
+1. Add failing tests proving the root `package.json` exposes the extension and `pi-package` keyword without re-registering native user/project skills.
 2. Add a negative control proving the generated gate inventory contains every and only Pi-ready Bash gate declared by the neutral manifest.
 3. Add a static negative control rejecting per-gate process spawning or gate-specific policy in the extension.
 4. Run `pytest -q tests/test_pi_adapter.py` and confirm it fails because the Pi surface does not exist.
@@ -54,6 +54,6 @@
 
 1. Run the renderer check and full relevant test suite.
 2. Mutation-challenge the oracle and repair any test that permits a stale inventory, empty package, or per-gate spawn implementation.
-3. Load/install the package with an isolated `PI_CODING_AGENT_DIR`; verify Pi lists the extension and shared skills.
+3. Load/install the package with an isolated `PI_CODING_AGENT_DIR`; verify Pi lists the extension without package-owned skill duplicates.
 4. Request code review and perform independent outcome verification.
 5. Push `feat/pi-adapter-v2`, open the PR, merge after required checks, install from `git:github.com/alexander-vyh/escapement`, and repeat the package/runtime verification against merged `main`.

@@ -65,7 +65,6 @@ def test_root_package_exposes_pi_resources_from_the_shared_root() -> None:
     assert "pi-package" in package["keywords"]
     assert package["pi"] == {
         "extensions": ["./plugins/escapement-pi/extensions/index.ts"],
-        "skills": ["./.agents/skills"],
     }
     assert EXTENSION.is_file()
     assert (PI_ROOT / "PI.md").is_file()
@@ -428,7 +427,9 @@ console.log(JSON.stringify({ safe: safe ?? null, denied, injected }));
     ], "each Pi tool call must use exactly one shared dispatcher process"
 
 
-def test_real_pi_sdk_loads_installed_extension_skills_and_nonce_gate(tmp_path) -> None:
+def test_real_pi_sdk_loads_installed_extension_without_duplicate_skills_and_nonce_gate(
+    tmp_path,
+) -> None:
     pi = shutil.which("pi")
     assert pi, "Pi CLI is required for the package contract test"
     pi_sdk = Path(pi).resolve().with_name("index.js")
@@ -436,8 +437,13 @@ def test_real_pi_sdk_loads_installed_extension_skills_and_nonce_gate(tmp_path) -
     package = tmp_path / "escapement-package"
     package.mkdir()
     shutil.copy2(ROOT / "package.json", package / "package.json")
-    shutil.copytree(ROOT / ".agents", package / ".agents")
     shutil.copytree(PI_ROOT, package / "plugins" / "escapement-pi")
+    native_skill = tmp_path / ".agents" / "skills" / "openspec-explore"
+    native_skill.mkdir(parents=True)
+    shutil.copy2(
+        ROOT / ".agents" / "skills" / "openspec-explore" / "SKILL.md",
+        native_skill / "SKILL.md",
+    )
 
     deny_nonce = f"deny-{uuid.uuid4()}"
     safe_nonce = f"safe-{uuid.uuid4()}"
@@ -542,12 +548,22 @@ const nonBash = await session.extensionRunner.emitToolCall({
   type: "tool_call", toolCallId: "read", toolName: "read",
   input: { path: process.argv[6] },
 });
+const skillsResult = session.resourceLoader.getSkills();
 console.log(JSON.stringify({
   errors: extensionsResult.errors,
   extensions: extensionsResult.extensions.map((item) => item.resolvedPath),
-  packageSkills: session.resourceLoader.getSkills().skills
+  packageSkills: skillsResult.skills
     .filter((skill) => skill.sourceInfo.baseDir === packageRoot)
     .map((skill) => skill.name),
+  nativeSkills: skillsResult.skills
+    .filter((skill) => skill.name === "openspec-explore")
+    .map((skill) => ({
+      name: skill.name,
+      filePath: skill.filePath,
+      scope: skill.sourceInfo.scope,
+      origin: skill.sourceInfo.origin,
+    })),
+  skillDiagnostics: skillsResult.diagnostics,
   safe: safe ?? null,
   denied,
   nonBash: nonBash ?? null,
@@ -576,7 +592,16 @@ console.log(JSON.stringify({
     result = json.loads(loaded.stdout)
     assert result["errors"] == []
     assert result["extensions"] == [str(package / "plugins/escapement-pi/extensions/index.ts")]
-    assert "openspec-explore" in result["packageSkills"]
+    assert result["packageSkills"] == []
+    assert result["nativeSkills"] == [
+        {
+            "name": "openspec-explore",
+            "filePath": str(native_skill / "SKILL.md"),
+            "scope": "project",
+            "origin": "top-level",
+        }
+    ]
+    assert result["skillDiagnostics"] == []
     assert result["safe"] is None
     assert result["denied"] == {"block": True, "reason": f"[deny] {deny_reason}"}
     assert result["nonBash"] is None
