@@ -12,9 +12,8 @@ to produce its Claude and Codex packages:
 pi install git:github.com/alexander-vyh/escapement
 ```
 
-The installed Pi package receives Escapement's shared instructions, skills,
-tool gates, lifecycle context, and completion/continuation decisions without a
-second implementation of workflow policy.
+The installed Pi package receives Escapement's shared instructions, skills, and
+Codex-ready Bash tool gates without a second implementation of workflow policy.
 
 ## Source of Truth
 
@@ -83,51 +82,29 @@ For each Pi `tool_call`, the extension:
 4. supplies all selected gates and their individual timeout budgets;
 5. maps the aggregate decision to Pi.
 
-Pi tool mappings initially cover its built-ins:
-
-- `bash` to `Bash`;
-- `write` to `Write`;
-- `edit` to `Edit`.
-
-A deny decision returns `{ block: true, reason }`. An allow decision returns no
-block. An ask decision uses Pi UI confirmation when UI is available and blocks
-with the reason in non-interactive mode. Advisory context is retained in the
-session as an Escapement custom message rather than discarded.
+The initial tool mapping is deliberately narrow: Pi `bash` maps to the shared
+`Bash` payload. A deny decision returns `{ block: true, reason }`, an allow
+decision returns no block, and an ask decision fails closed with its reason.
+Write/edit mappings remain outside this basic package until a ready gate needs
+them and a fixture proves the payload contract.
 
 The extension contains no gate-specific business rules.
 
-### Shared session context
+### Capability boundary
 
-At `session_start`, the extension runs the shared session-context adapter and
-stores its returned context for the current session. At `before_agent_start`,
-it appends the rendered Pi instructions plus current dynamic context to the
-chained system prompt. At `session_before_compact`, it refreshes the dynamic
-context so the post-compaction turn receives current work and landing state.
-
-### Shared continuation decision
-
-Pi's current extension API emits `agent_settled` only after retry, compaction,
-and queued follow-up work are exhausted. It also allows an idle extension to
-trigger a new turn immediately.
-
-The Pi adapter invokes a small Python CLI around the existing
-`would_block_stop()` policy and the existing repository-outcome checks. When the
-shared decision blocks completion, the adapter sends a labelled Escapement
-message with `deliverAs: "followUp"` and `triggerTurn: true`. The next settled
-event re-evaluates durable state. When the shared decision allows completion,
-the adapter does nothing.
-
-The adapter stores the last emitted decision key in Pi session entries to avoid
-duplicate display noise, but it never treats prior emission as completion
-evidence. A changed or still-blocking decision may continue to trigger turns.
+At `before_agent_start`, the extension appends the generated Pi instructions to
+Pi's chained system prompt. Dynamic session-context refresh and mechanical
+completion/continuation interception are not part of this basic package. They
+remain explicit capability gaps, matching the repository's honesty about the
+Codex final-response boundary, rather than being approximated with new control
+machinery.
 
 ## Capability Honesty
 
-Every manifest hook must declare `hosts.pi.status` as either `ready` or
-`unsupported`. A ready claim requires a Pi payload fixture and an outcome test.
-Claude-only tool semantics such as Claude Agent dispatch remain unsupported
-until Pi exposes a matching capability. Unsupported entries carry a concrete
-reason and are not included in `gates.json`.
+The manifest owns one explicit Pi adapter mapping from Codex-ready
+`PreToolUse/Bash` gates to Pi `tool_call/bash`. Claude-only tool semantics such
+as Claude Agent dispatch remain unsupported. Capabilities outside that mapping
+are not included in `gates.json` and are not claimed as enforced.
 
 Packaging success is not described as full Claude parity. The delivered claim
 is parity for every capability explicitly marked ready for Pi.
@@ -141,11 +118,8 @@ is parity for every capability explicitly marked ready for Pi.
   run; aggregate deny precedence is preserved.
 - The extension enforces an overall process deadline derived from declared
   per-gate budgets and terminates the dispatcher if that deadline expires.
-- Repositories without Escapement work or landing configuration remain
-  conversational; completion enforcement does not infer work from unrelated
-  backlog.
 - Package loading must not start background processes. Python runs only for a
-  lifecycle or tool event.
+  tool event.
 
 ## Test Oracle Brief
 
@@ -167,7 +141,7 @@ state.
 - no TypeScript reimplementation of gate decisions;
 - one dispatcher process per tool event;
 - Pi 0.84.2 public package and extension interfaces;
-- explicit unsupported classifications;
+- an explicit, narrow Pi adapter mapping;
 - no destructive modification of the user's normal Pi configuration during
   pre-merge tests.
 
@@ -192,12 +166,10 @@ extension or pointing at a stale copied gate inventory.
 - a package with a stale or missing generated inventory fails the renderer
   check;
 - a planted per-gate-spawn adapter fails the static/process-count check;
-- unresolved completion state triggers another Pi turn.
 
 ### Positive controls
 
 - a safe Bash command executes;
-- a repository with no active Escapement outcome can settle;
 - instructions and at least one shared skill are visible in an installed Pi
   session;
 - multiple applicable gates execute inside one dispatcher PID.
@@ -205,16 +177,15 @@ extension or pointing at a stale copied gate inventory.
 ### Missing or unresolved handling
 
 Missing runtime/package evidence fails closed for a capability claimed ready.
-Missing task or landing configuration is explicitly conversational and does not
-create work.
 
 ### Final outcome verification
 
 Using an isolated `PI_CODING_AGENT_DIR`, install Escapement from the merged Git
-root, inspect `pi list`, run Pi in JSON mode in a scratch repository, observe a
-safe Bash call complete, observe a known-invalid Bash call blocked by the shared
-gate, and observe unresolved durable work cause an immediate continuation turn.
-Then verify a normal user-scope install/update path from the same Git root.
+root, inspect `pi list`, create a real model-free Pi SDK session, prove the
+installed extension and a packaged skill loaded, observe a safe Bash call
+complete, and observe a runtime-generated denial from two shared Python gates
+with one dispatcher PID. Then verify a normal user-scope install/update path
+from the same Git root.
 
 ## Non-goals
 
@@ -230,4 +201,4 @@ Then verify a normal user-scope install/update path from the same Git root.
 The change follows the repository's declared feature-branch, pull-request,
 merge, and post-merge verification path. Delivery is complete only when a fresh
 Pi configuration installs the merged repository root and the real allow, deny,
-context, skill, and continuation outcomes are observed.
+instruction, and skill outcomes are observed.

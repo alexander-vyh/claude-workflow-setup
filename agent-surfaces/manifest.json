@@ -25,7 +25,23 @@
         "fragments": [
           "agent-surfaces/onboarding/hosts/claude.md"
         ]
+      },
+      "pi": {
+        "target": "plugins/escapement-pi/PI.md",
+        "title": "Escapement Instructions For Pi",
+        "fragments": [
+          "agent-surfaces/onboarding/hosts/pi.md"
+        ]
       }
+    }
+  },
+  "adapters": {
+    "pi": {
+      "gate_source_host": "codex",
+      "source_event": "PreToolUse",
+      "source_matcher": "Bash",
+      "target_event": "tool_call",
+      "target_matcher": "bash"
     }
   },
   "support_claims": [

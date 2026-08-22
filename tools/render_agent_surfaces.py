@@ -27,6 +27,23 @@ except ModuleNotFoundError:  # Imported by a path-based test module from the rep
         validate_support_manifest,
     )
 
+try:
+    from pi_agent_surface import (
+        PI_PLUGIN_ROOT,
+        ready_bash_gates as _pi_ready_bash_gates,
+        render_gate_inventory as _render_pi_gate_inventory,
+        render_package as _render_pi_package,
+        validate_adapter as _validate_pi_adapter,
+    )
+except ModuleNotFoundError:
+    from tools.pi_agent_surface import (
+        PI_PLUGIN_ROOT,
+        ready_bash_gates as _pi_ready_bash_gates,
+        render_gate_inventory as _render_pi_gate_inventory,
+        render_package as _render_pi_package,
+        validate_adapter as _validate_pi_adapter,
+    )
+
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MANIFEST = Path("agent-surfaces/manifest.json")
@@ -101,6 +118,10 @@ CODEX_HOOK_SUPPORT = {
     "harness/schemas/contract.schema.json",
     "harness/schemas/executions.schema.json",
     "harness/schemas/scheduled.schema.json",
+}
+PI_HOOK_SUPPORT = {
+    "claude/hooks/codex_pretool_dispatch.py",
+    "harness/bin/repo_outcome.py",
 }
 CLAUDE_EXTRA_HOOK_SUPPORT = {
     "claude/hooks/local_judge_health.py",
@@ -533,6 +554,12 @@ def rendered_targets(
     targets = {
         root / docs["codex"]["target"]: _render_document(root, manifest, identity, "codex"),
         root / docs["claude"]["target"]: _render_document(root, manifest, identity, "claude"),
+        root / docs["pi"]["target"]: _render_document(root, manifest, identity, "pi"),
+        root / "package.json": _render_pi_package(identity),
+        root / PI_PLUGIN_ROOT / "gates.json": _render_pi_gate_inventory(manifest),
+        root / PI_PLUGIN_ROOT / "extensions" / "index.ts": (
+            root / "agent-surfaces" / "hosts" / "pi" / "extensions" / "index.ts"
+        ).read_text(encoding="utf-8"),
         root / ".codex" / "hooks.json": _render_codex_hooks(manifest),
         root / ".agents" / "plugins" / "marketplace.json": _render_codex_marketplace(),
         root / CODEX_PLUGIN_ROOT / ".codex-plugin" / "plugin.json": _render_codex_plugin_manifest(identity),
@@ -547,6 +574,7 @@ def rendered_targets(
         content = (root / source).read_text(encoding="utf-8")
         targets[root / CODEX_PLUGIN_ROOT / source] = content
         targets[root / CLAUDE_PLUGIN_ROOT / source] = content
+        targets[root / PI_PLUGIN_ROOT / source] = content
 
     hook_sources = _codex_ready_hook_sources(manifest)
     if hook_sources:
@@ -559,6 +587,13 @@ def rendered_targets(
         source_path = root / source
         if source_path.exists():
             targets[root / CODEX_PLUGIN_ROOT / source] = source_path.read_text(encoding="utf-8")
+
+    pi_hook_sources = {gate["source"] for gate in _pi_ready_bash_gates(manifest)}
+    pi_hook_sources.update(SHARED_HOOK_SUPPORT | PI_HOOK_SUPPORT)
+    for source in sorted(pi_hook_sources):
+        source_path = root / source
+        if source_path.exists():
+            targets[root / PI_PLUGIN_ROOT / source] = source_path.read_text(encoding="utf-8")
 
     # --- Claude plugin tree (plugins/escapement-claude) + root marketplace ---
     targets[root / ".claude-plugin" / "marketplace.json"] = _render_claude_marketplace(identity)
@@ -616,7 +651,7 @@ def _is_within(path: Path, parent: Path) -> bool:
 def _publication_units(root: Path, targets: dict[Path, str]) -> tuple[Path, ...]:
     """Return atomic replacement units for generated files and complete plugin trees."""
 
-    managed_roots = (CODEX_PLUGIN_ROOT, CLAUDE_PLUGIN_ROOT)
+    managed_roots = (CODEX_PLUGIN_ROOT, CLAUDE_PLUGIN_ROOT, PI_PLUGIN_ROOT)
     units = {Path(".codex-plugin"), *managed_roots}
     for target in targets:
         relative = target.relative_to(root)
@@ -772,9 +807,11 @@ def _validate_codex_skill(root: Path, skill: dict[str, Any], errors: list[str]) 
 
 def validate_manifest(root: Path, manifest: dict[str, Any]) -> list[str]:
     errors: list[str] = []
-    for host in ("codex", "claude"):
+    for host in ("codex", "claude", "pi"):
         if host not in manifest.get("documents", {}).get("hosts", {}):
             errors.append(f"documents missing host {host}")
+
+    errors.extend(_validate_pi_adapter(manifest))
 
     for hook in manifest.get("hooks", []):
         item_id = hook.get("id", "<missing>")
