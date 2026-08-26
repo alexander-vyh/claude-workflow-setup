@@ -864,14 +864,17 @@ def test_codex_behavioral_gate_has_exact_event_shape():
     assert len(matches) == 1, "Codex Test Oracle Brief gate must run through one Bash dispatcher"
 
 
-def test_root_checkout_guard_is_manifested_and_rendered_for_claude_and_codex():
-    """Architecture check: the hook must be wired, not merely implemented."""
+def test_root_checkout_guard_is_enabled_only_where_command_cwd_is_verified():
+    """Codex cannot block when its hook payload omits exec-command workdir."""
     manifest = json.loads(MANIFEST.read_text())
     entries = [hook for hook in manifest["hooks"] if hook["id"] == "root_checkout_guard"]
     assert len(entries) == 1, "root_checkout_guard must have exactly one manifest entry"
     entry = entries[0]
     assert entry["source"] == "claude/hooks/root_checkout_guard.py"
-    assert entry["hosts"]["codex"]["status"] == "ready"
+    codex = entry["hosts"]["codex"]
+    assert codex["status"] == "partial"
+    assert codex.get("events", []) == []
+    assert "per-command working directory" in codex["unsupported_reason"]
     assert entry["hosts"]["claude"]["status"] == "ready"
 
     codex_hooks = json.loads((CODEX_WRAPPER / "hooks" / "hooks.json").read_text())[
@@ -883,16 +886,16 @@ def test_root_checkout_guard_is_manifested_and_rendered_for_claude_and_codex():
         for hook in item.get("hooks", [])
         if hook.get("command") == CODEX_PLUGIN_ROOT_CHECKOUT_GUARD_FRAGMENT
     }
-    assert {"Write", "Edit", "NotebookEdit"} <= codex_matchers
+    assert codex_matchers == set()
     bash_dispatchers = [
         hook["command"]
         for item in codex_hooks.get("PreToolUse", [])
         if item.get("matcher") == "Bash"
         for hook in item.get("hooks", [])
     ]
-    assert len(bash_dispatchers) == 1
-    assert "claude/hooks/root_checkout_guard.py" in _dispatcher_gate_paths(
-        bash_dispatchers[0]
+    assert all(
+        "claude/hooks/root_checkout_guard.py" not in _dispatcher_gate_paths(command)
+        for command in bash_dispatchers
     )
 
     # The Claude PLUGIN is the sole owner of hook registration (escapement-ptzz).
@@ -915,7 +918,7 @@ def test_root_checkout_guard_is_manifested_and_rendered_for_claude_and_codex():
         for item in plugin_hooks.get("PreToolUse", [])
         for hook in item.get("hooks", [])
     ]
-    assert any(
+    assert not any(
         "codex_pretool_dispatch.py" in command
         and "claude/hooks/root_checkout_guard.py" in _dispatcher_gate_paths(command)
         for command in plugin_commands
@@ -1214,13 +1217,15 @@ def _generated_hook_commands(plugin_root, event):
     ]
 
 
-def test_manifest_registers_only_the_verified_claude_agent_pretool_adapter():
-    """No installed fixture proves Agent PostToolUse child-id placement yet."""
+def test_manifest_registers_only_nonblocking_managed_dispatch_observation():
+    """PreTool observation is ready; incomplete reconciliation stays disabled."""
     hook = _manifest_hook("delegation_hook")
     claude = hook["hosts"]["claude"]
     codex = hook["hosts"]["codex"]
 
     assert hook["source"] == "harness/bin/delegation_hook.py"
+    assert "automatic" in hook["description"]
+    assert "non-blocking" in hook["description"]
     assert claude["status"] == "ready"
     assert claude["events"] == [
         {
@@ -1231,40 +1236,19 @@ def test_manifest_registers_only_the_verified_claude_agent_pretool_adapter():
     ]
     assert (
         "harness/tests/test_delegation_hook.py::"
-        "test_complete_claude_agent_fixture_registers_dispatch_before_allow"
+        "test_managed_first_attempt_registers_without_prepare_or_child_bead"
     ) in claude["fixtures"]
     assert codex["status"] == "unsupported"
     assert "Agent" in codex["unsupported_reason"]
 
-
-def test_manifest_registers_shared_sessionstart_reconciliation_without_codex_stop():
-    hook = _manifest_hook("execution_reconcile")
-    assert hook["source"] == "harness/bin/execution_reconcile.py"
-
-    codex = hook["hosts"]["codex"]
-    claude = hook["hosts"]["claude"]
-    assert codex["status"] == "ready"
-    assert codex["events"] == [
-        {
-            "event": "SessionStart",
-            "matcher": "",
-            "command": "python3 -B harness/bin/execution_reconcile.py",
-        }
-    ]
-    assert (
-        "harness/tests/test_execution_reconcile.py::"
-        "test_codex_sessionstart_uses_the_same_reconciliation_without_stop_claims"
-    ) in codex["fixtures"]
-    assert all(event["event"] != "Stop" for event in codex["events"])
-
-    assert claude["status"] == "ready"
-    assert claude["events"] == [
-        {
-            "event": "SessionStart",
-            "matcher": "",
-            "command": "python3 -B ~/.claude/harness/bin/execution_reconcile.py",
-        }
-    ]
+    reconcile = _manifest_hook("execution_reconcile")
+    assert reconcile["source"] == "harness/bin/execution_reconcile.py"
+    for host_name in ("codex", "claude"):
+        host = reconcile["hosts"][host_name]
+        assert host["status"] == "partial"
+        assert host.get("events", []) == []
+        assert "expectation" in host["unsupported_reason"]
+        assert "missing ledger" in host["unsupported_reason"]
 
 
 def test_renderer_rewrites_harness_commands_to_each_installed_plugin_root():
@@ -1283,29 +1267,37 @@ def test_renderer_rewrites_harness_commands_to_each_installed_plugin_root():
     ) == 'python3 -B "${CLAUDE_PLUGIN_ROOT}/harness/bin/execution_reconcile.py"'
 
 
-def test_generated_plugins_register_sessionstart_and_only_claude_agent_pretool():
-    codex_session = _generated_hook_commands(CODEX_WRAPPER, "SessionStart")
-    claude_session = _generated_hook_commands(CLAUDE_PLUGIN, "SessionStart")
-    claude_pretool = _generated_hook_commands(CLAUDE_PLUGIN, "PreToolUse")
-    claude_posttool = _generated_hook_commands(CLAUDE_PLUGIN, "PostToolUse")
-    codex_stop = _generated_hook_commands(CODEX_WRAPPER, "Stop")
+def _all_generated_hook_commands(plugin_root):
+    hooks = json.loads((plugin_root / "hooks" / "hooks.json").read_text())["hooks"]
+    return [
+        (event, group.get("matcher", ""), hook["command"])
+        for event, groups in hooks.items()
+        for group in groups
+        for hook in group["hooks"]
+    ]
 
-    assert (
-        "",
-        'python3 -B "${PLUGIN_ROOT}/harness/bin/execution_reconcile.py"',
-    ) in codex_session
-    assert (
-        "",
-        'python3 -B "${CLAUDE_PLUGIN_ROOT}/harness/bin/execution_reconcile.py"',
-    ) in claude_session
-    assert (
-        "Agent",
-        'python3 -B "${CLAUDE_PLUGIN_ROOT}/harness/bin/delegation_hook.py"',
-    ) in claude_pretool
-    assert all(matcher != "Agent" for matcher, _command in claude_posttool)
-    assert all("execution_reconcile.py" not in command for _matcher, command in codex_stop)
 
-    for _matcher, command in codex_session + claude_session + claude_pretool:
+def test_generated_plugins_only_register_safe_delegation_observation():
+    codex_commands = _all_generated_hook_commands(CODEX_WRAPPER)
+    claude_commands = _all_generated_hook_commands(CLAUDE_PLUGIN)
+
+    assert all("execution_reconcile.py" not in command for _, _, command in codex_commands)
+    assert all("execution_reconcile.py" not in command for _, _, command in claude_commands)
+    delegation_commands = [
+        (event, matcher, command)
+        for event, matcher, command in claude_commands
+        if "delegation_hook.py" in command
+    ]
+    assert delegation_commands == [
+        (
+            "PreToolUse",
+            "Agent",
+            'python3 -B "${CLAUDE_PLUGIN_ROOT}/harness/bin/delegation_hook.py"',
+        )
+    ]
+    assert all("delegation_hook.py" not in command for _, _, command in codex_commands)
+
+    for _event, _matcher, command in codex_commands + claude_commands:
         assert "~/.claude" not in command
 
 
@@ -1323,20 +1315,42 @@ def test_codex_plugin_bundles_reconciliation_import_closure():
         assert path.is_file(), f"Codex SessionStart bundle omits runtime dependency: {name}"
 
 
-def test_rendered_codex_sessionstart_executes_reconciliation_from_isolated_bundle(
+def test_containment_sources_are_byte_identical_to_installed_package_copies():
+    pairs = (
+        (
+            ROOT / "harness" / "bin" / "delegation_hook.py",
+            CLAUDE_PLUGIN / "harness" / "bin" / "delegation_hook.py",
+        ),
+        (
+            ROOT / "harness" / "bin" / "execution_reconcile.py",
+            CODEX_WRAPPER / "harness" / "bin" / "execution_reconcile.py",
+        ),
+        (
+            ROOT / "harness" / "bin" / "execution_reconcile.py",
+            CLAUDE_PLUGIN / "harness" / "bin" / "execution_reconcile.py",
+        ),
+        (
+            ROOT / "claude" / "hooks" / "root_checkout_guard.py",
+            CODEX_WRAPPER / "claude" / "hooks" / "root_checkout_guard.py",
+        ),
+        (
+            ROOT / "claude" / "hooks" / "root_checkout_guard.py",
+            CLAUDE_PLUGIN / "hooks" / "root_checkout_guard.py",
+        ),
+    )
+    for source, packaged in pairs:
+        assert packaged.is_file(), f"packaged source missing: {packaged}"
+        assert packaged.read_bytes() == source.read_bytes()
+
+
+def test_bundled_codex_reconciler_executes_directly_without_global_registration(
     tmp_path,
 ):
-    """A manifest line or copied top-level script is not effective hook proof."""
-    matches = [
-        command
-        for _matcher, command in _generated_hook_commands(
-            CODEX_WRAPPER, "SessionStart"
-        )
-        if "execution_reconcile.py" in command
-    ]
-    assert matches == [
-        'python3 -B "${PLUGIN_ROOT}/harness/bin/execution_reconcile.py"'
-    ]
+    """Keep repair code executable without registering its false warning."""
+    assert all(
+        "execution_reconcile.py" not in command
+        for _event, _matcher, command in _all_generated_hook_commands(CODEX_WRAPPER)
+    )
 
     source_bin = ROOT / "harness" / "bin"
     sys.path.insert(0, str(source_bin))
@@ -1388,7 +1402,11 @@ def test_rendered_codex_sessionstart_executes_reconciliation_from_isolated_bundl
     )
     fake_bd.chmod(0o755)
 
-    command = matches[0].replace("${PLUGIN_ROOT}", str(CODEX_WRAPPER))
+    command = [
+        sys.executable,
+        "-B",
+        str(CODEX_WRAPPER / "harness" / "bin" / "execution_reconcile.py"),
+    ]
     env = os.environ.copy()
     env["HARNESS_ROOT"] = str(harness_root)
     env["PATH"] = f"{fake_bin}{os.pathsep}{env.get('PATH', '')}"
@@ -1403,7 +1421,7 @@ def test_rendered_codex_sessionstart_executes_reconciliation_from_isolated_bundl
         "parent_id": "payload-parent-must-not-be-used",
     }
     result = subprocess.run(
-        shlex.split(command),
+        command,
         cwd=tmp_path,
         input=json.dumps(payload),
         capture_output=True,

@@ -604,6 +604,54 @@ def test_copying_a_file_out_of_the_checkout_is_allowed(tmp_path):
     assert _decision(output) is None, raw
 
 
+@pytest.mark.parametrize("home_child", ("Downloads", "Documents"))
+def test_copy_to_home_relative_downloads_is_allowed_from_primary_checkout(
+    tmp_path,
+    monkeypatch,
+    home_child,
+):
+    """Shell `~` expansion must happen before root-checkout containment."""
+    repo = _make_primary_beads_repo(tmp_path)
+    home = tmp_path / "home"
+    (home / home_child).mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+
+    code, output, raw = _run_payload(
+        _bash_payload(
+            f"cp -f /private/tmp/session/scratch.pdf ~/{home_child}/report.pdf",
+            cwd=repo,
+        )
+    )
+
+    assert code == 0
+    assert _decision(output) is None, raw
+
+
+@pytest.mark.parametrize("home_child", ("Downloads", "Documents"))
+def test_copy_to_home_relative_managed_checkout_is_denied(
+    tmp_path,
+    monkeypatch,
+    home_child,
+):
+    """Negative control rejects cwd-relative `~` and Downloads exemptions."""
+    home = tmp_path / "home"
+    (home / home_child).mkdir(parents=True)
+    repo = _make_primary_beads_repo(home / home_child)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+
+    code, output, raw = _run_payload(
+        _bash_payload(
+            f"cp -f /private/tmp/session/scratch.pdf ~/{home_child}/repo/report.pdf",
+            cwd=outside,
+        )
+    )
+
+    assert code == 0
+    assert _decision(output) == "deny", raw
+
+
 def test_flag_values_are_not_mistaken_for_write_targets(tmp_path):
     """`0755` must not resolve to <repo>/0755 and trigger a denial."""
     repo = _make_primary_beads_repo(tmp_path)

@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 """Behavioral oracle for host delegation registration.
 
-Business invariant: a background Agent call may start only after an explicit
-prepared attempt names canonical open Beads work, and the actual host tool-use
-identity is durably written before the hook allows native execution.
+Business invariant: native Agent capacity is never denied by Escapement
+bookkeeping. Unmanaged calls create no state. Trusted task-mode calls record the
+actual host tool-use identity automatically without a prepare command or child
+Bead, and any evidence-write gap remains unresolved at completion.
 
-The hand-authored host payloads and canonical ``bd show`` responses are the
-independent oracle.  Prompt prose is deliberately adversarial: it contains a
-different valid-looking Beads ID and must never select or authorize work.
+The hand-authored host payload, trusted exact-session task mode, public hook
+output, durable files, and public completion adapter are the independent oracle.
+Prompt prose is deliberately adversarial and must never select work identity.
 
-Fragile implementations rejected here include prompt ID scraping, matching any
-queued attempt regardless of agent/host, trusting a closed or foreign ``bd``
-record, allowing before the atomic write, and guessing a native child ID from an
+Fragile implementations rejected here include retaining legacy prepare denials,
+silently dropping managed evidence, prompt ID scraping, querying a child Bead,
+denying on persistence failure, and guessing a native child ID from an
 unverified Agent PostToolUse response.
 """
 
@@ -35,6 +36,7 @@ sys.path.insert(0, str(BIN))
 
 import delegation_hook  # noqa: E402
 import execution_ledger as ledger_api  # noqa: E402
+import execution_stop_adapter  # noqa: E402
 
 
 UTC = dt.timezone.utc
@@ -43,13 +45,6 @@ BEAD = "escapement-e3ai.5"
 AGENT = "task-3-host-adapter"
 EXECUTION = "exec-host-alpha"
 WATCHDOG = "watch-host-alpha"
-
-PREPARE_REPAIR = (
-    'python3 -B "${CLAUDE_PLUGIN_ROOT}/harness/bin/delegation_hook.py" prepare '
-    f"--bead-id <child-bead-id> --session {SESSION} --host claude "
-    f"--agent-name {AGENT}"
-)
-
 
 def at(value: str) -> dt.datetime:
     return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
@@ -133,19 +128,221 @@ def read_ledger(path: pathlib.Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def canonical_bead(status: str = "in_progress", bead_id: str = BEAD):
-    calls: list[list[str]] = []
+def write_task_mode(thread_dir: pathlib.Path, repo: pathlib.Path) -> None:
+    thread_dir.mkdir(parents=True, exist_ok=True)
+    mode = thread_dir / "session_mode.json"
+    mode.write_text(
+        json.dumps(
+            {
+                "mode": "task",
+                "session_id": SESSION,
+                "repo_cwd": str(repo),
+                "task_id": BEAD,
+                "parent_id": "escapement-e3ai",
+            }
+        ),
+        encoding="utf-8",
+    )
+    mode.chmod(0o600)
 
-    def run_bd(args: list[str]):
-        calls.append(args)
-        if args == ["show", BEAD]:
-            return [{"id": bead_id, "status": status, "parent": "escapement-e3ai"}]
-        return None
 
-    return run_bd, calls
+def fail_if_bd_called(_args):
+    raise AssertionError("managed dispatch observation must not create or query a child Bead")
+
+
+def test_unmanaged_first_attempt_allows_without_escapement_state(tmp_path) -> None:
+    path = tmp_path / "thread" / "executions.json"
+    path.parent.mkdir()
+
+    result = delegation_hook.pre_tool(
+        claude_agent_pretool(), fail_if_bd_called, path
+    )
+
+    assert result == {
+        "decision": "allow",
+        "reason": "unmanaged_native_agent",
+    }
+    assert list(path.parent.iterdir()) == []
+
+
+def test_managed_first_attempt_registers_without_prepare_or_child_bead(tmp_path) -> None:
+    thread_dir = tmp_path / "thread"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_task_mode(thread_dir, repo)
+    path = thread_dir / "executions.json"
+
+    result = delegation_hook.pre_tool(
+        claude_agent_pretool(), fail_if_bd_called, path
+    )
+
+    assert result["decision"] == "allow"
+    assert result["reason"] == "dispatch_registered"
+    persisted = read_ledger(path)
+    assert persisted["parent_session_id"] == SESSION
+    assert len(persisted["executions"]) == 1
+    execution = persisted["executions"][0]
+    assert execution["bead_id"] == BEAD
+    assert execution["agent_name"] == AGENT
+    assert execution["dispatch_tool_use_id"] == "toolu-agent-44"
+    assert execution["native_child_id"] is None
+    assert "escapement-foreign-999" not in json.dumps(persisted)
+    expectation = json.loads(
+        (thread_dir / "execution_expectation.json").read_text(encoding="utf-8")
+    )
+    assert expectation["parent_session_id"] == SESSION
+    assert [item["tool_use_id"] for item in expectation["expectations"]] == [
+        "toolu-agent-44"
+    ]
+
+
+def test_ledger_persistence_failure_allows_agent_but_blocks_managed_completion(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    harness_root = tmp_path / "harness"
+    thread_dir = harness_root / "threads" / SESSION
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_task_mode(thread_dir, repo)
+    ledger_path = thread_dir / "executions.json"
+    ledger_path.mkdir()
+
+    result = delegation_hook.pre_tool(
+        claude_agent_pretool(), fail_if_bd_called, ledger_path
+    )
+
+    assert result == {
+        "decision": "allow",
+        "reason": "dispatch_evidence_unresolved",
+    }
+    expectation_path = thread_dir / "execution_expectation.json"
+    assert expectation_path.is_file()
+    ledger_path.rmdir()
+    monkeypatch.setattr(execution_stop_adapter, "task_root_status", lambda _mode: "closed")
+
+    _mode, decision = execution_stop_adapter.decide_task_mode(
+        SESSION,
+        thread_dir,
+        dt.datetime(2026, 8, 25, 20, 0, tzinfo=UTC),
+        harness_root=harness_root,
+    )
+
+    assert decision == ("block", "delegated_execution_unresolved")
+
+
+def test_expectation_persistence_failure_allows_agent_and_falls_back_to_incident(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    harness_root = tmp_path / "harness"
+    thread_dir = harness_root / "threads" / SESSION
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_task_mode(thread_dir, repo)
+    (thread_dir / "execution_expectation.json").mkdir()
+    ledger_path = thread_dir / "executions.json"
+
+    result = delegation_hook.pre_tool(
+        claude_agent_pretool(), fail_if_bd_called, ledger_path
+    )
+
+    assert result == {
+        "decision": "allow",
+        "reason": "dispatch_evidence_unresolved",
+    }
+    assert not ledger_path.exists()
+    incident = json.loads(
+        (thread_dir / "execution_incident.json").read_text(encoding="utf-8")
+    )
+    assert incident["parent_session_id"] == SESSION
+    assert incident["reason"] == "expectation_persistence_failed"
+    assert incident["tool_use_id"] == "toolu-agent-44"
+    monkeypatch.setattr(execution_stop_adapter, "task_root_status", lambda _mode: "closed")
+
+    _mode, decision = execution_stop_adapter.decide_task_mode(
+        SESSION,
+        thread_dir,
+        dt.datetime(2026, 8, 25, 20, 0, tzinfo=UTC),
+        harness_root=harness_root,
+    )
+
+    assert decision == ("block", "delegated_execution_unresolved")
+
+
+def test_all_evidence_writes_failing_still_allows_public_agent_capacity(
+    tmp_path,
+) -> None:
+    harness_root = tmp_path / "harness"
+    thread_dir = harness_root / "threads" / SESSION
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_task_mode(thread_dir, repo)
+    (thread_dir / "execution_expectation.json").mkdir()
+    (thread_dir / "execution_incident.json").mkdir()
+
+    result = _public_pretool(harness_root)
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "allow",
+            "permissionDecisionReason": "dispatch_evidence_unresolved",
+        }
+    }
+    assert not (thread_dir / "executions.json").exists()
+
+
+@pytest.mark.parametrize(
+    "mode_variant",
+    ("symlink", "world-writable", "malformed", "foreign-session"),
+)
+def test_untrusted_task_mode_is_unmanaged_and_never_creates_execution_state(
+    tmp_path,
+    mode_variant,
+) -> None:
+    thread_dir = tmp_path / "thread"
+    thread_dir.mkdir()
+    mode = thread_dir / "session_mode.json"
+    valid = {
+        "mode": "task",
+        "session_id": SESSION,
+        "repo_cwd": str(tmp_path / "repo"),
+        "task_id": BEAD,
+        "parent_id": "escapement-e3ai",
+    }
+    if mode_variant == "symlink":
+        target = tmp_path / "foreign-mode.json"
+        target.write_text(json.dumps(valid), encoding="utf-8")
+        target.chmod(0o600)
+        mode.symlink_to(target)
+    elif mode_variant == "world-writable":
+        mode.write_text(json.dumps(valid), encoding="utf-8")
+        mode.chmod(0o666)
+    elif mode_variant == "malformed":
+        mode.write_text("{malformed", encoding="utf-8")
+        mode.chmod(0o600)
+    else:
+        mode.write_text(
+            json.dumps({**valid, "session_id": "foreign-parent-session"}),
+            encoding="utf-8",
+        )
+        mode.chmod(0o600)
+    ledger_path = thread_dir / "executions.json"
+
+    result = delegation_hook.pre_tool(
+        claude_agent_pretool(), fail_if_bd_called, ledger_path
+    )
+
+    assert result == {"decision": "allow", "reason": "unmanaged_native_agent"}
+    assert not ledger_path.exists()
+    assert not (thread_dir / "execution_expectation.json").exists()
+    assert not (thread_dir / "execution_incident.json").exists()
 
 
 def test_prepare_cli_records_explicit_identity_without_prompt_input(tmp_path) -> None:
+    """Legacy prepare stays readable for migration, never as Agent authority."""
     path = tmp_path / "executions.json"
     prepare_cli(path)
 
@@ -159,133 +356,35 @@ def test_prepare_cli_records_explicit_identity_without_prompt_input(tmp_path) ->
     assert "escapement-foreign-999" not in json.dumps(ledger)
 
 
-def test_find_prepared_execution_matches_structural_agent_identity_only(
-    tmp_path,
-) -> None:
-    path = tmp_path / "executions.json"
-    prepare_cli(path)
-    ledger = read_ledger(path)
-
-    assert (
-        delegation_hook.find_prepared_execution(
-            claude_agent_pretool()["tool_input"], ledger
-        )["execution_id"]
-        == EXECUTION
-    )
-
-    wrong_name = copy.deepcopy(claude_agent_pretool()["tool_input"])
-    wrong_name["name"] = "different-agent"
-    wrong_name["prompt"] = f"Please use prepared execution {EXECUTION} for {BEAD}"
-    assert delegation_hook.find_prepared_execution(wrong_name, ledger) is None
-
-    ledger["executions"][0]["dispatch_tool_use_id"] = "toolu-already-dispatched"
-    assert (
-        delegation_hook.find_prepared_execution(
-            claude_agent_pretool()["tool_input"], ledger
-        )
-        is None
-    )
-
-
-def test_complete_claude_agent_fixture_registers_dispatch_before_allow(
-    tmp_path,
-) -> None:
-    path = tmp_path / "executions.json"
-    prepare_cli(path)
-    run_bd, calls = canonical_bead()
-
-    result = delegation_hook.pre_tool(claude_agent_pretool(), run_bd, path)
-
-    assert result == {
-        "decision": "allow",
-        "reason": "dispatch_registered",
-        "execution_id": EXECUTION,
-        "attempt": 1,
-        "generation": 1,
-    }
-    assert calls == [["show", BEAD]]
-    persisted = read_ledger(path)["executions"][0]
-    assert persisted["dispatch_tool_use_id"] == "toolu-agent-44"
-    assert persisted["state"] == "queued"
-    assert persisted["native_child_id"] is None
-
-
-@pytest.mark.parametrize(
-    ("prepared", "bd_status", "bd_id", "reason"),
-    [
-        (False, "in_progress", BEAD, "prepared_execution_required"),
-        (True, "missing", BEAD, "bead_state_unresolved"),
-        (True, "closed", BEAD, "bead_not_dispatchable"),
-        (True, "in_progress", "escapement-foreign-1", "bead_state_unresolved"),
-    ],
-    ids=["missing-attempt", "missing-bead", "closed-bead", "foreign-bead"],
-)
-def test_missing_closed_or_foreign_work_denies_with_exact_repair(
-    tmp_path, prepared, bd_status, bd_id, reason
-) -> None:
-    path = tmp_path / "executions.json"
-    if prepared:
-        prepare_cli(path)
-
-    calls: list[list[str]] = []
-
-    def run_bd(args: list[str]):
-        calls.append(args)
-        if bd_status == "missing":
-            return []
-        return [{"id": bd_id, "status": bd_status, "parent": "escapement-e3ai"}]
-
-    result = delegation_hook.pre_tool(claude_agent_pretool(), run_bd, path)
-
-    assert result == {
-        "decision": "deny",
-        "reason": reason,
-        "additional_context": PREPARE_REPAIR,
-    }
-    if prepared:
-        assert calls == [["show", BEAD]]
-        assert read_ledger(path)["executions"][0]["dispatch_tool_use_id"] == (
-            f"prepared:{EXECUTION}"
-        )
-    else:
-        assert calls == []
-
-
-def test_prompt_bead_id_cannot_substitute_for_prepared_execution(tmp_path) -> None:
-    path = tmp_path / "executions.json"
-    result = delegation_hook.pre_tool(
-        claude_agent_pretool(),
-        lambda _args: [{"id": "escapement-foreign-999", "status": "open"}],
-        path,
-    )
-    assert result["decision"] == "deny"
-    assert result["reason"] == "prepared_execution_required"
-
-
 @pytest.mark.parametrize(
     ("prepared_host", "prepared_session"),
-    [("codex", SESSION), ("claude", "foreign-parent-session")],
-    ids=["foreign-host", "foreign-parent-session"],
+    [
+        ("claude", SESSION),
+        ("codex", SESSION),
+        ("claude", "foreign-parent-session"),
+    ],
+    ids=["legacy-exact", "legacy-foreign-host", "legacy-foreign-parent"],
 )
-def test_foreign_host_or_parent_preparation_denies_without_beads_lookup(
-    tmp_path, prepared_host, prepared_session
+def test_legacy_prepared_state_never_denies_unmanaged_agent_capacity(
+    tmp_path,
+    prepared_host,
+    prepared_session,
 ) -> None:
-    path = tmp_path / "executions.json"
+    path = tmp_path / "thread" / "executions.json"
+    path.parent.mkdir()
     prepare_cli(path, host=prepared_host, session=prepared_session)
-    before = read_ledger(path)
+    before = path.read_bytes()
     calls: list[list[str]] = []
 
     result = delegation_hook.pre_tool(
         claude_agent_pretool(), lambda args: calls.append(args), path
     )
-
     assert result == {
-        "decision": "deny",
-        "reason": "prepared_execution_required",
-        "additional_context": PREPARE_REPAIR,
+        "decision": "allow",
+        "reason": "unmanaged_native_agent",
     }
     assert calls == []
-    assert read_ledger(path) == before
+    assert path.read_bytes() == before
 
 
 @pytest.mark.parametrize(
@@ -435,33 +534,12 @@ def test_unverified_posttool_cannot_launder_late_generation_one_into_current(
     assert active["result_application"] == before["executions"][0]["result_application"]
 
 
-def test_public_pretool_hook_emits_native_permission_decision(tmp_path) -> None:
-    harness_root = tmp_path / "harness"
-    ledger_path = harness_root / "threads" / SESSION / "executions.json"
-    ledger_path.parent.mkdir(parents=True)
-    prepare_cli(ledger_path)
-
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    fake_bd = fake_bin / "bd"
-    fake_bd.write_text(
-        "#!/usr/bin/env python3\n"
-        "import json, sys\n"
-        "args = [arg for arg in sys.argv[1:] if arg != '--json']\n"
-        f"expected = ['show', {BEAD!r}]\n"
-        "if args == expected:\n"
-        f"    print(json.dumps([{{'id': {BEAD!r}, 'status': 'in_progress', "
-        "'parent': 'escapement-e3ai'}]))\n"
-        "else:\n"
-        "    raise SystemExit(2)\n",
-        encoding="utf-8",
-    )
-    fake_bd.chmod(0o755)
+def _public_pretool(harness_root: pathlib.Path) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env["HARNESS_ROOT"] = str(harness_root)
-    env["PATH"] = f"{fake_bin}{os.pathsep}{env.get('PATH', '')}"
-
-    result = subprocess.run(
+    env.pop("CLAUDE_AGENT_ID", None)
+    env.pop("HARNESS_THREAD_DIR", None)
+    return subprocess.run(
         [sys.executable, str(BIN / "delegation_hook.py")],
         input=json.dumps(claude_agent_pretool()),
         capture_output=True,
@@ -469,93 +547,96 @@ def test_public_pretool_hook_emits_native_permission_decision(tmp_path) -> None:
         env=env,
     )
 
+
+def test_public_unmanaged_first_attempt_allows_without_state(tmp_path) -> None:
+    harness_root = tmp_path / "harness"
+    result = _public_pretool(harness_root)
+
     assert result.returncode == 0, result.stderr
-    output = json.loads(result.stdout)
-    assert output == {
+    assert json.loads(result.stdout) == {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "allow",
+            "permissionDecisionReason": "unmanaged_native_agent",
+        }
+    }
+    thread_dir = harness_root / "threads" / SESSION
+    assert not (thread_dir / "executions.json").exists()
+    assert not (thread_dir / "execution_expectation.json").exists()
+
+
+def test_public_managed_first_attempt_registers_without_prepare(tmp_path) -> None:
+    harness_root = tmp_path / "harness"
+    thread_dir = harness_root / "threads" / SESSION
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_task_mode(thread_dir, repo)
+
+    result = _public_pretool(harness_root)
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "allow",
             "permissionDecisionReason": "dispatch_registered",
         }
     }
-    assert read_ledger(ledger_path)["executions"][0]["dispatch_tool_use_id"] == (
-        "toolu-agent-44"
-    )
+    assert read_ledger(thread_dir / "executions.json")["executions"][0][
+        "dispatch_tool_use_id"
+    ] == "toolu-agent-44"
 
 
-def test_two_concurrent_public_pretool_calls_allow_exactly_one_dispatch(
+def test_two_concurrent_managed_calls_are_observed_without_denial(
     tmp_path,
 ) -> None:
-    path = tmp_path / "executions.json"
-    prepare_cli(path)
-    run_bd, _calls = canonical_bead()
+    thread_dir = tmp_path / "thread"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_task_mode(thread_dir, repo)
+    path = thread_dir / "executions.json"
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         request_ids = ("toolu-race-alpha", "toolu-race-beta")
         results = list(
             pool.map(
                 lambda tool_use_id: delegation_hook.pre_tool(
-                    claude_agent_pretool(tool_use_id), run_bd, path
+                    claude_agent_pretool(tool_use_id), fail_if_bd_called, path
                 ),
                 request_ids,
             )
         )
 
-    assert [result["decision"] for result in results].count("allow") == 1
-    assert [result["decision"] for result in results].count("deny") == 1
-    assert (
-        next(result for result in results if result["decision"] == "allow")["reason"]
-        == "dispatch_registered"
-    )
-    loser = next(result for result in results if result["decision"] == "deny")
-    assert loser["reason"] == "prepared_execution_required"
+    assert [result["decision"] for result in results] == ["allow", "allow"]
+    assert {result["reason"] for result in results} == {"dispatch_registered"}
 
     persisted = ledger_api.load_trusted(path, SESSION)
     assert persisted is not None
-    durable_tool_use_id = persisted["executions"][0]["dispatch_tool_use_id"]
-    assert durable_tool_use_id in request_ids
-    assert durable_tool_use_id != f"prepared:{EXECUTION}"
-    persisted_request_ids = {
-        request_id for request_id in request_ids if request_id in json.dumps(persisted)
-    }
-    assert persisted_request_ids == {durable_tool_use_id}
-    assert persisted["executions"][0]["state"] == "queued"
+    assert {
+        item["dispatch_tool_use_id"] for item in persisted["executions"]
+    } == set(request_ids)
+    assert all(item["state"] == "queued" for item in persisted["executions"])
 
 
-def test_dispatch_write_failure_never_allows_before_durable_commit(
-    tmp_path, monkeypatch
+def test_dispatch_write_failure_never_denies_native_capacity(
+    tmp_path,
 ) -> None:
-    path = tmp_path / "executions.json"
-    prepare_cli(path)
-    before = read_ledger(path)
-    run_bd, calls = canonical_bead()
+    thread_dir = tmp_path / "thread"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_task_mode(thread_dir, repo)
+    path = thread_dir / "executions.json"
+    path.mkdir()
 
-    callback_results: list[dict] = []
-
-    def fail_atomic_write(write_path, mutation):
-        assert write_path == path
-        candidate = mutation(copy.deepcopy(read_ledger(path)))
-        callback_results.append(candidate)
-        assert candidate["executions"][0]["dispatch_tool_use_id"] == ("toolu-agent-44")
-        raise OSError("injected durable replace failure")
-
-    monkeypatch.setattr(delegation_hook, "mutate_atomic", fail_atomic_write)
-    result = delegation_hook.pre_tool(claude_agent_pretool(), run_bd, path)
+    result = delegation_hook.pre_tool(
+        claude_agent_pretool(), fail_if_bd_called, path
+    )
 
     assert result == {
-        "decision": "deny",
-        "reason": "dispatch_persistence_failed",
-        "additional_context": PREPARE_REPAIR,
+        "decision": "allow",
+        "reason": "dispatch_evidence_unresolved",
     }
-    assert calls == [["show", BEAD]]
-    assert len(callback_results) == 1
-    assert callback_results[0]["executions"][0]["dispatch_tool_use_id"] != (
-        f"prepared:{EXECUTION}"
-    )
-    assert read_ledger(path) == before
-    assert read_ledger(path)["executions"][0]["dispatch_tool_use_id"] == (
-        f"prepared:{EXECUTION}"
-    )
+    assert (thread_dir / "execution_expectation.json").is_file()
 
 
 def _public_concurrent_first_preparations(
@@ -617,7 +698,7 @@ def _public_concurrent_first_preparations(
     return [json.loads(stdout) for stdout, _stderr in completed]
 
 
-def test_concurrent_first_same_agent_preparations_survive_and_dispatch_is_ambiguous(
+def test_concurrent_legacy_preparations_never_restore_agent_denial(
     tmp_path,
 ) -> None:
     path = tmp_path / "executions.json"
@@ -645,53 +726,39 @@ def test_concurrent_first_same_agent_preparations_survive_and_dispatch_is_ambigu
         path,
     )
 
-    assert result["decision"] == "deny"
-    assert result["reason"] == "prepared_execution_required"
+    assert result == {
+        "decision": "allow",
+        "reason": "unmanaged_native_agent",
+    }
     assert bd_calls == []
     assert ledger_api.load_trusted(path, SESSION) == before_dispatch
 
 
-def test_concurrent_first_distinct_agent_preparations_bind_only_exact_agent(
+def test_distinct_legacy_preparations_remain_completion_evidence_not_dispatch_authority(
     tmp_path,
 ) -> None:
     path = tmp_path / "executions.json"
     agent_names = ("task-3-agent-alpha", "task-3-agent-beta")
     _public_concurrent_first_preparations(path, agent_names)
-    run_bd, _calls = canonical_bead()
+    before = ledger_api.load_trusted(path, SESSION)
+    assert before is not None
+    calls: list[list[str]] = []
 
     alpha = delegation_hook.pre_tool(
         claude_agent_pretool("toolu-exact-alpha", agent_name=agent_names[0]),
-        run_bd,
+        lambda args: calls.append(args),
         path,
     )
     after_alpha = ledger_api.load_trusted(path, SESSION)
-    assert alpha["decision"] == "allow"
-    assert after_alpha is not None
-    alpha_item = next(
-        item
-        for item in after_alpha["executions"]
-        if item["agent_name"] == agent_names[0]
-    )
-    beta_item = next(
-        item
-        for item in after_alpha["executions"]
-        if item["agent_name"] == agent_names[1]
-    )
-    assert alpha_item["dispatch_tool_use_id"] == "toolu-exact-alpha"
-    assert beta_item["dispatch_tool_use_id"] == "prepared:exec-first-2"
+    assert alpha == {"decision": "allow", "reason": "unmanaged_native_agent"}
+    assert after_alpha == before
 
     beta = delegation_hook.pre_tool(
         claude_agent_pretool("toolu-exact-beta", agent_name=agent_names[1]),
-        run_bd,
+        lambda args: calls.append(args),
         path,
     )
     final = ledger_api.load_trusted(path, SESSION)
-    assert beta["decision"] == "allow"
-    assert final is not None
-    assert {
-        (item["agent_name"], item["dispatch_tool_use_id"])
-        for item in final["executions"]
-    } == {
-        (agent_names[0], "toolu-exact-alpha"),
-        (agent_names[1], "toolu-exact-beta"),
-    }
+    assert beta == {"decision": "allow", "reason": "unmanaged_native_agent"}
+    assert final == before
+    assert calls == []
