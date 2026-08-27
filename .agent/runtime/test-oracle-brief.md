@@ -1360,3 +1360,100 @@ strict OpenSpec validation, renderer parity, lint, JSON validation, and diff che
 passed. The adversarial code review, bounded mutation challenge, and all 24 OpenSpec
 scenarios passed with no remaining block or concern. Installed pinned-checkout proof
 remains the final landing check after merge.
+
+# Test Oracle Brief — managed primary-checkout lifecycle (`escapement-uecm`)
+
+## Business invariant
+
+The non-bare primary checkout remains a safe repository control plane. When it is
+clean, checked out on the advertised remote default branch, and strictly
+fast-forwardable, Escapement advances its branch, HEAD, index, and files to the
+exact SHA advertised and fetched from `origin/HEAD`. Any unsafe state is preserved,
+and that refusal does not prevent an independently safe task worktree or completed
+receipt cleanup.
+
+## Independent source of truth
+
+Behavioral tests construct real disposable Git topologies: a bare origin, a
+non-bare primary clone, and linked task worktrees. Correctness is determined by
+Git's public observations after the command—symbolic HEAD, commit IDs, porcelain
+status, file bytes, worktree registry, and branch refs—not by production helpers,
+mock calls, or repeated algorithms. Generated and freshly installed package files
+are compared to committed source and invoked as public commands.
+
+## Solution constraints
+
+- Reuse the exact remote-default advertisement/fetch protocol and the existing
+  common-directory transaction lock.
+- Move an eligible checked-out root with `merge --ff-only`; never reset, stash,
+  clean, switch branches, or directly move its checked-out ref.
+- Accept only a non-bare primary checkout that owns its common Git directory.
+- Preserve default-source worktree creation from the exact remote SHA even when
+  root synchronization is ineligible; explicit task sources are not root authority.
+- Preserve completed finish cleanup if post-cleanup root synchronization refuses
+  or cannot contact the remote.
+- Keep source, generated Claude, generated Codex, and installed runtimes aligned.
+
+## Invalid solution classes
+
+- Fetching the remote and reporting success while leaving root HEAD and files stale.
+- Calling `update-ref` on the checked-out default branch without updating its index
+  and worktree.
+- Using `reset --hard`, auto-stash, clean, checkout, or a non-fast-forward merge.
+- Comparing only local `main` or `origin/main` without verifying advertised
+  `origin/HEAD` and its exact SHA.
+- Blocking worktree creation solely because the root is dirty, divergent, detached,
+  or on a different branch.
+- Shipping source code without both generated packages and their public command.
+
+## Fragile implementation to reject
+
+The tempting shortcut is `git fetch origin` followed by a successful status record.
+It must fail because the positive behavioral fixture independently requires root
+HEAD, the checked-out branch, and changed file bytes to equal the newly advertised
+remote commit. A second tempting shortcut—directly moving `refs/heads/main`—must fail
+the same file/index observations and a static command-class check.
+
+## Negative control
+
+Separate real repositories cover tracked and untracked dirt, divergent local
+history, a non-default symbolic branch, detached HEAD, and a bare repository. Each
+captures HEAD, status, ref tips, and file bytes before invocation and requires exact
+preservation afterward. A dirty-root create fixture additionally proves task work
+still starts at the fresh advertised remote SHA.
+
+## Positive control
+
+A clean primary behind by a remote commit whose tracked file content changed must
+become clean at that exact SHA with the new bytes visible. A current primary reports
+`up_to_date`. A dirty primary still permits a new linked task branch at the exact
+remote SHA, proving refusal did not make output empty.
+
+## Missing/unresolved handling
+
+Missing or malformed remote advertisement, fetch mismatch, non-primary topology,
+or unverifiable postconditions fail closed for explicit `sync-root`. Create retains
+its existing hard requirement to resolve an exact safe source. Post-finish
+synchronization is best-effort after cleanup: it reports the unresolved state and
+must not resurrect or invalidate an already completed receipt transaction.
+
+## Mutation challenge
+
+1. **Fetch-only success:** rejected by HEAD and changed-file assertions.
+2. **Direct `update-ref`:** rejected by index/file observations and the forbidden
+   command-class source check.
+3. **Hard reset dirty roots:** rejected by exact dirty-file preservation controls.
+4. **Always refuse:** rejected by the clean-behind and current positive controls.
+5. **Couple create to root eligibility:** rejected by the dirty-root fresh-source
+   creation control.
+
+Implementation is blocked until all five mutations are discriminated by at least
+one behavioral, package, or static check.
+
+## Final outcome verification
+
+Run the focused root/create/finish/package tests, the full repository suite, strict
+OpenSpec validation, and renderer parity. Then invoke the public command against a
+fresh disposable real remote/primary topology and inspect Git state. After merge,
+refresh both plugins and repeat the public-command probe from the installed Codex
+package before closing `escapement-uecm`.

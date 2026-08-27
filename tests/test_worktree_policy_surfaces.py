@@ -66,6 +66,7 @@ def test_renderer_targets_contain_executable_and_importable_module_for_both_plug
         assert (plugin / "bin" / "escapement_worktree.py").is_file()
         assert (plugin / "bin" / "escapement_worktree_bootstrap.py").is_file()
         assert (plugin / "bin" / "escapement_worktree_git.py").is_file()
+        assert (plugin / "bin" / "escapement_worktree_root.py").is_file()
 
 
 def test_renderer_configures_cli_and_module_delivery_for_both_plugins() -> None:
@@ -83,6 +84,7 @@ def test_renderer_configures_cli_and_module_delivery_for_both_plugins() -> None:
         "escapement_worktree.py",
         "escapement_worktree_bootstrap.py",
         "escapement_worktree_git.py",
+        "escapement_worktree_root.py",
     ):
         canonical = (ROOT / "bin" / artifact).read_text(encoding="utf-8")
         for plugin in (renderer.CODEX_PLUGIN_ROOT, renderer.CLAUDE_PLUGIN_ROOT):
@@ -114,6 +116,7 @@ def test_plugin_cli_and_module_copies_are_byte_equal_to_canonical_sources() -> N
         "escapement_worktree.py",
         "escapement_worktree_bootstrap.py",
         "escapement_worktree_git.py",
+        "escapement_worktree_root.py",
     ):
         canonical = (ROOT / "bin" / filename).read_bytes()
         for plugin in (

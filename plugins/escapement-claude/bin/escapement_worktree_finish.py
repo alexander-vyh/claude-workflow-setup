@@ -12,8 +12,13 @@ from escapement_worktree_git import (
     WorktreeError,
     git,
     repository_transaction_lock,
+    resolve_default_source,
     resolve_repository,
     worktree_records,
+)
+from escapement_worktree_root import (
+    synchronize_resolved_default,
+    unresolved_root_sync,
 )
 from escapement_worktree_registry import (
     LifecycleEntry,
@@ -73,6 +78,22 @@ def _pending(entry: LifecycleEntry, reason: str) -> dict[str, str]:
         last_reason=reason,
     )
     return {"lifecycle_id": entry.lifecycle_id, "reason": reason, "status": "pending"}
+
+
+def _completed_with_root_sync(
+    ctx: RepositoryContext, lifecycle_id: str
+) -> dict[str, str]:
+    try:
+        root_sync = synchronize_resolved_default(ctx, resolve_default_source(ctx))
+    except (OSError, WorktreeError):
+        root_sync = unresolved_root_sync(ctx, "remote-resolution-failed")
+    return {
+        "lifecycle_id": lifecycle_id,
+        "reason": "removed",
+        "root_sync_reason": root_sync.reason,
+        "root_sync_status": root_sync.status,
+        "status": "completed",
+    }
 
 
 def _resume_after_removal(
@@ -135,7 +156,7 @@ def _resume_after_removal(
     if entry.worktree.exists() or _registered(ctx, entry.worktree):
         raise WorktreeError("final worktree absence could not be verified")
     delete_lifecycle(entry.lifecycle_id)
-    return {"lifecycle_id": entry.lifecycle_id, "reason": "removed", "status": "completed"}
+    return _completed_with_root_sync(ctx, entry.lifecycle_id)
 
 
 def _remove(entry: LifecycleEntry, decision: dict[str, Any]) -> dict[str, str]:

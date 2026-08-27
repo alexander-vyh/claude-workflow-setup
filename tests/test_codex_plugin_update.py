@@ -199,6 +199,7 @@ fi
             b'{"name":"escapement","version":"stale-test-fixture"}\n',
         ),
         ("bin/escapement_worktree_registry.py", b"stale registry runtime\n"),
+        ("bin/escapement_worktree_root.py", b"stale root runtime\n"),
     ),
 )
 def test_updater_rejects_stale_installed_surface(

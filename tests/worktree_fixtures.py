@@ -60,7 +60,9 @@ def snapshot_primary(repo: Path) -> PrimarySnapshot:
     """Capture Git-observable user state that the transaction must not alter."""
     return PrimarySnapshot(
         head=rev(repo),
-        branch=git(repo, "symbolic-ref", "--quiet", "--short", "HEAD").stdout.strip(),
+        branch=git(
+            repo, "symbolic-ref", "--quiet", "--short", "HEAD", check=False
+        ).stdout.strip(),
         status=git(repo, "status", "--porcelain=v2", "--untracked-files=all").stdout,
         cached_diff=git(repo, "diff", "--cached", "--binary").stdout,
         worktree_diff=git(repo, "diff", "--binary").stdout,
