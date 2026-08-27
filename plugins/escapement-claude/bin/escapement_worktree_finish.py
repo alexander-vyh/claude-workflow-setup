@@ -17,6 +17,7 @@ from escapement_worktree_git import (
 )
 from escapement_worktree_registry import (
     LifecycleEntry,
+    LifecycleEntryMissing,
     delete_lifecycle,
     lifecycle_lock,
     load_lifecycle,
@@ -164,8 +165,16 @@ def _remove(entry: LifecycleEntry, decision: dict[str, Any]) -> dict[str, str]:
 
 
 def finish_lifecycle(lifecycle_id: str) -> dict[str, str]:
+    observed = load_lifecycle(lifecycle_id)
     with lifecycle_lock(lifecycle_id):
-        entry = load_lifecycle(lifecycle_id)
+        try:
+            entry = load_lifecycle(lifecycle_id, expected_raw=observed.raw)
+        except LifecycleEntryMissing:
+            return {
+                "lifecycle_id": lifecycle_id,
+                "reason": "removed",
+                "status": "completed",
+            }
         value = _value(entry)
         phase = value.get("phase", "created")
         approved = value.get("approved_head_sha")

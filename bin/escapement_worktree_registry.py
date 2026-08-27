@@ -18,6 +18,10 @@ from escapement_worktree_git import OBJECT_ID_RE, WorktreeError
 LIFECYCLE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
+class LifecycleEntryMissing(WorktreeError):
+    """A trusted lifecycle registry has no receipt for the requested identity."""
+
+
 @dataclass(frozen=True)
 class LifecycleEntry:
     lifecycle_id: str
@@ -160,6 +164,10 @@ def _entry_bytes(root: Path, lifecycle_id: str) -> bytes:
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     try:
         descriptor = os.open(path, flags)
+    except FileNotFoundError as error:
+        raise LifecycleEntryMissing(
+            f"lifecycle entry is unavailable or untrusted: {error}"
+        ) from error
     except OSError as error:
         raise WorktreeError(f"lifecycle entry is unavailable or untrusted: {error}") from error
     try:
