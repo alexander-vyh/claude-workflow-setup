@@ -32,6 +32,10 @@ def _parse_time(value: object) -> dt.datetime | None:
     return parsed.astimezone(dt.timezone.utc)
 
 
+def _lsof_path_is_lossless(path: Path) -> bool:
+    return all(0x20 <= byte <= 0x7E for byte in os.fsencode(path))
+
+
 def _trusted_checkout_records(harness_home: Path) -> list[dict[str, object]]:
     threads = harness_home / "threads"
     if not threads.exists():
@@ -55,6 +59,46 @@ def _trusted_checkout_records(harness_home: Path) -> list[dict[str, object]]:
     return records
 
 
+def _cwd_paths(output: str) -> list[Path]:
+    cwd_values: list[Path] = []
+    saw_process = False
+    process_has_cwd = False
+    pending_cwd = False
+    for raw_field in output.split("\0"):
+        field = raw_field.lstrip("\n")
+        if not field:
+            continue
+        tag, value = field[0], field[1:]
+        if tag == "p":
+            if (
+                not value.isascii()
+                or not value.isdigit()
+                or pending_cwd
+                or (saw_process and not process_has_cwd)
+            ):
+                raise WorktreeError("process CWD enumeration returned incomplete records")
+            saw_process = True
+            process_has_cwd = False
+        elif tag == "c":
+            if not saw_process:
+                raise WorktreeError("process CWD enumeration returned incomplete records")
+        elif tag == "f":
+            if not saw_process or pending_cwd or process_has_cwd or value != "cwd":
+                raise WorktreeError("process CWD enumeration returned incomplete records")
+            pending_cwd = True
+        elif tag == "n":
+            if not pending_cwd or not value:
+                raise WorktreeError("process CWD enumeration returned incomplete records")
+            cwd_values.append(Path(value))
+            pending_cwd = False
+            process_has_cwd = True
+        else:
+            raise WorktreeError("process CWD enumeration returned unexpected fields")
+    if pending_cwd or not saw_process or not process_has_cwd:
+        raise WorktreeError("process CWD enumeration returned incomplete records")
+    return cwd_values
+
+
 def active_reason(worktree: Path, harness_home: Path) -> str | None:
     """Return semantic liveness, or raise when enumeration is incomplete."""
     target = worktree.resolve(strict=True)
@@ -70,28 +114,21 @@ def active_reason(worktree: Path, harness_home: Path) -> str | None:
         if Path(root) == target and (now - heartbeat).total_seconds() <= LEASE_WINDOW_SECONDS:
             return "worktree-active-lease"
 
+    if not _lsof_path_is_lossless(target):
+        raise WorktreeError("worktree path cannot be represented losslessly by lsof")
+
+    # Enumerate only process cwd descriptors, then apply target containment
+    # locally.  Combining +D target-tree traversal with lsof's mount inspection
+    # makes an unrelated unreadable mount turn the targeted query nonzero.
     result = run(
-        ("lsof", "-a", "-d", "cwd", "+D", str(target), "-Fpcn"),
+        ("lsof", "-a", "-d", "cwd", "-Fpcfn0"),
         check=False,
     )
-    if result.returncode not in {0, 1}:
+    if result.returncode:
         detail = result.stderr.strip() or result.stdout.strip() or str(result.returncode)
         raise WorktreeError(f"process CWD enumeration failed: {detail}")
-    if result.returncode == 1 and not result.stdout and not result.stderr.strip():
-        return None
-    if result.returncode == 1:
-        raise WorktreeError("process CWD enumeration was incomplete")
 
-    cwd_values: list[Path] = []
-    saw_cwd = False
-    for line in result.stdout.splitlines():
-        if line.startswith("f"):
-            saw_cwd = line[1:] == "cwd"
-        elif line.startswith("n") and saw_cwd:
-            cwd_values.append(Path(line[1:]))
-            saw_cwd = False
-    if result.returncode == 0 and not cwd_values:
-        raise WorktreeError("process CWD enumeration returned incomplete records")
+    cwd_values = _cwd_paths(result.stdout)
     if any(_inside(cwd, target) for cwd in cwd_values):
         return "worktree-active-process-cwd"
     return None
