@@ -7,6 +7,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+import pytest
+
 from worktree_fixtures import git, rev, run_cli
 
 
@@ -17,6 +19,8 @@ class LifecycleScenario:
     seed: Path
     worktree: Path
     receipt: Path
+    cwd_facts: Path
+    lsof_log: Path
     branch: str
     source_sha: str
     env: dict[str, str]
@@ -67,7 +71,50 @@ else:
     )
     gh.chmod(0o755)
     lsof = fake_bin / "lsof"
-    lsof.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    lsof.write_text(
+        """#!/usr/bin/env python3
+import json, os, sys
+from pathlib import Path
+
+args = sys.argv[1:]
+log = Path(os.environ["LIFECYCLE_LSOF_LOG"])
+scan_number = len(log.read_text(encoding="utf-8").splitlines()) + 1
+with log.open("a", encoding="utf-8") as stream:
+    stream.write(json.dumps(args) + "\\n")
+
+with open(os.environ["LIFECYCLE_CWD_FACTS"], encoding="utf-8") as stream:
+    facts = json.load(stream)
+
+warning = (
+    "lsof: WARNING: can't stat() opaque file system "
+    "/unrelated/unreadable-volume\\nOutput information may be incomplete."
+)
+print(warning, file=sys.stderr)
+
+if args != ["-a", "-d", "cwd", "-Fpcfn0"]:
+    raise SystemExit(64)
+if facts.get("mode") == "failure" or facts.get("failure_at") == scan_number:
+    raise SystemExit(72)
+if facts.get("mode") == "empty":
+    raise SystemExit(0)
+if facts.get("mode") == "bad-pid":
+    cwd = facts["cwds"][0]
+    sys.stdout.write(f"pnot-a-pid\\0cfixture\\0\\nfcwd\\0n{cwd}\\0\\n")
+    raise SystemExit(0)
+
+if facts.get("mode") == "partial":
+    _incomplete, complete = facts["cwds"]
+    sys.stdout.write(
+        f"p100\\0cfixture\\0\\nfcwd\\0"
+        f"\\np101\\0cfixture\\0\\nfcwd\\0n{complete}\\0\\n"
+    )
+    raise SystemExit(0)
+
+for index, cwd in enumerate(facts["cwds"], start=100):
+    sys.stdout.write(f"p{index}\\0cfixture\\0\\nfcwd\\0n{cwd}\\0\\n")
+""",
+        encoding="utf-8",
+    )
     lsof.chmod(0o755)
     return fake_bin
 
@@ -97,13 +144,23 @@ def _scenario(tmp_path: Path) -> LifecycleScenario:
     harness = tmp_path / "harness"
     facts = tmp_path / "github.json"
     facts.write_text("{}\n", encoding="utf-8")
+    cwd_facts = tmp_path / "cwd.json"
+    target = primary / ".worktrees" / "life-1"
+    cwd_facts.write_text(
+        json.dumps({"target": str(target), "cwds": [str(primary)]}) + "\n",
+        encoding="utf-8",
+    )
+    lsof_log = tmp_path / "lsof.jsonl"
+    lsof_log.write_text("", encoding="utf-8")
     fake_bin = _write_fake_tools(tmp_path / "fake", facts)
     github_url = "https://github.com/acme/widget.git"
     file_url = remote.resolve().as_uri()
     env = {
         "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
         "CONTINUATION_HARNESS_HOME": str(harness),
+        "LIFECYCLE_CWD_FACTS": str(cwd_facts),
         "LIFECYCLE_GITHUB_FACTS": str(facts),
+        "LIFECYCLE_LSOF_LOG": str(lsof_log),
         "GIT_CONFIG_COUNT": "1",
         "GIT_CONFIG_KEY_0": f"url.{file_url}.insteadOf",
         "GIT_CONFIG_VALUE_0": github_url,
@@ -129,6 +186,8 @@ def _scenario(tmp_path: Path) -> LifecycleScenario:
         seed=seed,
         worktree=worktree,
         receipt=harness / "worktrees" / "life-1.json",
+        cwd_facts=cwd_facts,
+        lsof_log=lsof_log,
         branch="feature/life-1",
         source_sha=rev(worktree),
         env=env,
@@ -173,6 +232,39 @@ def _finish(scenario: LifecycleScenario, *, cwd: Path | None = None):
     return run_cli(cwd or scenario.primary, "finish", "--lifecycle-id", "life-1", env=scenario.env)
 
 
+def _set_cwd_scan(
+    scenario: LifecycleScenario,
+    *,
+    cwds: list[Path] | None = None,
+    mode: str = "ok",
+    failure_at: int | None = None,
+) -> None:
+    scenario.cwd_facts.write_text(
+        json.dumps(
+            {
+                "target": str(scenario.worktree),
+                "cwds": [str(path) for path in (cwds or [])],
+                "mode": mode,
+                "failure_at": failure_at,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def _assert_pending_preserved(
+    scenario: LifecycleScenario, result, reason: str
+) -> None:
+    assert json.loads(result.stdout) == {
+        "lifecycle_id": "life-1",
+        "reason": reason,
+        "status": "pending",
+    }
+    assert scenario.worktree.exists()
+    assert scenario.receipt.exists()
+
+
 def test_create_publishes_one_durable_receipt(tmp_path: Path) -> None:
     scenario = _scenario(tmp_path)
 
@@ -185,7 +277,9 @@ def test_create_publishes_one_durable_receipt(tmp_path: Path) -> None:
     assert scenario.receipt.stat().st_mode & 0o777 == 0o600
 
 
-def test_finish_removes_only_safe_local_state(tmp_path: Path) -> None:
+def test_finish_removes_safe_local_state_despite_unrelated_mount_warning(
+    tmp_path: Path,
+) -> None:
     scenario = _scenario(tmp_path)
     candidate = _land(scenario)
 
@@ -204,6 +298,59 @@ def test_finish_removes_only_safe_local_state(tmp_path: Path) -> None:
     ).returncode == 1
     assert not scenario.receipt.exists()
     assert git(scenario.remote, "show-ref", "--verify", f"refs/heads/{scenario.branch}").stdout.startswith(candidate)
+    invocations = [json.loads(line) for line in scenario.lsof_log.read_text().splitlines()]
+    assert len(invocations) >= 2
+    assert all(args == ["-a", "-d", "cwd", "-Fpcfn0"] for args in invocations)
+
+
+def test_finish_preserves_worktree_used_as_nested_process_cwd(tmp_path: Path) -> None:
+    scenario = _scenario(tmp_path)
+    _land(scenario)
+    nested = scenario.worktree / "nested" / "cwd"
+    nested.mkdir(parents=True)
+    _set_cwd_scan(scenario, cwds=[scenario.primary, nested])
+
+    result = _finish(scenario)
+
+    _assert_pending_preserved(scenario, result, "worktree-active-process-cwd")
+
+
+@pytest.mark.parametrize("mode", ["failure", "empty", "bad-pid"])
+def test_finish_fails_closed_when_global_cwd_enumeration_is_incomplete(
+    tmp_path: Path, mode: str
+) -> None:
+    scenario = _scenario(tmp_path)
+    _land(scenario)
+    _set_cwd_scan(scenario, cwds=[scenario.primary], mode=mode)
+
+    result = _finish(scenario)
+
+    _assert_pending_preserved(scenario, result, "activity-inspection-failed")
+
+
+def test_finish_fails_closed_when_one_cwd_record_is_incomplete(tmp_path: Path) -> None:
+    scenario = _scenario(tmp_path)
+    _land(scenario)
+    nested = scenario.worktree / "nested" / "cwd"
+    nested.mkdir(parents=True)
+    _set_cwd_scan(scenario, cwds=[nested, scenario.primary], mode="partial")
+
+    result = _finish(scenario)
+
+    _assert_pending_preserved(scenario, result, "activity-inspection-failed")
+
+
+@pytest.mark.parametrize("failure_at", [2, 3])
+def test_finish_reports_late_cwd_enumeration_failure_consistently(
+    tmp_path: Path, failure_at: int
+) -> None:
+    scenario = _scenario(tmp_path)
+    _land(scenario)
+    _set_cwd_scan(scenario, cwds=[scenario.primary], failure_at=failure_at)
+
+    result = _finish(scenario)
+
+    _assert_pending_preserved(scenario, result, "activity-inspection-failed")
 
 
 def test_ignored_content_is_preserved(tmp_path: Path) -> None:

@@ -212,7 +212,10 @@ def final_local_preserve_reason(
         content = _submodule_reason(entry.worktree) or _status_reason(entry.worktree)
         if content:
             return content, False
-        activity = active_reason(entry.worktree, registry_root().parent)
+        try:
+            activity = active_reason(entry.worktree, registry_root().parent)
+        except (OSError, WorktreeError):
+            return "activity-inspection-failed", True
         if activity:
             return activity, False
         return None, False
