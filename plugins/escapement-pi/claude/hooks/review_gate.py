@@ -70,7 +70,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import sys
 from pathlib import Path
 
@@ -82,6 +81,7 @@ except ImportError:  # pragma: no cover - signal is best-effort
     def _record_signal(*_args, **_kwargs) -> None:
         return None
 
+from _review_command import close_target, waiver_reason  # noqa: E402
 from _review_ledger import record_dispatch  # noqa: E402
 from _review_record import (  # noqa: E402
     INDEPENDENT_REVIEWER_TYPES,
@@ -96,50 +96,20 @@ from _review_record import (  # noqa: E402
 
 _RECORD_CLI = str(Path(__file__).resolve().parent / "escapement_review.py")
 
-_BD_CLOSE_RE = re.compile(r"\bbd\s+close\b")
-_BD_UPDATE_CLOSED_RE = re.compile(r"\bbd\s+update\s+.*--status[=\s]+closed\b")
+# Name of the environment-variable escape. A flag (`--review-waiver`) cannot be
+# used here: `bd` rejects unknown flags outright, so a denial telling the agent
+# to add one would hand it a command that will not run (escapement-6ge8).
+WAIVER_VAR = "REVIEW_WAIVER"
 
-# `REVIEW_WAIVER=...` as a shell environment prefix, single- or double-quoted.
-_WAIVER_RE = re.compile(
-    r"""\bREVIEW_WAIVER=(?:"([^"]*)"|'([^']*)'|(\S+))"""
-)
-
-
-# ---------------------------------------------------------------------------
-# Command parsing
-# ---------------------------------------------------------------------------
 
 def is_close_command(command: str) -> bool:
-    """True when the command closes a bead."""
-    return bool(_BD_CLOSE_RE.search(command) or _BD_UPDATE_CLOSED_RE.search(command))
-
-
-def close_target(command: str) -> str | None:
-    """Return the bead id being closed, or None when it cannot be resolved.
-
-    Walks the token stream after `bd close` / `bd update` and returns the first
-    bareword that is not a flag. Flag values are quoted in practice, and a bead
-    id never begins with '-', so a separate value token is not skipped.
-    """
-    match = re.search(r"\bbd\s+(?:close|update)\b(.*)", command, re.DOTALL)
-    if not match:
-        return None
-    tokens = re.findall(r"(?:'[^']*'|\"[^\"]*\"|\S)+", match.group(1))
-    for token in tokens:
-        if token.startswith("-"):
-            continue
-        candidate = token.strip("'\"")
-        if candidate:
-            return candidate
-    return None
+    """True when the command actually closes a bead."""
+    return close_target(command) is not None
 
 
 def parse_waiver(command: str) -> str | None:
-    """Return the REVIEW_WAIVER reason if one is present, else None."""
-    match = _WAIVER_RE.search(command)
-    if not match:
-        return None
-    return next((g for g in match.groups() if g is not None), "")
+    """Return the waiver reason set as an env prefix on the bd invocation."""
+    return waiver_reason(command, WAIVER_VAR)
 
 
 # ---------------------------------------------------------------------------

@@ -89,6 +89,7 @@ SHARED_HOOK_SUPPORT = {
     # installed host, so `bd close` would stop being gated at all.
     "claude/hooks/_review_record.py",
     "claude/hooks/_review_ledger.py",
+    "claude/hooks/_review_command.py",
     # The recording CLI is the escape path review_gate names in every denial.
     # An installed gate that denies with an unrunnable remedy is a dead end.
     "claude/hooks/escapement_review.py",
