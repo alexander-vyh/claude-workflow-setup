@@ -120,9 +120,15 @@ def _run_entry(
     fakebin, fixture_path, log_path = _write_fake_bd(tmp_path, fixture)
     env = _hook_env(fakebin, fixture_path, log_path, thread_dir)
     payload = {
+        "hook_event_name": "PostToolUse",
         "tool_name": "Bash",
         "session_id": session_id,
         "tool_input": {"command": f"bd update {task_id} --claim"},
+        "tool_response": {
+            "interrupted": False,
+            "stderr": "",
+            "stdout": "",
+        },
     }
     proc = subprocess.run(
         [sys.executable, str(ENTRY)],
@@ -165,6 +171,23 @@ def _deep_graph() -> dict[str, Any]:
             "root": {"omit_parent": True},
         }
     }
+
+
+def test_successful_posttool_claim_creates_exact_scoped_task_mode(
+    tmp_path: pathlib.Path,
+) -> None:
+    proc, state, repo, _thread_dir, _env, _log = _run_entry(
+        tmp_path,
+        {"shows": {"leaf": {"omit_parent": True}}},
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert state is not None
+    assert state["mode"] == "task"
+    assert state["session_id"] == "session"
+    assert state["task_id"] == "leaf"
+    assert state["parent_id"] is None
+    assert state["repo_cwd"] == str(repo)
 
 
 def test_deep_ready_sibling_under_other_branch_blocks_stop(
@@ -429,9 +452,11 @@ def test_two_public_claims_in_one_process_keep_independent_roots_and_stop_scopes
 
     for session_id, task_id in (("session-a", "leaf-a"), ("session-b", "leaf-b")):
         payload = {
+            "hook_event_name": "PostToolUse",
             "tool_name": "Bash",
             "session_id": session_id,
             "tool_input": {"command": f"bd update {task_id} --claim"},
+            "tool_response": {"interrupted": False, "stderr": "", "stdout": ""},
         }
         monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
         assert task_mode_entry.main() == 0
@@ -500,9 +525,11 @@ def test_same_task_id_is_rewalked_for_each_public_claim_in_one_process(
 
     def claim(session_id: str) -> None:
         payload = {
+            "hook_event_name": "PostToolUse",
             "tool_name": "Bash",
             "session_id": session_id,
             "tool_input": {"command": "bd update leaf --claim"},
+            "tool_response": {"interrupted": False, "stderr": "", "stdout": ""},
         }
         monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
         assert task_mode_entry.main() == 0

@@ -517,14 +517,16 @@ def run_task_mode() -> int:
 
     tmp = pathlib.Path(_tf.mkdtemp(prefix="harness-task-mode-"))
     try:
-        # --- Pre-tool hook (task_mode_entry.py) ---
+        # --- Successful post-tool claim hook (task_mode_entry.py) ---
 
         # Claim command → writes session_mode.json.
         td = tmp / "entry-claim"
         td.mkdir(parents=True)
         rc = call_entry(
-            {"session_id": "x", "tool_name": "Bash",
-             "tool_input": {"command": "bd update cake-123 --claim"}},
+            {"session_id": "x", "hook_event_name": "PostToolUse",
+             "tool_name": "Bash",
+             "tool_input": {"command": "bd update cake-123 --claim"},
+             "tool_response": {"interrupted": False, "stderr": "", "stdout": ""}},
             td,
         )
         mode = json.loads((td / "session_mode.json").read_text()) if (td / "session_mode.json").exists() else None
@@ -556,11 +558,15 @@ def run_task_mode() -> int:
         # First-claim-wins: second claim does not overwrite.
         td = tmp / "entry-first-wins"
         td.mkdir(parents=True)
-        call_entry({"session_id": "x", "tool_name": "Bash",
-                    "tool_input": {"command": "bd update cake-1 --claim"}}, td)
+        call_entry({"session_id": "x", "hook_event_name": "PostToolUse",
+                    "tool_name": "Bash",
+                    "tool_input": {"command": "bd update cake-1 --claim"},
+                    "tool_response": {"interrupted": False, "stderr": "", "stdout": ""}}, td)
         first_ctime = (td / "session_mode.json").read_text()
-        call_entry({"session_id": "x", "tool_name": "Bash",
-                    "tool_input": {"command": "bd update cake-2 --claim"}}, td)
+        call_entry({"session_id": "x", "hook_event_name": "PostToolUse",
+                    "tool_name": "Bash",
+                    "tool_input": {"command": "bd update cake-2 --claim"},
+                    "tool_response": {"interrupted": False, "stderr": "", "stdout": ""}}, td)
         second_ctime = (td / "session_mode.json").read_text()
         _assert(first_ctime == second_ctime,
                 "entry: first-claim-wins — second claim does not overwrite session_mode.json", results)

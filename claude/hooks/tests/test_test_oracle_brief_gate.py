@@ -134,9 +134,6 @@ EDIT_TOOL_INPUTS = {
     "Write": ("file_path", "src/app.py"),
     "Edit": ("file_path", "src/app.py"),
     "NotebookEdit": ("notebook_path", "src/analysis.ipynb"),
-    "mcp__serena__replace_symbol_body": ("relative_path", "src/app.py"),
-    "mcp__serena__insert_after_symbol": ("relative_path", "src/app.py"),
-    "mcp__serena__insert_before_symbol": ("relative_path", "src/app.py"),
 }
 
 LANDING_COMMANDS = (

@@ -100,12 +100,17 @@ CODEX_HOOK_SUPPORT = {
     # Codex Bash policy gates execute through one in-process dispatcher to avoid
     # multiplying interpreter startup and filesystem pressure per tool call.
     "claude/hooks/codex_pretool_dispatch.py",
+    # Retain partial hook sources for isolated fixtures and byte-parity checks
+    # without registering them against an unverified Codex payload boundary.
+    "claude/hooks/root_checkout_guard.py",
     # merge_authorization_gate.py resolves this sibling via its plugin-relative
     # path. Without it, an explicitly authorized Codex repository is denied
     # fail-closed because the policy reader cannot be imported.
     "harness/bin/repo_outcome.py",
-    # execution_reconcile.py is a ready Codex SessionStart source and imports
-    # this complete trusted-ledger closure from its sibling directory.
+    # execution_reconcile.py remains bundled while its unconditional
+    # SessionStart registration is partial and disabled.
+    "harness/bin/execution_reconcile.py",
+    # Retain the complete trusted-ledger closure used by isolated reconciliation.
     "harness/bin/execution_ledger.py",
     "harness/bin/execution_store.py",
     "harness/bin/execution_validation.py",

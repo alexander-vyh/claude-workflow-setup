@@ -45,6 +45,15 @@
           }
         ],
         "matcher": "ScheduleWakeup"
+      },
+      {
+        "hooks": [
+          {
+            "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/harness/bin/task_mode_entry.py\"",
+            "type": "command"
+          }
+        ],
+        "matcher": "Bash"
       }
     ],
     "PreCompact": [
@@ -66,7 +75,7 @@
             "type": "command"
           }
         ],
-        "matcher": "Write|Edit|NotebookEdit|mcp__serena__replace_symbol_body|mcp__serena__insert_after_symbol|mcp__serena__insert_before_symbol"
+        "matcher": "Write|Edit|NotebookEdit"
       },
       {
         "hooks": [
@@ -90,15 +99,6 @@
         "hooks": [
           {
             "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/hooks/beads_worktree_guard.py\"",
-            "type": "command"
-          }
-        ],
-        "matcher": "Bash"
-      },
-      {
-        "hooks": [
-          {
-            "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/hooks/root_checkout_guard.py\"",
             "type": "command"
           }
         ],
@@ -139,33 +139,6 @@
           }
         ],
         "matcher": "MultiEdit"
-      },
-      {
-        "hooks": [
-          {
-            "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/hooks/root_checkout_guard.py\"",
-            "type": "command"
-          }
-        ],
-        "matcher": "mcp__serena__replace_symbol_body"
-      },
-      {
-        "hooks": [
-          {
-            "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/hooks/root_checkout_guard.py\"",
-            "type": "command"
-          }
-        ],
-        "matcher": "mcp__serena__insert_after_symbol"
-      },
-      {
-        "hooks": [
-          {
-            "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/hooks/root_checkout_guard.py\"",
-            "type": "command"
-          }
-        ],
-        "matcher": "mcp__serena__insert_before_symbol"
       },
       {
         "hooks": [
@@ -449,33 +422,6 @@
       {
         "hooks": [
           {
-            "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/hooks/tdd-gate.py\"",
-            "type": "command"
-          }
-        ],
-        "matcher": "mcp__serena__replace_symbol_body"
-      },
-      {
-        "hooks": [
-          {
-            "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/hooks/tdd-gate.py\"",
-            "type": "command"
-          }
-        ],
-        "matcher": "mcp__serena__insert_after_symbol"
-      },
-      {
-        "hooks": [
-          {
-            "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/hooks/tdd-gate.py\"",
-            "type": "command"
-          }
-        ],
-        "matcher": "mcp__serena__insert_before_symbol"
-      },
-      {
-        "hooks": [
-          {
             "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/hooks/validate_no_shirking.py\"",
             "type": "command"
           }
@@ -499,15 +445,6 @@
           }
         ],
         "matcher": "Write|Edit"
-      },
-      {
-        "hooks": [
-          {
-            "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/harness/bin/task_mode_entry.py\"",
-            "type": "command"
-          }
-        ],
-        "matcher": "Bash"
       }
     ],
     "SessionStart": [
@@ -515,15 +452,6 @@
         "hooks": [
           {
             "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/hooks/escapement_session_context.py\"",
-            "type": "command"
-          }
-        ],
-        "matcher": ""
-      },
-      {
-        "hooks": [
-          {
-            "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/harness/bin/execution_reconcile.py\"",
             "type": "command"
           }
         ],

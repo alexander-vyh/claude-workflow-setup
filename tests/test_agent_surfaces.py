@@ -21,7 +21,7 @@ EXPECTED_CODEX_GATE = {
     "matcher": "Bash",
     "dispatcher": "codex_pretool_dispatch.py",
     "gate": "claude/hooks/test_oracle_brief_gate.py",
-    "timeout": 150,
+    "timeout": 139,
 }
 CODEX_PLUGIN_FINAL_RESPONSE_GAP_FRAGMENT = 'python3 -B "${PLUGIN_ROOT}/claude/hooks/codex_final_response_gap.py"'
 CODEX_PLUGIN_CONTEXT_FRAGMENT = (
@@ -898,9 +898,10 @@ def test_root_checkout_guard_is_enabled_only_where_command_cwd_is_verified():
         for command in bash_dispatchers
     )
 
-    # The Claude PLUGIN is the sole owner of hook registration (escapement-ptzz).
-    # This assertion is re-pointed from settings.template.json, not weakened: the
-    # same four matchers must still be wired for the guard to protect the root checkout.
+    # The Claude plugin owns built-in explicit-path edit containment. Bash is
+    # absent because arbitrary shell effects cannot be predicted soundly.
+    # Serena is absent because its relative paths use an independent active
+    # project root which is not present in the Claude hook payload.
     claude_plugin_hooks = json.loads(
         (ROOT / "plugins" / "escapement-claude" / "hooks" / "hooks.json").read_text()
     )["hooks"]
@@ -910,7 +911,12 @@ def test_root_checkout_guard_is_enabled_only_where_command_cwd_is_verified():
         for hook in item.get("hooks", [])
         if hook.get("command") == CLAUDE_PLUGIN_ROOT_CHECKOUT_GUARD_COMMAND
     }
-    assert {"Bash", "Write", "Edit", "NotebookEdit"} <= claude_matchers
+    assert claude_matchers == {
+        "Write",
+        "Edit",
+        "NotebookEdit",
+        "MultiEdit",
+    }
 
     plugin_hooks = json.loads((CODEX_WRAPPER / "hooks" / "hooks.json").read_text())["hooks"]
     plugin_commands = [
@@ -923,6 +929,30 @@ def test_root_checkout_guard_is_enabled_only_where_command_cwd_is_verified():
         and "claude/hooks/root_checkout_guard.py" in _dispatcher_gate_paths(command)
         for command in plugin_commands
     )
+
+
+def test_claude_path_classifying_gates_exclude_serena_without_project_root():
+    manifest = json.loads(MANIFEST.read_text())
+    path_classifiers = {
+        "root_checkout_guard",
+        "test_oracle_brief_gate",
+        "tdd-gate",
+    }
+    entries = {
+        hook["id"]: hook
+        for hook in manifest["hooks"]
+        if hook["id"] in path_classifiers
+    }
+    assert set(entries) == path_classifiers
+    for hook_id, entry in entries.items():
+        matchers = {
+            matcher
+            for event in entry["hosts"]["claude"].get("events", [])
+            for matcher in event.get("matcher", "").split("|")
+        }
+        assert not any(matcher.startswith("mcp__serena__") for matcher in matchers), (
+            f"{hook_id} cannot classify Serena relative paths without the active project root"
+        )
 
 
 def test_codex_generated_surfaces_do_not_use_claude_user_paths():
@@ -1299,6 +1329,21 @@ def test_generated_plugins_only_register_safe_delegation_observation():
 
     for _event, _matcher, command in codex_commands + claude_commands:
         assert "~/.claude" not in command
+
+
+def test_task_mode_entry_runs_only_after_successful_claude_bash_calls():
+    task_mode_commands = [
+        (event, matcher, command)
+        for event, matcher, command in _all_generated_hook_commands(CLAUDE_PLUGIN)
+        if "task_mode_entry.py" in command
+    ]
+    assert task_mode_commands == [
+        (
+            "PostToolUse",
+            "Bash",
+            'python3 -B "${CLAUDE_PLUGIN_ROOT}/harness/bin/task_mode_entry.py"',
+        )
+    ]
 
 
 def test_codex_plugin_bundles_reconciliation_import_closure():

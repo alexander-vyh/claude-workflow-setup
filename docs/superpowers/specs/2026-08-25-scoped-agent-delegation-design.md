@@ -8,11 +8,11 @@ inside an explicitly managed task session. Missing, stale, corrupt, or
 host-incompatible Escapement state must never deny an Agent call. It may prevent
 an unverifiable managed session from claiming completion.
 
-Routine filesystem commands must likewise be classified from the operands the
-shell will actually use. In particular, shell home-directory syntax such as
-`~/Downloads/file.pdf` must be expanded before root-checkout containment. A
-repo-shaped string inside an unrelated source path or session scratch path is
-not evidence that the repository is being mutated.
+Routine shell commands must not be sent through a hard root-checkout gate that
+cannot observe their real filesystem effects. In particular, copying a session
+scratch artifact to `~/Downloads/file.pdf` must run without a root-checkout hook
+invocation. A repo-shaped string inside an unrelated source path or session
+scratch path is not evidence that the repository is being mutated.
 
 This replaces the globally enabled prepared-execution gate and the unconditional
 SessionStart ledger warning introduced by the delegated-work liveness feature.
@@ -29,9 +29,15 @@ Escapement uses different failure policies at two boundaries:
 Security, destructive-action, permission, and landing gates remain independent.
 This design changes only delegated-execution bookkeeping.
 
-The root-checkout safety gate remains enabled. Its boundary is an actual write
-target resolved with shell-compatible path semantics, never the session cwd or
-an unexpanded operand when a concrete destination exists.
+The root-checkout safety gate remains enabled only for Claude built-in edit
+tools whose payload carries the actual destination path: Write, Edit,
+NotebookEdit, and MultiEdit. Arbitrary Bash effects are outside this hard gate;
+soundly predicting them would require executing or reimplementing the shell.
+Serena symbol edits are also outside every cwd-rooted path-classifying gate,
+including advisory TDD and Test Oracle Brief gates, because `relative_path` is
+rooted at Serena's independently activated project and that root is absent from
+the Claude hook payload. Claude cwd is not a valid substitute, and an unreliable
+`ask` is still misleading global friction.
 
 Claude supplies the effective command cwd needed by that boundary. The current
 Codex PreTool payload does not expose `exec_command.workdir`; its session cwd can
@@ -42,20 +48,16 @@ safety feature.
 
 ## Filesystem intent classification
 
-For recognized shell mutations, Escapement resolves the command's actual write
-targets before asking whether they are inside a Beads-managed primary checkout.
+For registered built-in edit tools, Escapement resolves the tool's canonical
+path field against the effective Claude cwd, then asks whether that destination
+is inside a Beads-managed primary checkout. A primary checkout is denied; a
+linked worktree or outside destination is allowed.
 
-- `cp` and `install` read their sources and write their destination.
-- `mv` mutates both source and destination.
-- explicit target-directory flags identify the destination.
-- relative paths resolve against the effective cwd after literal `cd` segments.
-- leading `~` and `~/` expand exactly as the invoking user's shell would.
-- quoted repo-shaped text and scratch-directory names have no authority by
-  themselves.
-
-If the parser cannot identify an operand for a recognized mutating command, the
-existing conservative cwd fallback remains. If it identifies a concrete target,
-the gate must decide from that target and must not replace it with cwd.
+Bash is deliberately unregistered. A PreToolUse hook cannot soundly infer all
+effects of shell expansion, quoting, control flow, redirection, subprocesses,
+and dynamic evaluation without executing the command or becoming a shell.
+Serena is deliberately unregistered until the host provides and a captured
+fixture proves the active Serena project root.
 
 ## Modes
 
@@ -70,10 +72,12 @@ No trusted `session_mode.json` means the session is unmanaged.
 
 ### Managed task session
 
-A trusted `session_mode.json` created by an explicit Beads claim establishes the
-task scope. Agent PreToolUse then records dispatch intent automatically from the
-trusted session scope and host fields. No manual `prepare` command and no child
-Bead are required.
+A trusted `session_mode.json` created by an exact, successful, unchained Beads
+claim establishes the task scope. Shell line controls including LF, CR, and
+CRLF disqualify the command in both PostToolUse and transcript recovery. Agent
+PreToolUse then records dispatch intent automatically from the trusted session
+scope and host fields. No manual `prepare` command and no child Bead are
+required.
 
 The execution record uses:
 
@@ -160,9 +164,11 @@ active.
   trusted expectation writer.
 - Render, test, merge, install, and prove a fresh unmanaged Agent call succeeds
   without `prepared_execution_required`.
-- Repair home-relative shell target resolution and prove a scratchpad-to-
-  `~/Downloads` copy succeeds without a waiver while a real copy into the
-  primary checkout remains denied.
+- Remove Bash from root-checkout registration and Serena from every cwd-rooted
+  path-classifying registration, prove the reported
+  scratchpad-to-`~/Downloads` copy runs without a root-checkout hook event, and
+  prove built-in explicit edits into the primary checkout remain denied while
+  linked-worktree and outside edits remain allowed.
 
 ### 2. Repair incomplete lifecycle while observation remains enabled
 

@@ -35,6 +35,7 @@ BIN = pathlib.Path(__file__).resolve().parent.parent / "bin"
 sys.path.insert(0, str(BIN))
 
 import delegation_hook  # noqa: E402
+import execution_expectation as expectation_api  # noqa: E402
 import execution_ledger as ledger_api  # noqa: E402
 import execution_stop_adapter  # noqa: E402
 
@@ -165,6 +166,270 @@ def test_unmanaged_first_attempt_allows_without_escapement_state(tmp_path) -> No
     assert list(path.parent.iterdir()) == []
 
 
+def test_unmanaged_completion_ignores_stale_execution_artifacts(tmp_path) -> None:
+    harness_root = tmp_path / "harness"
+    thread_dir = harness_root / "threads" / SESSION
+    thread_dir.mkdir(parents=True)
+    (thread_dir / "execution_expectation.json").write_text("{malformed", encoding="utf-8")
+    (thread_dir / "executions.json").write_text("{malformed", encoding="utf-8")
+
+    mode, decision = execution_stop_adapter.decide_task_mode(
+        SESSION,
+        thread_dir,
+        dt.datetime(2026, 8, 25, 20, 0, tzinfo=UTC),
+        harness_root=harness_root,
+    )
+
+    assert mode is None
+    assert decision is None
+
+
+@pytest.mark.parametrize(
+    "invalid_kind",
+    ("malformed", "world-writable", "symlink", "foreign-session"),
+)
+def test_untrusted_task_mode_alone_does_not_manage_completion(
+    tmp_path, invalid_kind, monkeypatch
+) -> None:
+    harness_root = tmp_path / "harness"
+    thread_dir = harness_root / "threads" / SESSION
+    thread_dir.mkdir(parents=True)
+    mode_path = thread_dir / "session_mode.json"
+    mode = {
+        "mode": "task",
+        "session_id": "foreign-session" if invalid_kind == "foreign-session" else SESSION,
+        "repo_cwd": str(tmp_path),
+        "task_id": BEAD,
+        "parent_id": "escapement-e3ai",
+    }
+    if invalid_kind == "malformed":
+        mode_path.write_text("{malformed", encoding="utf-8")
+    elif invalid_kind == "symlink":
+        target = tmp_path / "redirected-session-mode.json"
+        target.write_text(json.dumps(mode), encoding="utf-8")
+        target.chmod(0o600)
+        mode_path.symlink_to(target)
+    else:
+        mode_path.write_text(json.dumps(mode), encoding="utf-8")
+        mode_path.chmod(0o666 if invalid_kind == "world-writable" else 0o600)
+
+    monkeypatch.setattr(
+        execution_stop_adapter,
+        "task_root_status",
+        lambda *_args: (_ for _ in ()).throw(
+            AssertionError("untrusted task mode must not consult Beads")
+        ),
+    )
+
+    loaded, decision = execution_stop_adapter.decide_task_mode(
+        SESSION,
+        thread_dir,
+        dt.datetime(2026, 8, 25, 20, 0, tzinfo=UTC),
+        harness_root=harness_root,
+    )
+
+    assert loaded is None
+    assert decision is None
+
+
+@pytest.mark.parametrize("claim_failed", (False, True), ids=("success", "failure"))
+def test_transcript_claim_witness_controls_missing_mode_completion(
+    tmp_path, claim_failed
+) -> None:
+    harness_root = tmp_path / "harness"
+    thread_dir = harness_root / "threads" / SESSION
+    thread_dir.mkdir(parents=True)
+    transcript = tmp_path / "transcript.jsonl"
+    transcript.write_text(
+        "\n".join(
+            json.dumps(item)
+            for item in (
+                {
+                    "sessionId": SESSION,
+                    "message": {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "toolu-claim-witness",
+                                "name": "Bash",
+                                "input": {"command": f"bd update {BEAD} --claim"},
+                            }
+                        ],
+                    },
+                },
+                {
+                    "sessionId": SESSION,
+                    "message": {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "toolu-claim-witness",
+                                "is_error": claim_failed,
+                                "content": "claim result",
+                            }
+                        ],
+                    },
+                },
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    transcript.chmod(0o600)
+
+    mode, decision = execution_stop_adapter.decide_task_mode(
+        SESSION,
+        thread_dir,
+        dt.datetime(2026, 8, 25, 20, 0, tzinfo=UTC),
+        harness_root=harness_root,
+        transcript_path=transcript,
+    )
+
+    assert mode is None
+    expected = None if claim_failed else ("block", "delegated_execution_unresolved")
+    assert decision == expected
+
+
+@pytest.mark.parametrize("non_bash_claim", (False, True), ids=("mismatched-result", "non-bash"))
+def test_transcript_claim_witness_requires_exact_bash_result_pair(
+    tmp_path, non_bash_claim
+) -> None:
+    harness_root = tmp_path / "harness"
+    thread_dir = harness_root / "threads" / SESSION
+    thread_dir.mkdir(parents=True)
+    transcript = tmp_path / "transcript.jsonl"
+    claim_tool_name = "Read" if non_bash_claim else "Bash"
+    claim_input = (
+        {"command": f"bd update {BEAD} --claim"}
+        if not non_bash_claim
+        else {"file_path": f"bd update {BEAD} --claim"}
+    )
+    transcript.write_text(
+        "\n".join(
+            json.dumps(item)
+            for item in (
+                {
+                    "sessionId": SESSION,
+                    "message": {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "toolu-claim-failed",
+                                "name": claim_tool_name,
+                                "input": claim_input,
+                            }
+                        ],
+                    },
+                },
+                {
+                    "sessionId": SESSION,
+                    "message": {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "toolu-claim-failed",
+                                "is_error": True,
+                                "content": "claim failed",
+                            },
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "toolu-unrelated-success",
+                                "is_error": False,
+                                "content": "unrelated success",
+                            },
+                        ],
+                    },
+                },
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    transcript.chmod(0o600)
+
+    mode, decision = execution_stop_adapter.decide_task_mode(
+        SESSION,
+        thread_dir,
+        dt.datetime(2026, 8, 25, 20, 0, tzinfo=UTC),
+        harness_root=harness_root,
+        transcript_path=transcript,
+    )
+
+    assert mode is None
+    assert decision is None
+
+
+@pytest.mark.parametrize("line_control", ("\n", "\r", "\r\n"), ids=("lf", "cr", "crlf"))
+@pytest.mark.parametrize("position", ("before", "between", "after"))
+def test_transcript_claim_witness_rejects_shell_line_controls(
+    tmp_path, line_control, position
+) -> None:
+    harness_root = tmp_path / "harness"
+    thread_dir = harness_root / "threads" / SESSION
+    thread_dir.mkdir(parents=True)
+    transcript = tmp_path / "transcript.jsonl"
+    command = {
+        "before": f"true{line_control}bd update {BEAD} --claim",
+        "between": f"bd{line_control}update {BEAD} --claim",
+        "after": f"bd update {BEAD} --claim{line_control}true",
+    }[position]
+    transcript.write_text(
+        "\n".join(
+            json.dumps(item)
+            for item in (
+                {
+                    "sessionId": SESSION,
+                    "message": {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "toolu-line-control",
+                                "name": "Bash",
+                                "input": {
+                                    "command": command
+                                },
+                            }
+                        ],
+                    },
+                },
+                {
+                    "sessionId": SESSION,
+                    "message": {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "toolu-line-control",
+                                "is_error": False,
+                                "content": "second command succeeded",
+                            }
+                        ],
+                    },
+                },
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    transcript.chmod(0o600)
+
+    mode, decision = execution_stop_adapter.decide_task_mode(
+        SESSION,
+        thread_dir,
+        dt.datetime(2026, 8, 25, 20, 0, tzinfo=UTC),
+        harness_root=harness_root,
+        transcript_path=transcript,
+    )
+
+    assert mode is None
+    assert decision is None
+
+
 def test_managed_first_attempt_registers_without_prepare_or_child_bead(tmp_path) -> None:
     thread_dir = tmp_path / "thread"
     repo = tmp_path / "repo"
@@ -194,6 +459,131 @@ def test_managed_first_attempt_registers_without_prepare_or_child_bead(tmp_path)
     assert [item["tool_use_id"] for item in expectation["expectations"]] == [
         "toolu-agent-44"
     ]
+
+
+@pytest.mark.parametrize(
+    ("foreign_task", "foreign_agent", "foreign_host"),
+    [
+        ("escapement-foreign-task", AGENT, "claude"),
+        (BEAD, "foreign-agent", "claude"),
+        (BEAD, AGENT, "codex"),
+    ],
+    ids=["foreign-task", "foreign-agent", "foreign-host"],
+)
+def test_matching_tool_id_with_foreign_dispatch_identity_blocks_completion(
+    tmp_path, monkeypatch, foreign_task, foreign_agent, foreign_host
+) -> None:
+    harness_root = tmp_path / "harness"
+    thread_dir = harness_root / "threads" / SESSION
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_task_mode(thread_dir, repo)
+    (thread_dir / "execution_expectation.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "parent_session_id": SESSION,
+                "expectations": [
+                    {
+                        "tool_use_id": "toolu-agent-44",
+                        "task_id": BEAD,
+                        "agent_name": AGENT,
+                        "host": "claude",
+                        "expected_at": "2026-08-25T20:00:00+00:00",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    ledger = ledger_api.new_ledger(SESSION)
+    ledger_api.register_execution(
+        ledger,
+        {
+            "kind": "dispatch_registered",
+            "parent_session_id": SESSION,
+            "bead_id": foreign_task,
+            "execution_id": "exec-foreign-dispatch",
+            "host": foreign_host,
+            "agent_name": foreign_agent,
+            "dispatch_tool_use_id": "toolu-agent-44",
+            "watchdog_id": "watch-foreign-dispatch",
+            "attempt": 1,
+            "generation": 1,
+        },
+        at("2026-08-25T20:00:01Z"),
+    )
+    (thread_dir / "executions.json").write_text(json.dumps(ledger), encoding="utf-8")
+    for state_file in thread_dir.iterdir():
+        state_file.chmod(0o600)
+    monkeypatch.setattr(execution_stop_adapter, "task_root_status", lambda _mode: "closed")
+    monkeypatch.setattr(
+        execution_stop_adapter,
+        "execution_stop_decision",
+        lambda *_args: ("allow", "delegated_execution_complete"),
+    )
+
+    _mode, decision = execution_stop_adapter.decide_task_mode(
+        SESSION,
+        thread_dir,
+        dt.datetime(2026, 8, 25, 20, 2, tzinfo=UTC),
+        harness_root=harness_root,
+    )
+
+    assert decision == ("block", "delegated_execution_unresolved")
+
+
+def test_repeated_tool_id_with_conflicting_identity_is_not_reported_registered(
+    tmp_path, monkeypatch,
+) -> None:
+    thread_dir = tmp_path / "thread"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_task_mode(thread_dir, repo)
+    path = thread_dir / "executions.json"
+    ledger = ledger_api.new_ledger(SESSION)
+    ledger_api.register_execution(
+        ledger,
+        {
+            "kind": "dispatch_registered",
+            "parent_session_id": SESSION,
+            "bead_id": BEAD,
+            "execution_id": "exec-foreign-agent",
+            "host": "claude",
+            "agent_name": "foreign-agent",
+            "dispatch_tool_use_id": "toolu-agent-44",
+            "watchdog_id": "watch-foreign-agent",
+            "attempt": 1,
+            "generation": 1,
+        },
+        at("2026-08-25T20:00:00Z"),
+    )
+    path.write_text(json.dumps(ledger), encoding="utf-8")
+    path.chmod(0o600)
+    before = path.read_bytes()
+
+    result = delegation_hook.pre_tool(
+        claude_agent_pretool(), fail_if_bd_called, path
+    )
+
+    assert result == {"decision": "allow", "reason": "dispatch_evidence_unresolved"}
+    assert path.read_bytes() == before
+    assert (thread_dir / "execution_expectation.json").is_file() or (
+        thread_dir / "execution_incident.json"
+    ).is_file()
+    monkeypatch.setattr(execution_stop_adapter, "task_root_status", lambda _mode: "closed")
+    monkeypatch.setattr(
+        execution_stop_adapter,
+        "execution_stop_decision",
+        lambda *_args: ("allow", "delegated_execution_complete"),
+    )
+    _mode, decision = execution_stop_adapter.decide_task_mode(
+        SESSION,
+        thread_dir,
+        dt.datetime(2026, 8, 25, 20, 2, tzinfo=UTC),
+        harness_root=tmp_path,
+    )
+    assert decision == ("block", "delegated_execution_unresolved")
 
 
 def test_ledger_persistence_failure_allows_agent_but_blocks_managed_completion(
@@ -231,6 +621,44 @@ def test_ledger_persistence_failure_allows_agent_but_blocks_managed_completion(
     assert decision == ("block", "delegated_execution_unresolved")
 
 
+@pytest.mark.parametrize("missing_field", ("agent_name", "tool_use_id"))
+def test_managed_invalid_agent_payload_records_incident_and_blocks_completion(
+    tmp_path, monkeypatch, missing_field
+) -> None:
+    harness_root = tmp_path / "harness"
+    thread_dir = harness_root / "threads" / SESSION
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_task_mode(thread_dir, repo)
+    payload = claude_agent_pretool()
+    if missing_field == "agent_name":
+        payload["tool_input"].pop("name")
+    else:
+        payload.pop("tool_use_id")
+
+    result = delegation_hook.pre_tool(
+        payload, fail_if_bd_called, thread_dir / "executions.json"
+    )
+
+    assert result == {"decision": "allow", "reason": "dispatch_evidence_unresolved"}
+    assert not (thread_dir / "executions.json").exists()
+    incident = json.loads(
+        (thread_dir / "execution_incident.json").read_text(encoding="utf-8")
+    )
+    assert incident["parent_session_id"] == SESSION
+    assert [item["reason"] for item in incident["incidents"]] == [
+        "invalid_agent_dispatch_payload"
+    ]
+    monkeypatch.setattr(execution_stop_adapter, "task_root_status", lambda _mode: "closed")
+    _mode, decision = execution_stop_adapter.decide_task_mode(
+        SESSION,
+        thread_dir,
+        dt.datetime(2026, 8, 25, 20, 0, tzinfo=UTC),
+        harness_root=harness_root,
+    )
+    assert decision == ("block", "delegated_execution_unresolved")
+
+
 def test_expectation_persistence_failure_allows_agent_and_falls_back_to_incident(
     tmp_path,
     monkeypatch,
@@ -256,8 +684,13 @@ def test_expectation_persistence_failure_allows_agent_and_falls_back_to_incident
         (thread_dir / "execution_incident.json").read_text(encoding="utf-8")
     )
     assert incident["parent_session_id"] == SESSION
-    assert incident["reason"] == "expectation_persistence_failed"
-    assert incident["tool_use_id"] == "toolu-agent-44"
+    assert incident["incidents"] == [
+        {
+            "reason": "expectation_persistence_failed",
+            "recorded_at": incident["incidents"][0]["recorded_at"],
+            "tool_use_id": "toolu-agent-44",
+        }
+    ]
     monkeypatch.setattr(execution_stop_adapter, "task_root_status", lambda _mode: "closed")
 
     _mode, decision = execution_stop_adapter.decide_task_mode(
@@ -292,6 +725,88 @@ def test_all_evidence_writes_failing_still_allows_public_agent_capacity(
         }
     }
     assert not (thread_dir / "executions.json").exists()
+
+
+def test_concurrent_incident_writes_preserve_every_dispatch_identity(tmp_path) -> None:
+    path = tmp_path / "thread" / "execution_incident.json"
+    tool_ids = ("toolu-concurrent-a", "toolu-concurrent-b")
+
+    def record(tool_use_id: str) -> None:
+        expectation_api.record_incident(
+            path,
+            parent_session_id=SESSION,
+            tool_use_id=tool_use_id,
+            reason="expectation_persistence_failed",
+            now=at("2026-08-25T20:00:00Z"),
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(pool.map(record, tool_ids))
+
+    incident = json.loads(path.read_text(encoding="utf-8"))
+    assert {item["tool_use_id"] for item in incident["incidents"]} == set(tool_ids)
+
+
+def test_separate_process_incident_writes_preserve_every_dispatch_identity(
+    tmp_path,
+) -> None:
+    path = tmp_path / "thread" / "execution_incident.json"
+    process_count = 8
+    code = """
+import datetime as dt
+import os
+import pathlib
+import sys
+import time
+
+sys.path.insert(0, os.environ["ESCAPEMENT_HARNESS_BIN"])
+from execution_expectation import record_incident
+
+path = pathlib.Path(os.environ["INCIDENT_PATH"])
+ready = path.parent / f"ready-{os.environ['WORKER_ID']}"
+ready.parent.mkdir(parents=True, exist_ok=True)
+ready.touch()
+deadline = time.monotonic() + 10
+while len(list(ready.parent.glob("ready-*"))) < int(os.environ["WORKER_COUNT"]):
+    if time.monotonic() >= deadline:
+        raise SystemExit("barrier timeout")
+    time.sleep(0.005)
+record_incident(
+    path,
+    parent_session_id=os.environ["PARENT_SESSION"],
+    tool_use_id=f"toolu-process-{os.environ['WORKER_ID']}",
+    reason="expectation_persistence_failed",
+    now=dt.datetime(2026, 8, 25, 20, 0, tzinfo=dt.timezone.utc),
+)
+"""
+    processes = [
+        subprocess.Popen(
+            [sys.executable, "-c", code],
+            env={
+                **os.environ,
+                "ESCAPEMENT_HARNESS_BIN": str(BIN),
+                "INCIDENT_PATH": str(path),
+                "PARENT_SESSION": SESSION,
+                "WORKER_ID": str(index),
+                "WORKER_COUNT": str(process_count),
+            },
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        for index in range(process_count)
+    ]
+    failures = []
+    for process in processes:
+        stdout, stderr = process.communicate(timeout=15)
+        if process.returncode != 0:
+            failures.append((process.returncode, stdout, stderr))
+    assert failures == []
+
+    incident = json.loads(path.read_text(encoding="utf-8"))
+    assert {item["tool_use_id"] for item in incident["incidents"]} == {
+        f"toolu-process-{index}" for index in range(process_count)
+    }
 
 
 @pytest.mark.parametrize(

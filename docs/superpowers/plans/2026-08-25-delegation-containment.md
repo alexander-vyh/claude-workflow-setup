@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Remove globally denying and false-warning delegation hooks, and fix the root-checkout guard's false denial of home-relative destinations, before repairing lifecycle observation behind an isolated canary.
+**Goal:** Remove globally denying and false-warning delegation hooks, and remove unsound shell and Serena classification from the root-checkout gate, before repairing lifecycle observation behind an isolated canary.
 
-**Architecture:** Capability status in `agent-surfaces/manifest.json` is the source of global hook registration. Replace the denying Agent PreTool adapter with a narrowly ready, non-blocking managed-dispatch observer; mark unconditional reconciliation partial and render it without SessionStart registration. A managed dispatch expectation is written before ledger registration so evidence failure can never deny native capacity or silently authorize completion. Keep the root-checkout gate active, but resolve recognized shell operands with shell-compatible home expansion before comparing actual write targets to primary-checkout roots.
+**Architecture:** Capability status in `agent-surfaces/manifest.json` is the source of global hook registration. Replace the denying Agent PreTool adapter with a narrowly ready, non-blocking managed-dispatch observer; mark unconditional reconciliation partial and render it without SessionStart registration. A managed dispatch expectation is written before ledger registration so evidence failure can never deny native capacity or silently authorize completion. Keep root-checkout enforcement only for Claude built-in edit tools with explicit destination fields. Do not register Bash because arbitrary shell effects have no sound PreTool oracle. Do not register Serena on any cwd-rooted path classifier because its relative paths use an independently activated project root absent from the hook payload. Accept task mode only from an exact successful single-line claim command in both public PostToolUse and transcript recovery.
 
 **Tech Stack:** Python 3 standard library, pytest, JSON plugin manifests, generated Claude and Codex plugin surfaces.
 
@@ -129,7 +129,7 @@ pytest -q tests/test_agent_surfaces.py harness/tests/test_delegation_hook.py har
 
 Expected: PASS.
 
-### Task 3: Repair home-relative root-checkout target resolution
+### Task 3: Narrow root-checkout enforcement to proven destination contracts
 
 **Files:**
 - Modify: `claude/hooks/tests/test_root_checkout_guard.py`
@@ -137,14 +137,14 @@ Expected: PASS.
 - Generated: `plugins/escapement/claude/hooks/root_checkout_guard.py`
 - Generated: `plugins/escapement-claude/hooks/root_checkout_guard.py`
 
-- [ ] **Step 1: Add the reported positive control and real-write negative control**
+- [ ] **Step 1: Add the reported positive control and built-in edit controls**
 
-Run the hook from a managed primary checkout with `HOME` set to an independent
-test directory. Assert that `cp /private/tmp/session/scratch.pdf
-~/Downloads/report.pdf` emits no denial. Assert that the same source copied to a
-home path which is independently proven to be the managed primary checkout is
-denied. This rejects both a blanket `cp` exemption and a magic `Downloads`
-exemption.
+Assert that the installed Claude manifest contains no Bash or Serena
+root-checkout matcher. Send Bash and each Serena symbol-edit payload directly to
+the source hook with an exploding `tool_input`; each must return untouched
+without recording a gate signal. For Write, Edit, NotebookEdit, and MultiEdit,
+assert a primary-checkout destination denies while linked-worktree and outside
+destinations allow.
 
 - [ ] **Step 2: Run the focused controls and verify RED**
 
@@ -152,25 +152,24 @@ Run:
 
 ```bash
 pytest -q \
-  claude/hooks/tests/test_root_checkout_guard.py::test_copy_to_home_relative_downloads_is_allowed_from_primary_checkout \
-  claude/hooks/tests/test_root_checkout_guard.py::test_copy_to_home_relative_managed_checkout_is_denied
+  claude/hooks/tests/test_root_checkout_guard.py::test_unregistered_tool_is_outside_root_checkout_hard_gate \
+  claude/hooks/tests/test_root_checkout_guard.py::test_explicit_edit_to_primary_checkout_denied_when_cwd_outside_repo
 ```
 
-Expected: the Downloads case FAILS because `~` is currently resolved beneath
-the session cwd; the managed-checkout control remains denied.
+Expected: Serena cases FAIL while they remain registered; the built-in primary
+checkout control remains denied.
 
-- [ ] **Step 3: Expand shell home syntax before path containment**
+- [ ] **Step 3: Remove unsupported tool registrations**
 
-Add one bounded path resolver used by shell operands and literal `cd` handling.
-It must call user-home expansion before absolute/relative resolution and must
-not expand arbitrary environment variables or execute shell syntax. Run the
-allow/deny controls under both `Downloads` and `Documents` so the implementation
-cannot special-case the reported directory.
+Remove Bash from the root source gate and remove Serena from root, TDD, and Test
+Oracle Brief manifest registration. Limit the root source path contract to the
+canonical fields used by Write, Edit, NotebookEdit, and MultiEdit. Do not add a
+shell parser or resolve Serena `relative_path` against Claude cwd.
 
 Mark the Codex root-checkout surface `partial` with no events because its current
 hook payload does not expose `exec_command.workdir`. Keep the source bundled for
 fixtures, but assert no generated Codex event or dispatcher registers it. Keep
-Claude ready with the repaired semantic resolver.
+Claude ready only for the four proven built-in edit contracts.
 
 - [ ] **Step 4: Run the full root-checkout guard suite and verify GREEN**
 
@@ -180,7 +179,8 @@ Run:
 pytest -q claude/hooks/tests/test_root_checkout_guard.py
 ```
 
-Expected: PASS, including existing write-into-root and source-mutation controls.
+Expected: PASS, including built-in write-into-root controls and direct
+unregistered-tool non-inspection controls.
 
 ### Task 4: Verify source and package containment
 

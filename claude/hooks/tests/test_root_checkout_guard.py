@@ -6,9 +6,11 @@ The oracle is repo shape, not path strings: a primary checkout has `.git/` and
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import io
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -172,11 +174,36 @@ def _write_payload(path: Path, *, cwd: Path, tool_name: str = "Write") -> dict:
     }
 
 
-def _bash_payload(command: str, *, cwd: Path) -> dict:
+EXPLICIT_EDIT_TOOLS = (
+    "Write",
+    "Edit",
+    "NotebookEdit",
+    "MultiEdit",
+)
+
+UNREGISTERED_TOOLS = (
+    "Bash",
+    "mcp__serena__replace_symbol_body",
+    "mcp__serena__insert_after_symbol",
+    "mcp__serena__insert_before_symbol",
+)
+
+
+def _explicit_edit_payload(tool_name: str, path: Path | str, *, cwd: Path) -> dict:
+    path_key = "notebook_path" if tool_name == "NotebookEdit" else "file_path"
+    tool_input: dict = {path_key: str(path)}
+    if tool_name == "Write":
+        tool_input["content"] = "changed\n"
+    elif tool_name == "Edit":
+        tool_input.update(old_string="old", new_string="new")
+    elif tool_name == "NotebookEdit":
+        tool_input.update(cell_id="cell-1", new_source="changed")
+    elif tool_name == "MultiEdit":
+        tool_input["edits"] = [{"old_string": "old", "new_string": "new"}]
     return {
         "hook_event_name": "PreToolUse",
-        "tool_name": "Bash",
-        "tool_input": {"command": command},
+        "tool_name": tool_name,
+        "tool_input": tool_input,
         "cwd": str(cwd),
     }
 
@@ -255,7 +282,7 @@ def test_write_to_primary_checkout_file_is_denied(tmp_path):
     assert f"--repo {repo}" in reason
     assert "--name <task>" in reason
     assert "--branch <branch>" in reason
-    assert "# root-checkout-waiver:" in reason
+    assert "then make the change there" in reason
 
 
 @pytest.mark.parametrize(
@@ -306,14 +333,16 @@ def test_missing_bundled_cli_keeps_root_denial_and_reports_broken_installation(
     assert not direct_creation_commands(reason)
 
 
-@pytest.mark.parametrize("tool_name", ["Write", "Edit", "NotebookEdit"])
-def test_write_to_primary_checkout_denied_when_cwd_outside_repo(tmp_path, tool_name):
+@pytest.mark.parametrize("tool_name", EXPLICIT_EDIT_TOOLS)
+def test_explicit_edit_to_primary_checkout_denied_when_cwd_outside_repo(
+    tmp_path, tool_name
+):
     repo = _make_primary_beads_repo(tmp_path)
     outside = tmp_path / "outside"
     outside.mkdir()
-    payload = _write_payload(repo / "src" / "app.py", cwd=outside, tool_name=tool_name)
-    payload["tool_input"]["old_string"] = "old"
-    payload["tool_input"]["new_string"] = "new"
+    payload = _explicit_edit_payload(
+        tool_name, repo / "src" / "app.py", cwd=outside
+    )
 
     code, output, raw = _run_payload(payload)
 
@@ -321,155 +350,88 @@ def test_write_to_primary_checkout_denied_when_cwd_outside_repo(tmp_path, tool_n
     assert _decision(output) == "deny", raw
 
 
-def test_write_to_linked_worktree_is_allowed(tmp_path):
+@pytest.mark.parametrize("tool_name", EXPLICIT_EDIT_TOOLS)
+@pytest.mark.parametrize("decoy_order", ("before", "after"))
+def test_explicit_edit_uses_tool_canonical_path_despite_surplus_decoy(
+    tmp_path, tool_name, decoy_order
+):
+    repo = _make_primary_beads_repo(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    payload = _explicit_edit_payload(
+        tool_name, repo / "src" / "app.py", cwd=outside
+    )
+    decoy = (
+        {"file_path": str(outside / "decoy.py")}
+        if tool_name == "NotebookEdit"
+        else {"notebook_path": str(outside / "decoy.ipynb")}
+    )
+    canonical = payload["tool_input"]
+    payload["tool_input"] = (
+        {**decoy, **canonical}
+        if decoy_order == "before"
+        else {**canonical, **decoy}
+    )
+
+    code, output, raw = _run_payload(payload)
+
+    assert code == 0
+    assert _decision(output) == "deny", raw
+
+
+@pytest.mark.parametrize("tool_name", EXPLICIT_EDIT_TOOLS)
+@pytest.mark.parametrize("decoy_order", ("before", "after"))
+def test_explicit_edit_ignores_managed_surplus_decoy_when_canonical_path_outside(
+    tmp_path, tool_name, decoy_order
+):
+    repo = _make_primary_beads_repo(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    payload = _explicit_edit_payload(
+        tool_name, outside / "actual.py", cwd=outside
+    )
+    decoy = (
+        {"file_path": str(repo / "src" / "app.py")}
+        if tool_name == "NotebookEdit"
+        else {"notebook_path": str(repo / "src" / "decoy.ipynb")}
+    )
+    canonical = payload["tool_input"]
+    payload["tool_input"] = (
+        {**decoy, **canonical}
+        if decoy_order == "before"
+        else {**canonical, **decoy}
+    )
+
+    code, output, raw = _run_payload(payload)
+
+    assert code == 0
+    assert output == {}, f"surplus decoy must not control destination; got {raw!r}"
+
+
+@pytest.mark.parametrize("tool_name", EXPLICIT_EDIT_TOOLS)
+def test_explicit_edit_to_linked_worktree_is_allowed(tmp_path, tool_name):
     _main, worktree = _make_linked_worktree(tmp_path)
 
-    code, output, raw = _run_payload(_write_payload(worktree / "src" / "app.py", cwd=worktree))
+    code, output, raw = _run_payload(
+        _explicit_edit_payload(tool_name, worktree / "src" / "app.py", cwd=worktree)
+    )
 
     assert code == 0
     assert output == {}, f"linked worktree writes must pass untouched; got {raw!r}"
 
 
-def test_state_changing_git_in_primary_checkout_is_denied(tmp_path):
-    repo = _make_primary_beads_repo(tmp_path)
-
-    code, output, raw = _run_payload(_bash_payload("git checkout -b feature/root-mess", cwd=repo))
-
-    assert code == 0
-    assert _decision(output) == "deny", raw
-    assert "git checkout" in _reason(output)
-
-
-def test_codex_root_checkout_guard_denies_primary_checkout_bash(tmp_path):
-    repo = _make_primary_beads_repo(tmp_path)
-
-    code, output, raw = _run_payload(_bash_payload("git pull --ff-only", cwd=repo))
-
-    assert code == 0
-    assert _decision(output) == "deny", raw
-
-
-def test_codex_root_checkout_guard_denies_primary_checkout_write(tmp_path):
+@pytest.mark.parametrize("tool_name", EXPLICIT_EDIT_TOOLS)
+def test_explicit_edit_to_outside_path_is_allowed(tmp_path, tool_name):
     repo = _make_primary_beads_repo(tmp_path)
     outside = tmp_path / "outside"
     outside.mkdir()
 
-    code, output, raw = _run_payload(_write_payload(repo / "src" / "app.py", cwd=outside))
+    code, output, raw = _run_payload(
+        _explicit_edit_payload(tool_name, outside / "file.py", cwd=repo)
+    )
 
     assert code == 0
-    assert _decision(output) == "deny", raw
-
-
-def test_primary_checkout_denial_records_signal(tmp_path):
-    repo = _make_primary_beads_repo(tmp_path)
-    calls: list[dict] = []
-    payload = _bash_payload("git checkout -b feature/root-mess", cwd=repo)
-    stdout = io.StringIO()
-
-    with (
-        patch("sys.stdin", io.StringIO(json.dumps(payload))),
-        patch("sys.stdout", stdout),
-        patch.object(guard, "_record_signal", lambda **kwargs: calls.append(kwargs)),
-    ):
-        try:
-            code = guard.main()
-        except SystemExit as exc:
-            code = exc.code if isinstance(exc.code, int) else 1
-
-    assert code == 0
-    assert calls, "root-checkout denials must persist signal"
-    assert calls[0]["decision"] == "deny"
-    assert calls[0]["gate_name"] == "root_checkout_guard"
-    assert "primary checkout" in calls[0]["reason"]
-    assert calls[0]["tool"] == "Bash"
-    assert str(repo) in calls[0]["target"]
-
-
-def test_state_changing_git_via_dash_c_to_primary_checkout_is_denied(tmp_path):
-    repo = _make_primary_beads_repo(tmp_path)
-    outside = tmp_path / "outside"
-    outside.mkdir()
-
-    code, output, raw = _run_payload(_bash_payload(f"git -C {repo} pull --ff-only", cwd=outside))
-
-    assert code == 0
-    assert _decision(output) == "deny", raw
-
-
-@pytest.mark.parametrize("command", ["git status --short", "git log --oneline -5", "git diff -- src/app.py", "rg root_checkout_guard claude/hooks"])
-def test_readonly_commands_in_primary_checkout_are_allowed(tmp_path, command):
-    repo = _make_primary_beads_repo(tmp_path)
-
-    code, output, raw = _run_payload(_bash_payload(command, cwd=repo))
-
-    assert code == 0
-    assert output == {}, f"read-only command must pass untouched; got {raw!r}"
-
-
-def test_state_changing_git_in_linked_worktree_is_allowed_by_root_guard(tmp_path):
-    _main, worktree = _make_linked_worktree(tmp_path)
-
-    code, output, raw = _run_payload(_bash_payload("git checkout -b feature/wt", cwd=worktree))
-
-    assert code == 0
-    assert output == {}, f"linked worktree git mutation is not a root-checkout violation; got {raw!r}"
-
-
-@pytest.mark.parametrize("reason", ["tbd", "n/a", "todo", "<reason>", "short"])
-def test_placeholder_waiver_does_not_allow(tmp_path, reason):
-    repo = _make_primary_beads_repo(tmp_path)
-    command = f"git checkout -b maintenance/root # root-checkout-waiver: {reason}"
-
-    code, output, raw = _run_payload(_bash_payload(command, cwd=repo))
-
-    assert code == 0
-    assert _decision(output) == "deny", raw
-
-
-def test_substantive_waiver_allows_and_records_reason(tmp_path):
-    repo = _make_primary_beads_repo(tmp_path)
-    calls: list[dict] = []
-    command = "git checkout -b maintenance/root # root-checkout-waiver: intentional root metadata maintenance"
-    payload = _bash_payload(command, cwd=repo)
-    stdout = io.StringIO()
-
-    with (
-        patch("sys.stdin", io.StringIO(json.dumps(payload))),
-        patch("sys.stdout", stdout),
-        patch.object(guard, "_record_signal", lambda **kwargs: calls.append(kwargs)),
-    ):
-        code = guard.main()
-
-    assert code == 0
-    assert stdout.getvalue().strip() == ""
-    assert calls[0]["decision"] == "waiver-accepted"
-    assert calls[0]["event_type"] == "waiver"
-    assert "intentional root metadata maintenance" in calls[0]["reason"]
-
-
-@pytest.mark.parametrize("git_file_content", ["not a gitdir marker\n", "gitdir: /path/that/does/not/exist\n", "gitdir:\n"])
-def test_malformed_linked_worktree_shape_fails_open(tmp_path, git_file_content):
-    worktree = tmp_path / "wt"
-    worktree.mkdir()
-    (worktree / ".git").write_text(git_file_content, encoding="utf-8")
-    (worktree / ".beads").mkdir()
-    (worktree / ".beads" / "redirect").write_text("/missing/main/.beads", encoding="utf-8")
-
-    code, output, raw = _run_payload(_bash_payload("git checkout -b feature/x", cwd=worktree))
-
-    assert code == 0
-    assert output == {}, f"uncertain linked-worktree state must fail open; got {raw!r}"
-
-
-def test_non_beads_git_repo_is_allowed(tmp_path):
-    repo = tmp_path / "plain"
-    repo.mkdir()
-    (repo / ".git").mkdir()
-
-    code, output, raw = _run_payload(_bash_payload("git checkout -b feature/plain", cwd=repo))
-
-    assert code == 0
-    assert output == {}, f"plain git repos are outside the root-checkout guard; got {raw!r}"
+    assert output == {}, f"outside explicit edit must pass untouched; got {raw!r}"
 
 
 def test_missing_or_malformed_payload_fails_open():
@@ -479,222 +441,114 @@ def test_missing_or_malformed_payload_fails_open():
     assert output == {}, f"malformed payload must fail open; got {raw!r}"
 
 
-# ---------------------------------------------------------------------------
-# Shell write-target resolution
-#
-# The guard's oracle is the shape of the path a command actually writes to, not
-# the shape of the session's cwd. A command issued from inside a primary
-# checkout that writes somewhere else is ordinary work and must be allowed;
-# a command that writes into the checkout must be denied no matter where it
-# was issued from.
-# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("tool_name", UNREGISTERED_TOOLS)
+def test_unregistered_tool_is_outside_root_checkout_hard_gate(tmp_path, tool_name):
+    class ExplodingToolInput(dict):
+        def _explode(self, *_args, **_kwargs):
+            raise AssertionError(f"{tool_name} tool_input must not be inspected")
+
+        get = _explode
+        items = _explode
+        keys = _explode
+        values = _explode
+        __getitem__ = _explode
+        __iter__ = _explode
+
+    calls: list[dict] = []
+    payload = {
+        "hook_event_name": "PreToolUse",
+        "tool_name": tool_name,
+        "tool_input": ExplodingToolInput(relative_path="managed/path"),
+        "cwd": str(tmp_path),
+    }
+    stdout = io.StringIO()
+
+    with (
+        patch.object(guard.json, "load", return_value=payload),
+        patch("sys.stdout", stdout),
+        patch.object(guard, "_record_signal", lambda **kwargs: calls.append(kwargs)),
+    ):
+        assert guard.main() == 0
+
+    assert stdout.getvalue() == ""
+    assert calls == []
 
 
-@pytest.mark.parametrize(
-    "command",
-    (
-        "mkdir /tmp/tdd-rerun/logs",
-        "mkdir -p /tmp/tdd-rerun/logs",
-        "rm -rf /tmp/scratch",
-        "touch /tmp/scratch/file",
-        "mv /tmp/a /tmp/b",
-        "cp -rf /tmp/a /tmp/b",
-        "tee /tmp/out.txt",
-        "rmdir /tmp/empty",
-        "install -m 0755 /tmp/src /tmp/dest",
-        "mkdir -m 0755 /tmp/newdir",
-    ),
-)
-def test_shell_write_outside_checkout_is_allowed_from_inside_it(tmp_path, command):
-    """cwd inside the repo must not condemn a command that writes elsewhere."""
-    repo = _make_primary_beads_repo(tmp_path)
+def test_root_guard_contains_no_shell_classifier_architecture():
+    tree = ast.parse(_HOOK_PATH.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            modules = [
+                alias.name for alias in node.names
+            ] if isinstance(node, ast.Import) else [node.module or ""]
+            assert not ({"shlex", "subprocess"} & set(modules))
+        if isinstance(node, ast.Name):
+            lowered = node.id.lower()
+            assert "bash" not in lowered and "shell" not in lowered
+            assert lowered != "command"
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            lowered = node.name.lower()
+            assert not any(part in lowered for part in ("bash", "shell", "command"))
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            assert node.value not in {"Bash", "command"}
 
-    code, output, raw = _run_payload(_bash_payload(command, cwd=repo))
-
-    assert code == 0
-    assert _decision(output) is None, raw
-
-
-@pytest.mark.parametrize(
-    "template",
-    (
-        "mkdir {repo}/newdir",
-        "mkdir -p {repo}/a/b",
-        "rm -rf {repo}/src",
-        "rm {repo}/src/app.py",
-        "touch {repo}/newfile",
-        "rmdir {repo}/src",
-        "tee {repo}/out.txt",
-        "cp /tmp/src {repo}/dest",
-        "install -m 0755 /tmp/src {repo}/dest",
-        "mv /tmp/src {repo}/dest",
-    ),
-)
-def test_shell_write_into_checkout_is_denied_from_outside(tmp_path, template):
-    """Negative control: the guard must not be neutered for real in-repo writes."""
-    repo = _make_primary_beads_repo(tmp_path)
-    outside = tmp_path / "outside"
-    outside.mkdir()
-
-    code, output, raw = _run_payload(
-        _bash_payload(template.format(repo=repo), cwd=outside)
+    main = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "main"
     )
-
-    assert code == 0
-    assert _decision(output) == "deny", raw
-    assert "primary checkout" in _reason(output)
-
-
-def test_relative_shell_write_still_resolves_against_cwd(tmp_path):
-    repo = _make_primary_beads_repo(tmp_path)
-
-    code, output, raw = _run_payload(_bash_payload("mkdir newdir", cwd=repo))
-
-    assert code == 0
-    assert _decision(output) == "deny", raw
-
-
-def test_relative_shell_write_follows_a_cd_out_of_the_checkout(tmp_path):
-    repo = _make_primary_beads_repo(tmp_path)
-    outside = tmp_path / "outside"
-    outside.mkdir()
-
-    code, output, raw = _run_payload(
-        _bash_payload(f"cd {outside} && mkdir newdir", cwd=repo)
+    assert isinstance(main.body[0], ast.Try)
+    assert len(main.body[0].body) == 1
+    assert main.body[0].orelse == []
+    assert main.body[0].finalbody == []
+    assert main.body[0].handlers
+    for handler in main.body[0].handlers:
+        assert len(handler.body) == 1 and isinstance(handler.body[0], ast.Return)
+        returned = handler.body[0].value
+        assert isinstance(returned, ast.Constant) and returned.value == 0
+    load_statement = main.body[0].body[0]
+    assert isinstance(load_statement, ast.Assign)
+    assert ast.unparse(load_statement.value) == "json.load(sys.stdin)"
+    assert isinstance(main.body[1], ast.If)
+    assert ast.unparse(main.body[1].test) == (
+        "data.get('hook_event_name') != 'PreToolUse'"
     )
-
-    assert code == 0
-    assert _decision(output) is None, raw
-
-
-def test_relative_shell_write_follows_a_cd_into_the_checkout(tmp_path):
-    repo = _make_primary_beads_repo(tmp_path)
-    outside = tmp_path / "outside"
-    outside.mkdir()
-
-    code, output, raw = _run_payload(
-        _bash_payload(f"cd {repo} && touch newfile", cwd=outside)
-    )
-
-    assert code == 0
-    assert _decision(output) == "deny", raw
-
-
-def test_moving_a_file_out_of_the_checkout_is_denied(tmp_path):
-    """mv removes its sources, so an in-repo SOURCE mutates the checkout."""
-    repo = _make_primary_beads_repo(tmp_path)
-
-    code, output, raw = _run_payload(
-        _bash_payload(f"mv {repo}/src/app.py /tmp/app.py", cwd=repo)
-    )
-
-    assert code == 0
-    assert _decision(output) == "deny", raw
-
-
-def test_copying_a_file_out_of_the_checkout_is_allowed(tmp_path):
-    """cp only writes its destination; reading the repo is not a mutation."""
-    repo = _make_primary_beads_repo(tmp_path)
-
-    code, output, raw = _run_payload(
-        _bash_payload(f"cp {repo}/src/app.py /tmp/app.py", cwd=repo)
-    )
-
-    assert code == 0
-    assert _decision(output) is None, raw
-
-
-@pytest.mark.parametrize("home_child", ("Downloads", "Documents"))
-def test_copy_to_home_relative_downloads_is_allowed_from_primary_checkout(
-    tmp_path,
-    monkeypatch,
-    home_child,
-):
-    """Shell `~` expansion must happen before root-checkout containment."""
-    repo = _make_primary_beads_repo(tmp_path)
-    home = tmp_path / "home"
-    (home / home_child).mkdir(parents=True)
-    monkeypatch.setenv("HOME", str(home))
-
-    code, output, raw = _run_payload(
-        _bash_payload(
-            f"cp -f /private/tmp/session/scratch.pdf ~/{home_child}/report.pdf",
-            cwd=repo,
+    assert main.body[1].orelse == []
+    assert len(main.body[1].body) == 1
+    assert isinstance(main.body[1].body[0], ast.Return)
+    event_return = main.body[1].body[0].value
+    assert isinstance(event_return, ast.Constant) and event_return.value == 0
+    tool_name_index = next(
+        index
+        for index, statement in enumerate(main.body)
+        if isinstance(statement, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "tool_name"
+            for target in statement.targets
         )
     )
-
-    assert code == 0
-    assert _decision(output) is None, raw
-
-
-@pytest.mark.parametrize("home_child", ("Downloads", "Documents"))
-def test_copy_to_home_relative_managed_checkout_is_denied(
-    tmp_path,
-    monkeypatch,
-    home_child,
-):
-    """Negative control rejects cwd-relative `~` and Downloads exemptions."""
-    home = tmp_path / "home"
-    (home / home_child).mkdir(parents=True)
-    repo = _make_primary_beads_repo(home / home_child)
-    outside = tmp_path / "outside"
-    outside.mkdir()
-    monkeypatch.setenv("HOME", str(home))
-
-    code, output, raw = _run_payload(
-        _bash_payload(
-            f"cp -f /private/tmp/session/scratch.pdf ~/{home_child}/repo/report.pdf",
-            cwd=outside,
+    assert tool_name_index == 2
+    tool_name_assignment = main.body[tool_name_index]
+    assert isinstance(tool_name_assignment, ast.Assign)
+    assert ast.unparse(tool_name_assignment.value) == "data.get('tool_name', '')"
+    gate = main.body[tool_name_index + 1]
+    assert isinstance(gate, ast.If)
+    assert isinstance(gate.test, ast.Compare)
+    assert isinstance(gate.test.left, ast.Name) and gate.test.left.id == "tool_name"
+    assert len(gate.test.ops) == 1 and isinstance(gate.test.ops[0], ast.NotIn)
+    assert len(gate.test.comparators) == 1
+    comparator = gate.test.comparators[0]
+    assert isinstance(comparator, ast.Name) and comparator.id == "GATED_EDIT_TOOLS"
+    assert len(gate.body) == 1 and isinstance(gate.body[0], ast.Return)
+    returned = gate.body[0].value
+    assert isinstance(returned, ast.Constant) and returned.value == 0
+    tool_input_index = next(
+        index
+        for index, statement in enumerate(main.body)
+        if isinstance(statement, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "tool_input"
+            for target in statement.targets
         )
     )
-
-    assert code == 0
-    assert _decision(output) == "deny", raw
-
-
-def test_flag_values_are_not_mistaken_for_write_targets(tmp_path):
-    """`0755` must not resolve to <repo>/0755 and trigger a denial."""
-    repo = _make_primary_beads_repo(tmp_path)
-
-    code, output, raw = _run_payload(
-        _bash_payload("install -m 0755 -o me -g staff /tmp/a /tmp/b", cwd=repo)
-    )
-
-    assert code == 0
-    assert _decision(output) is None, raw
-
-
-def test_target_directory_flag_is_treated_as_the_destination(tmp_path):
-    repo = _make_primary_beads_repo(tmp_path)
-    outside = tmp_path / "outside"
-    outside.mkdir()
-
-    code, output, raw = _run_payload(
-        _bash_payload(f"cp -t {repo}/src /tmp/a /tmp/b", cwd=outside)
-    )
-
-    assert code == 0
-    assert _decision(output) == "deny", raw
-
-
-def test_end_of_options_marker_exposes_dash_prefixed_paths(tmp_path):
-    repo = _make_primary_beads_repo(tmp_path)
-    outside = tmp_path / "outside"
-    outside.mkdir()
-
-    code, output, raw = _run_payload(
-        _bash_payload(f"rm -rf -- {repo}/src", cwd=outside)
-    )
-
-    assert code == 0
-    assert _decision(output) == "deny", raw
-
-
-def test_command_with_no_path_operand_falls_back_to_cwd(tmp_path):
-    """Conservative default: an unparseable operand list keeps the old behavior."""
-    repo = _make_primary_beads_repo(tmp_path)
-
-    code, output, raw = _run_payload(_bash_payload("rm -rf", cwd=repo))
-
-    assert code == 0
-    assert _decision(output) == "deny", raw
+    assert tool_input_index > tool_name_index + 1
