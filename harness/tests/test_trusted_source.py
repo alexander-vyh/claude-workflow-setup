@@ -380,6 +380,29 @@ def test_schema_enforces_resolved_deadline_and_host_observation_contracts():
     assert not validator.is_valid(invalid_observation)
 
 
+@pytest.mark.parametrize("state", ["queued", "running", "unknown"])
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("terminal_at", "2026-08-09T20:05:00Z"),
+        ("terminal_reason", "completed"),
+        ("terminal_event_id", "terminal-active-state-control"),
+        ("result_digest", "sha256:active-state-control"),
+    ],
+)
+def test_schema_rejects_terminal_evidence_on_active_execution_states(
+    state, field, value
+):
+    schema_path = BIN.parent / "schemas" / "executions.schema.json"
+    validator = Draft202012Validator(json.loads(schema_path.read_text()))
+    active_with_terminal_evidence = _valid_ledger()
+    item = active_with_terminal_evidence["executions"][0]
+    item["state"] = state
+    item[field] = value
+
+    assert not validator.is_valid(active_with_terminal_evidence)
+
+
 def test_concurrent_mutations_serialize_without_lost_updates(tmp_path):
     path = tmp_path / "executions.json"
     initial = _ledger()

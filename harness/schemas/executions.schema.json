@@ -80,7 +80,11 @@
               "properties": {
                 "start_deadline": {"type": "string", "format": "date-time"},
                 "idle_deadline": {"type": "string", "format": "date-time"},
-                "hard_deadline": {"type": "string", "format": "date-time"}
+                "hard_deadline": {"type": "string", "format": "date-time"},
+                "terminal_at": {"type": "null"},
+                "terminal_reason": {"type": "null"},
+                "terminal_event_id": {"type": "null"},
+                "result_digest": {"type": "null"}
               }
             }
           },
