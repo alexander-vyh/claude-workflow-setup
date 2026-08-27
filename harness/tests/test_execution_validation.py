@@ -88,6 +88,26 @@ def applying_terminal() -> dict:
     return ledger
 
 
+def valid_aborted() -> dict:
+    ledger = valid_ledger()
+    item = ledger["executions"][0]
+    item["native_child_id"] = None
+    item["state"] = "aborted"
+    item["started_at"] = None
+    item["last_activity_at"] = None
+    item["last_activity_kind"] = None
+    item["start_deadline"] = None
+    item["idle_deadline"] = None
+    item["hard_deadline"] = None
+    item["reconcile_due"] = None
+    item["terminal_at"] = "2026-08-09T20:05:00Z"
+    item["terminal_reason"] = "native_dispatch_rejected_before_spawn"
+    item["terminal_event_id"] = "claude:no-spawn:16f6b6de"
+    item["result_digest"] = None
+    item["recovery_claim"] = None
+    return ledger
+
+
 def write(path: pathlib.Path, ledger: dict) -> None:
     path.write_text(json.dumps(ledger))
     path.chmod(0o600)
@@ -99,6 +119,46 @@ def test_complete_running_execution_is_trusted_positive_control(tmp_path) -> Non
     write(path, ledger)
 
     assert ledger_api.load_trusted(path, "parent-7") == ledger
+
+
+def test_complete_aborted_execution_is_trusted_positive_control(tmp_path) -> None:
+    ledger = valid_aborted()
+    path = tmp_path / "executions.json"
+    write(path, ledger)
+
+    assert ledger_api.load_trusted(path, "parent-7") == ledger
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("native_child_id", "fabricated-child"),
+        ("start_deadline", "2026-08-09T20:02:00Z"),
+        ("idle_deadline", "2026-08-09T20:15:00Z"),
+        ("hard_deadline", "2026-08-09T22:00:00Z"),
+        ("reconcile_due", "start"),
+        (
+            "recovery_claim",
+            {
+                "owner": "supervisor-a",
+                "execution_id": "exec-alpha",
+                "attempt": 1,
+                "generation": 1,
+                "claimed_at": "2026-08-09T20:04:00Z",
+                "expires_at": "2026-08-09T20:04:30Z",
+            },
+        ),
+    ],
+)
+def test_aborted_execution_with_identity_or_recovery_residue_is_unresolved(
+    tmp_path, field, value
+) -> None:
+    ledger = valid_aborted()
+    ledger["executions"][0][field] = value
+    path = tmp_path / "executions.json"
+    write(path, ledger)
+
+    assert ledger_api.load_trusted(path, "parent-7") is None
 
 
 @pytest.mark.parametrize(

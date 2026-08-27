@@ -86,6 +86,28 @@ def execution(ledger: dict, execution_id: str = "exec-alpha") -> dict:
     )
 
 
+RESOLUTION_RESIDUE = (
+    "start_deadline",
+    "idle_deadline",
+    "hard_deadline",
+    "reconcile_due",
+    "recovery_claim",
+)
+
+
+def due_with_recovery_claim(ledger: dict, due_at: str) -> dict:
+    ledger_api.reconcile_deadlines(ledger, at(due_at))
+    claim = ledger_api.claim_recovery(
+        ledger,
+        "exec-alpha",
+        at("2026-08-09T20:15:21Z"),
+        "supervisor-resolution-control",
+        30,
+    )
+    assert claim is not None
+    return ledger
+
+
 def test_registers_a_queued_attempt_with_literal_deadlines() -> None:
     ledger = registered()
     assert ledger["updated_at"] == "2026-08-09T20:00:00Z"
@@ -154,6 +176,169 @@ def test_completed_activity_renews_idle_but_never_hard_deadline() -> None:
     assert item["last_activity_kind"] == "tool_completed"
     assert item["idle_deadline"] == "2026-08-09T22:14:40Z"
     assert item["hard_deadline"] == "2026-08-09T22:00:00Z"
+
+
+def test_dispatch_abort_resolves_only_an_unbound_queued_attempt() -> None:
+    ledger = due_with_recovery_claim(registered(), "2026-08-09T20:02:00Z")
+
+    ledger_api.apply_event(
+        ledger,
+        {
+            "kind": "dispatch_aborted",
+            "parent_session_id": "parent-7",
+            "execution_id": "exec-alpha",
+            "attempt": 1,
+            "generation": 1,
+            "host_event_id": "claude:no-spawn:16f6b6de",
+            "terminal_reason": "native_dispatch_rejected_before_spawn",
+        },
+        at("2026-08-09T20:15:22Z"),
+    )
+
+    item = execution(ledger)
+    assert item["state"] == "aborted"
+    assert item["native_child_id"] is None
+    assert all(item[key] is None for key in RESOLUTION_RESIDUE)
+
+
+def test_dispatch_abort_after_native_binding_is_rejected_without_mutation() -> None:
+    ledger = started()
+    before = copy.deepcopy(ledger)
+
+    with pytest.raises(ValueError, match="aborted|bound|queued"):
+        ledger_api.apply_event(
+            ledger,
+            {
+                "kind": "dispatch_aborted",
+                "parent_session_id": "parent-7",
+                "execution_id": "exec-alpha",
+                "attempt": 1,
+                "generation": 1,
+                "host_event_id": "claude:late-no-spawn",
+                "terminal_reason": "native_dispatch_rejected_before_spawn",
+            },
+            at("2026-08-09T20:01:00Z"),
+        )
+
+    assert ledger == before
+
+
+@pytest.mark.parametrize(
+    ("kind", "expected_state", "extra"),
+    [
+        (
+            "child_terminal",
+            "terminal",
+            {
+                "terminal_event_id": "terminal-cleanup-control",
+                "terminal_reason": "completed",
+                "result_digest": "sha256:terminal-cleanup-control",
+            },
+        ),
+        (
+            "child_cancelled",
+            "cancelled",
+            {
+                "terminal_event_id": "cancelled-cleanup-control",
+                "terminal_reason": "supervisor_cancelled",
+            },
+        ),
+    ],
+)
+def test_every_bound_resolution_clears_deadline_and_claim_residue(
+    kind: str, expected_state: str, extra: dict
+) -> None:
+    ledger = due_with_recovery_claim(started(), "2026-08-09T20:15:20Z")
+    ledger_api.apply_event(
+        ledger,
+        {
+            "kind": kind,
+            "parent_session_id": "parent-7",
+            "execution_id": "exec-alpha",
+            "attempt": 1,
+            "generation": 1,
+            "native_child_id": "child-native-1",
+            "host_event_id": f"claude:{kind}:cleanup-control",
+            **extra,
+        },
+        at("2026-08-09T20:15:22Z"),
+    )
+
+    item = execution(ledger)
+    assert item["state"] == expected_state
+    assert all(item[key] is None for key in RESOLUTION_RESIDUE)
+
+
+def test_identical_host_activity_replay_is_a_byte_stable_noop() -> None:
+    ledger = started()
+    event = {
+        "kind": "activity_completed",
+        "parent_session_id": "parent-7",
+        "execution_id": "exec-alpha",
+        "attempt": 1,
+        "generation": 1,
+        "native_child_id": "child-native-1",
+        "activity_kind": "checkpoint",
+        "host_event_id": "claude:peer:6b0a9b72",
+    }
+    ledger_api.apply_event(ledger, event, at("2026-08-09T20:05:00Z"))
+    first = copy.deepcopy(ledger)
+
+    ledger_api.apply_event(ledger, event, at("2026-08-09T20:14:59Z"))
+
+    assert ledger == first
+
+
+def test_reused_host_event_identity_with_changed_semantics_rejects_without_mutation() -> None:
+    ledger = started()
+    accepted = {
+        "kind": "activity_completed",
+        "parent_session_id": "parent-7",
+        "execution_id": "exec-alpha",
+        "attempt": 1,
+        "generation": 1,
+        "native_child_id": "child-native-1",
+        "activity_kind": "checkpoint",
+        "host_event_id": "claude:peer:conflict-control",
+    }
+    ledger_api.apply_event(ledger, accepted, at("2026-08-09T20:05:00Z"))
+    before_conflict = copy.deepcopy(ledger)
+
+    with pytest.raises(ValueError, match="host event|replay|identity"):
+        ledger_api.apply_event(
+            ledger,
+            {**accepted, "activity_kind": "assistant_nonempty"},
+            at("2026-08-09T20:14:59Z"),
+        )
+
+    assert ledger == before_conflict
+
+
+def test_new_host_activity_identity_advances_idle_but_never_hard_deadline() -> None:
+    ledger = started()
+    first = {
+        "kind": "activity_completed",
+        "parent_session_id": "parent-7",
+        "execution_id": "exec-alpha",
+        "attempt": 1,
+        "generation": 1,
+        "native_child_id": "child-native-1",
+        "activity_kind": "checkpoint",
+        "host_event_id": "claude:peer:first-control",
+    }
+    ledger_api.apply_event(ledger, first, at("2026-08-09T20:05:00Z"))
+    hard_deadline = execution(ledger)["hard_deadline"]
+
+    ledger_api.apply_event(
+        ledger,
+        {**first, "host_event_id": "claude:peer:second-control"},
+        at("2026-08-09T20:06:00Z"),
+    )
+
+    item = execution(ledger)
+    assert item["last_activity_at"] == "2026-08-09T20:06:00Z"
+    assert item["idle_deadline"] == "2026-08-09T20:21:00Z"
+    assert item["hard_deadline"] == hard_deadline
 
 
 def test_completed_activity_requires_explicit_bound_native_identity() -> None:

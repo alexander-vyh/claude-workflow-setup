@@ -24,6 +24,8 @@ import select
 import subprocess
 import sys
 
+import pytest
+
 BIN = pathlib.Path(__file__).resolve().parent.parent / "bin"
 sys.path.insert(0, str(BIN))
 
@@ -162,6 +164,23 @@ def beads_runner(parent_status: str = "closed", *, missing: str | None = None):
     return run_bd, calls
 
 
+def beads_runner_with_parent_value(*, present: bool, value=None):
+    calls: list[list[str]] = []
+
+    def run_bd(args: list[str]):
+        calls.append(args)
+        if args == ["show", BEAD]:
+            child = {"id": BEAD, "status": "closed"}
+            if present:
+                child["parent"] = value
+            return [child]
+        if isinstance(value, str) and value and args == ["show", value]:
+            return [{"id": value, "status": "closed"}]
+        return []
+
+    return run_bd, calls
+
+
 def loader_for(ledger: dict | None, calls: list[str]):
     def load(session_id: str):
         calls.append(session_id)
@@ -226,6 +245,55 @@ def test_closed_parent_with_no_due_attempts_emits_nothing() -> None:
 
     assert result == {"status": "clear", "additional_context": ""}
     assert calls == [["show", BEAD], ["show", ROOT]]
+
+
+@pytest.mark.parametrize(
+    ("present", "value"),
+    [(False, None), (True, None)],
+    ids=["absent-parent", "explicit-null-parent"],
+)
+def test_standalone_bead_is_canonical_and_silent_at_session_start(
+    present: bool, value
+) -> None:
+    ledger = registered()
+    run_bd, calls = beads_runner_with_parent_value(present=present, value=value)
+
+    result = execution_reconcile.reconcile_session(
+        claude_session_start(),
+        run_bd,
+        lambda _session: ledger,
+        at("2026-08-09T20:01:00Z"),
+    )
+
+    assert result == {"status": "clear", "additional_context": ""}
+    assert calls == [["show", BEAD]]
+
+
+@pytest.mark.parametrize(
+    "malformed_parent",
+    ["", False, True, [], {}, 17],
+    ids=["empty", "false", "true", "list", "mapping", "integer"],
+)
+def test_malformed_parent_never_becomes_standalone_at_session_start(
+    malformed_parent,
+) -> None:
+    ledger = registered()
+    run_bd, calls = beads_runner_with_parent_value(
+        present=True, value=malformed_parent
+    )
+
+    result = execution_reconcile.reconcile_session(
+        claude_session_start(),
+        run_bd,
+        lambda _session: ledger,
+        at("2026-08-09T20:01:00Z"),
+    )
+
+    assert result["status"] == "continue"
+    assert f"canonical parent relationship for {BEAD} is unresolved" in result[
+        "additional_context"
+    ]
+    assert calls == [["show", BEAD]]
 
 
 def test_codex_sessionstart_uses_the_same_reconciliation_without_stop_claims() -> None:
