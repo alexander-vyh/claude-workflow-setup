@@ -95,6 +95,7 @@ SHARED_RUNTIME_SUPPORT = {
     "bin/escapement_worktree_git.py",
     "bin/escapement_worktree_github.py",
     "bin/escapement_worktree_registry.py",
+    "bin/escapement_worktree_root.py",
 }
 CODEX_HOOK_SUPPORT = {
     # Codex Bash policy gates execute through one in-process dispatcher to avoid

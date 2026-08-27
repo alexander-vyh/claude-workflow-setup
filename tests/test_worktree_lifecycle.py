@@ -192,7 +192,10 @@ def test_finish_removes_only_safe_local_state(tmp_path: Path) -> None:
     result = _finish(scenario)
 
     assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout)["status"] == "completed"
+    output = json.loads(result.stdout)
+    assert output["status"] == "completed", output
+    assert output["root_sync_status"] == "ineligible"
+    assert output["root_sync_reason"] == "primary-not-default"
     assert not scenario.worktree.exists()
     assert git(
         scenario.primary,
@@ -204,6 +207,22 @@ def test_finish_removes_only_safe_local_state(tmp_path: Path) -> None:
     ).returncode == 1
     assert not scenario.receipt.exists()
     assert git(scenario.remote, "show-ref", "--verify", f"refs/heads/{scenario.branch}").stdout.startswith(candidate)
+
+
+def test_completed_finish_survives_unavailable_root_remote(tmp_path: Path) -> None:
+    scenario = _scenario(tmp_path)
+    _land(scenario)
+    git(scenario.remote, "symbolic-ref", "HEAD", "refs/heads/missing")
+
+    result = _finish(scenario)
+
+    assert result.returncode == 0, result.stderr
+    output = json.loads(result.stdout)
+    assert output["status"] == "completed", output
+    assert output["root_sync_status"] == "unresolved"
+    assert output["root_sync_reason"] == "remote-resolution-failed"
+    assert not scenario.worktree.exists()
+    assert not scenario.receipt.exists()
 
 
 def test_ignored_content_is_preserved(tmp_path: Path) -> None:

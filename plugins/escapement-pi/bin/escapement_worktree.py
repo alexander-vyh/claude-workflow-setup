@@ -40,6 +40,11 @@ from escapement_worktree_registry import (
     lifecycle_lock,
     write_lifecycle,
 )
+from escapement_worktree_root import (
+    RootSyncResult,
+    sync_primary_checkout,
+    synchronize_resolved_default,
+)
 
 SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 BEADS_IDENTITY_FIELDS = ("project_id", "database", "beads_dir", "repo_root")
@@ -61,6 +66,8 @@ class CreationResult:
     source_sha: str
     source_kind: Literal["remote-default", "explicit"]
     beads_verified: bool
+    root_sync_status: str
+    root_sync_reason: str
 
 
 def validate_request(ctx: RepositoryContext, request: WorktreeRequest) -> Path:
@@ -341,6 +348,18 @@ def create_worktree(request: WorktreeRequest) -> CreationResult:
             if request.source is not None
             else resolve_default_source(ctx)
         )
+        root_sync = (
+            synchronize_resolved_default(ctx, source)
+            if source.kind == "remote-default"
+            else RootSyncResult(
+                repo=ctx.primary,
+                branch="",
+                previous_sha="",
+                target_sha="",
+                status="ineligible",
+                reason="explicit-source",
+            )
+        )
         bootstrap = resolve_bootstrap_contract(ctx, source)
         root_beads = beads_context(ctx.primary)
         branch_created = False
@@ -430,6 +449,8 @@ def create_worktree(request: WorktreeRequest) -> CreationResult:
             source_sha=source.sha,
             source_kind=source.kind,
             beads_verified=beads_verified,
+            root_sync_status=root_sync.status,
+            root_sync_reason=root_sync.reason,
         )
 
 
@@ -443,12 +464,18 @@ def _parser() -> argparse.ArgumentParser:
     create.add_argument("--source")
     finish = commands.add_parser("finish")
     finish.add_argument("--lifecycle-id", required=True)
+    sync_root = commands.add_parser("sync-root")
+    sync_root.add_argument("--repo", type=Path, required=True)
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
+        if args.command == "sync-root":
+            root_result = sync_primary_checkout(args.repo)
+            print(json.dumps(root_result.as_dict(), sort_keys=True))
+            return 1 if root_result.status == "ineligible" else 0
         if args.command == "finish":
             print(json.dumps(finish_lifecycle(args.lifecycle_id), sort_keys=True))
             return 0
@@ -472,6 +499,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "source_kind": result.source_kind,
         "source_sha": result.source_sha,
         "target": str(result.target),
+        "root_sync_status": result.root_sync_status,
+        "root_sync_reason": result.root_sync_reason,
     }
     print(json.dumps(output, sort_keys=True))
     return 0
