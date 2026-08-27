@@ -10,6 +10,7 @@ from typing import Any
 PI_PLUGIN_ROOT = Path("plugins/escapement-pi")
 PI_HOOK_SUPPORT = {
     "claude/hooks/codex_pretool_dispatch.py",
+    "claude/hooks/root_checkout_guard.py",
     "harness/bin/repo_outcome.py",
 }
 

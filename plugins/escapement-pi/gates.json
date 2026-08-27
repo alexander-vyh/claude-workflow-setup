@@ -13,11 +13,6 @@
       "timeout_seconds": 10
     },
     {
-      "id": "root_checkout_guard",
-      "source": "claude/hooks/root_checkout_guard.py",
-      "timeout_seconds": 10
-    },
-    {
       "id": "discovery-close-gate",
       "source": "claude/hooks/discovery-close-gate.py",
       "timeout_seconds": 10

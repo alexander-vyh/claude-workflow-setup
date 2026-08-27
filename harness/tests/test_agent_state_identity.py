@@ -255,11 +255,13 @@ def test_present_invalid_actor_never_falls_back_to_parent(
         [],
         tmp_path,
         bad_actor,
-        payload={
-            "session_id": SESSION,
-            "tool_name": "Bash",
-            "tool_input": {"command": "bd update escapement-egc --claim"},
-        },
+            payload={
+                "session_id": SESSION,
+                "hook_event_name": "PostToolUse",
+                "tool_name": "Bash",
+                "tool_input": {"command": "bd update escapement-egc --claim"},
+                "tool_response": {"interrupted": False, "stderr": "", "stdout": ""},
+            },
     )
     watermark = _run(
         "session_watermark.py",
@@ -386,8 +388,10 @@ def test_actor_writers_share_one_state_directory(tmp_path) -> None:
 
     claim = {
         "session_id": SESSION,
+        "hook_event_name": "PostToolUse",
         "tool_name": "Bash",
         "tool_input": {"command": "bd update escapement-egc --claim"},
+        "tool_response": {"interrupted": False, "stderr": "", "stdout": ""},
     }
     assert (
         _run("task_mode_entry.py", [], tmp_path, AGENT_A, payload=claim).returncode == 0

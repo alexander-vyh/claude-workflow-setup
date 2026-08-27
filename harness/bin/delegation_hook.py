@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Prepare and gate host-native delegated execution attempts.
+"""Observe managed Claude Agent dispatch without denying native capacity.
 
-Only Claude Agent PreToolUse is registered.  Agent PostToolUse remains an
-explicit unresolved adapter until an installed payload capture proves the
-native child identifier's location.
+Agent PreToolUse is expectation-first and non-blocking. Agent PostToolUse
+remains unregistered until an installed payload capture proves native child
+identity and terminal semantics.
 """
 
 from __future__ import annotations
@@ -13,20 +13,17 @@ import datetime as dt
 import json
 import os
 import pathlib
-import subprocess
 import sys
 import uuid
 
+from execution_expectation import record_expectation, record_incident
 from execution_ledger import new_ledger, register_execution
-from execution_store import initialize_or_mutate_atomic, load_trusted, mutate_atomic
+from execution_store import initialize_or_mutate_atomic
+from task_session_mode import load_task_context
 from thread_identity import InvalidActorIdentity, resolve_thread_dir
 
 
 UTC = dt.timezone.utc
-
-
-class _PreparedAttemptConsumed(ValueError):
-    """The fresh atomic view no longer contains the selected preparation."""
 
 
 def _iso_now() -> dt.datetime:
@@ -57,118 +54,119 @@ def _ledger_path(session_id: str) -> pathlib.Path:
     return resolve_thread_dir(session_id, _harness_root()) / "executions.json"
 
 
-def _repair_command(session_id: str, agent_name: str) -> str:
-    return (
-        'python3 -B "${CLAUDE_PLUGIN_ROOT}/harness/bin/delegation_hook.py" prepare '
-        f"--bead-id <child-bead-id> --session {session_id} --host claude "
-        f"--agent-name {agent_name}"
-    )
-
-
-def _deny(reason: str, session_id: str, agent_name: str) -> dict:
-    return {
-        "decision": "deny",
-        "reason": reason,
-        "additional_context": _repair_command(session_id, agent_name),
-    }
-
-
-def find_prepared_execution(tool_input: dict, ledger: dict) -> dict | None:
-    """Find one structural preparation; prompt prose is deliberately ignored."""
-    if not isinstance(tool_input, dict) or not isinstance(ledger, dict):
-        return None
-    agent_name = tool_input.get("name")
-    # Current Claude Code builds run every subagent in the background and no
-    # longer pass run_in_background in tool_input (unknown fields are stripped
-    # by the Agent schema). Requiring the field made the gate deny every
-    # dispatch on those builds. Reject only an explicit foreground dispatch.
-    if (
-        not isinstance(agent_name, str)
-        or not agent_name
-        or tool_input.get("run_in_background") is False
-    ):
-        return None
-    matches = [
-        item
-        for item in ledger.get("executions", [])
-        if isinstance(item, dict)
-        and item.get("host") == "claude"
-        and item.get("agent_name") == agent_name
-        and item.get("state") == "queued"
-        and item.get("native_child_id") is None
-        and item.get("dispatch_tool_use_id") == f"prepared:{item.get('execution_id')}"
-    ]
-    return matches[0] if len(matches) == 1 else None
-
-
-def _canonical_bead(records: object, bead_id: str) -> tuple[str, str]:
-    if not isinstance(records, list) or len(records) != 1:
-        return ("deny", "bead_state_unresolved")
-    record = records[0]
-    if not isinstance(record, dict) or record.get("id") != bead_id:
-        return ("deny", "bead_state_unresolved")
-    status = record.get("status")
-    if status == "closed":
-        return ("deny", "bead_not_dispatchable")
-    if status not in {"open", "in_progress"}:
-        return ("deny", "bead_not_dispatchable")
-    return ("allow", "bead_dispatchable")
-
-
 def pre_tool(payload: dict, run_bd, ledger_path) -> dict:
-    """Validate and durably consume one prepared Claude Agent dispatch."""
+    """Observe one managed dispatch and always preserve native Agent capacity."""
+    del run_bd
     session_id = payload.get("session_id") if isinstance(payload, dict) else None
-    tool_input = payload.get("tool_input") if isinstance(payload, dict) else None
-    agent_name = tool_input.get("name") if isinstance(tool_input, dict) else None
-    if not isinstance(session_id, str) or not session_id:
-        session_id = "<session-id>"
-    if not isinstance(agent_name, str) or not agent_name:
-        agent_name = "<agent-name>"
     if (
         not isinstance(payload, dict)
         or payload.get("hook_event_name") != "PreToolUse"
         or payload.get("tool_name") != "Agent"
-        or not isinstance(tool_input, dict)
     ):
-        return _deny("prepared_execution_required", session_id, agent_name)
-
+        return {"decision": "allow", "reason": "unmanaged_native_agent"}
+    tool_input = payload.get("tool_input")
+    agent_name = tool_input.get("name") if isinstance(tool_input, dict) else None
+    if not isinstance(session_id, str) or not session_id:
+        return {"decision": "allow", "reason": "dispatch_evidence_unresolved"}
     path = pathlib.Path(ledger_path)
-    ledger = load_trusted(path, session_id)
-    prepared = find_prepared_execution(tool_input, ledger or {})
-    if prepared is None:
-        return _deny("prepared_execution_required", session_id, agent_name)
-
-    bead_id = prepared["bead_id"]
-    decision, reason = _canonical_bead(run_bd(["show", bead_id]), bead_id)
-    if decision != "allow":
-        return _deny(reason, session_id, agent_name)
-
+    task_mode = load_task_context(path.parent / "session_mode.json", session_id)
+    if task_mode is None:
+        return {"decision": "allow", "reason": "unmanaged_native_agent"}
     tool_use_id = payload.get("tool_use_id")
-    if not isinstance(tool_use_id, str) or not tool_use_id:
-        return _deny("prepared_execution_required", session_id, agent_name)
-    execution_id = prepared["execution_id"]
+    if (
+        not isinstance(agent_name, str)
+        or not agent_name
+        or not isinstance(tool_use_id, str)
+        or not tool_use_id
+    ):
+        try:
+            record_incident(
+                path.parent / "execution_incident.json",
+                parent_session_id=session_id,
+                tool_use_id=tool_use_id if isinstance(tool_use_id, str) and tool_use_id else None,
+                reason="invalid_agent_dispatch_payload",
+                now=_iso_now(),
+            )
+        except (OSError, ValueError):
+            pass
+        return {"decision": "allow", "reason": "dispatch_evidence_unresolved"}
+    task_id = task_mode.get("task_id") or task_mode.get("parent_id")
+    if not isinstance(task_id, str) or not task_id:
+        return {"decision": "allow", "reason": "dispatch_evidence_unresolved"}
+    now = _iso_now()
+    expectation_path = path.parent / "execution_expectation.json"
+    incident_path = path.parent / "execution_incident.json"
+    try:
+        record_expectation(
+            expectation_path,
+            parent_session_id=session_id,
+            task_id=task_id,
+            tool_use_id=tool_use_id,
+            agent_name=agent_name,
+            host="claude",
+            now=now,
+        )
+    except (OSError, ValueError):
+        try:
+            record_incident(
+                incident_path,
+                parent_session_id=session_id,
+                tool_use_id=tool_use_id,
+                reason="expectation_persistence_failed",
+                now=now,
+            )
+        except (OSError, ValueError):
+            pass
+        return {"decision": "allow", "reason": "dispatch_evidence_unresolved"}
 
-    def consume(current: dict) -> dict:
-        fresh = find_prepared_execution(tool_input, current)
-        if fresh is None or fresh.get("execution_id") != execution_id:
-            raise _PreparedAttemptConsumed("prepared execution was already consumed")
-        fresh["dispatch_tool_use_id"] = tool_use_id
-        return current
+    execution_id = uuid.uuid4().hex
+    watchdog_id = uuid.uuid4().hex
+    event = {
+        "kind": "dispatch_registered",
+        "parent_session_id": session_id,
+        "bead_id": task_id,
+        "execution_id": execution_id,
+        "host": "claude",
+        "agent_name": agent_name,
+        "dispatch_tool_use_id": tool_use_id,
+        "watchdog_id": watchdog_id,
+        "attempt": 1,
+        "generation": 1,
+    }
+
+    def register(current: dict) -> dict:
+        matches = [
+            item
+            for item in current.get("executions", [])
+            if item.get("dispatch_tool_use_id") == tool_use_id
+        ]
+        if len(matches) > 1:
+            raise ValueError("dispatch tool identity is ambiguous")
+        if matches and any(
+            matches[0].get(key) != event[key]
+            for key in ("bead_id", "agent_name", "host")
+        ):
+            raise ValueError("dispatch tool identity conflicts")
+        return current if matches else register_execution(current, event, now)
 
     try:
-        updated = mutate_atomic(path, consume)
-    except _PreparedAttemptConsumed:
-        return _deny("prepared_execution_required", session_id, agent_name)
+        updated = initialize_or_mutate_atomic(
+            path,
+            lambda: new_ledger(session_id),
+            register,
+        )
     except (OSError, ValueError):
-        return _deny("dispatch_persistence_failed", session_id, agent_name)
+        return {"decision": "allow", "reason": "dispatch_evidence_unresolved"}
 
     dispatched = next(
-        item for item in updated["executions"] if item["execution_id"] == execution_id
+        item
+        for item in updated["executions"]
+        if item["dispatch_tool_use_id"] == tool_use_id
     )
     return {
         "decision": "allow",
         "reason": "dispatch_registered",
-        "execution_id": execution_id,
+        "execution_id": dispatched["execution_id"],
         "attempt": dispatched["attempt"],
         "generation": dispatched["generation"],
     }
@@ -223,27 +221,6 @@ def _prepare(args: argparse.Namespace) -> dict:
     }
 
 
-def _default_run_bd(cwd: str):
-    def run_bd(args: list[str]):
-        try:
-            repo_cwd = cwd if cwd and pathlib.Path(cwd).is_dir() else None
-            result = subprocess.run(
-                ["bd", *args, "--json"],
-                cwd=repo_cwd,
-                capture_output=True,
-                text=True,
-                timeout=15,
-            )
-            if result.returncode != 0:
-                return None
-            value = json.loads(result.stdout)
-            return value if isinstance(value, list) else None
-        except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
-            return None
-
-    return run_bd
-
-
 def _hook_main() -> int:
     try:
         payload = json.load(sys.stdin)
@@ -253,18 +230,15 @@ def _hook_main() -> int:
     try:
         ledger_path = _ledger_path(session_id)
     except InvalidActorIdentity as exc:
-        agent_name = "<agent-name>"
-        tool_input = payload.get("tool_input") if isinstance(payload, dict) else None
-        if isinstance(tool_input, dict) and isinstance(tool_input.get("name"), str):
-            agent_name = tool_input["name"]
-        result = _deny("invalid_actor_identity", session_id, agent_name)
         print(
             json.dumps(
                 {
                     "hookSpecificOutput": {
                         "hookEventName": payload.get("hook_event_name", "PreToolUse"),
-                        "permissionDecision": "deny",
-                        "permissionDecisionReason": f"{result['reason']}: {exc}",
+                        "permissionDecision": "allow",
+                        "permissionDecisionReason": (
+                            f"dispatch_evidence_unresolved: {exc}"
+                        ),
                     }
                 }
             )
@@ -275,12 +249,10 @@ def _hook_main() -> int:
         return 0
     result = pre_tool(
         payload,
-        _default_run_bd(payload.get("cwd", "")),
+        None,
         ledger_path,
     )
     reason = result["reason"]
-    if result["decision"] == "deny":
-        reason = f"{reason}. Prepare it first: {result['additional_context']}"
     print(
         json.dumps(
             {

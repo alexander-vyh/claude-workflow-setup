@@ -1,20 +1,17 @@
 #!/usr/bin/env python3
-"""PreToolUse guard: prevent accidental mutations in a beads repo's primary checkout.
+"""PreToolUse guard for explicit-path edits in a managed primary checkout.
 
-Business outcome: agents should not dirty the root checkout of a beads-managed
-repository during normal implementation work. Use a linked worktree instead.
+The independent oracle is filesystem shape. A primary checkout has a .git
+directory and a sibling .beads directory. A linked worktree has .git as a file,
+so explicit edits there remain allowed.
 
-Independent oracle: filesystem shape, not path strings. A primary checkout has
-`.git/` as a directory and `.beads/` at the same root. A linked worktree has
-`.git` as a file, so it is not blocked by this guard.
+Arbitrary process effects are outside this hook's hard-enforcement boundary.
 """
 
 from __future__ import annotations
 
 import json
 import os
-import re
-import shlex
 import sys
 from pathlib import Path
 from typing import NoReturn
@@ -29,67 +26,13 @@ except ImportError:  # pragma: no cover
         return None
 
 
-GATED_EDIT_TOOLS = frozenset(
-    {
-        "Write",
-        "Edit",
-        "NotebookEdit",
-        "MultiEdit",
-        "mcp__serena__replace_symbol_body",
-        "mcp__serena__insert_after_symbol",
-        "mcp__serena__insert_before_symbol",
-    }
-)
-FILE_PATH_KEYS = ("file_path", "relative_path", "notebook_path")
-GIT_STATE_CHANGING_SUBCOMMANDS = frozenset(
-    {
-        "add",
-        "checkout",
-        "cherry-pick",
-        "clean",
-        "commit",
-        "merge",
-        "mv",
-        "pull",
-        "rebase",
-        "reset",
-        "restore",
-        "rm",
-        "stash",
-        "switch",
-        "tag",
-    }
-)
-SHELL_STATE_CHANGING_COMMANDS = frozenset({"cp", "install", "mkdir", "mv", "rm", "rmdir", "tee", "touch"})
-# Flags whose NEXT token is a value, not a path. Missing one turns a mode
-# string like `0755` into an operand that resolves against cwd, producing the
-# false denial this whole resolution exists to prevent. Keyed by command
-# because the same short flag means different things: `touch -t` is a
-# timestamp, `cp -t` is a destination directory.
-SHELL_VALUE_FLAGS = {
-    "cp": frozenset({"-S", "--suffix"}),
-    "install": frozenset({"-m", "--mode", "-o", "--owner", "-g", "--group", "-S", "--suffix"}),
-    "mkdir": frozenset({"-m", "--mode"}),
-    "mv": frozenset({"-S", "--suffix"}),
-    "rm": frozenset(),
-    "rmdir": frozenset(),
-    "tee": frozenset(),
-    "touch": frozenset({"-d", "--date", "-r", "--reference", "-t", "--time"}),
+PATH_KEY_BY_TOOL = {
+    "Write": "file_path",
+    "Edit": "file_path",
+    "NotebookEdit": "notebook_path",
+    "MultiEdit": "file_path",
 }
-# Commands accepting an explicit destination directory; when given, it is the
-# only write target and every remaining operand is a source.
-SHELL_TARGET_DIR_COMMANDS = frozenset({"cp", "install", "mv"})
-SHELL_TARGET_DIR_FLAGS = frozenset({"-t", "--target-directory"})
-# Commands that only read their sources, so just the final operand is written.
-# `mv` is deliberately absent: it removes its sources, which mutates them.
-SHELL_DEST_ONLY_COMMANDS = frozenset({"cp", "install"})
-GIT_VALUE_FLAGS = frozenset({"-C", "-c", "--git-dir", "--work-tree", "--git-common-dir", "--namespace", "--super-prefix"})
-ENV_VALUE_FLAGS = frozenset({"-u", "--unset", "-S", "--split-string"})
-ENV_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
-SHELL_SEP_RE = re.compile(r"&&|\|\||[;\n]")
-WAIVER_RE = re.compile(r"#\s*root-checkout-waiver:\s*(\S.*?)\s*$", re.MULTILINE)
-WAIVER_PLACEHOLDERS = frozenset({"<reason>", "tbd", "n/a", "na", "none", "todo", "fixme", "wip", "?", "??", "???"})
-MIN_WAIVER_REASON_LEN = 20
+GATED_EDIT_TOOLS = frozenset(PATH_KEY_BY_TOOL)
 
 
 def _emit_deny(reason: str) -> NoReturn:
@@ -115,7 +58,7 @@ def _safe_resolve(path: Path) -> Path:
 
 
 def _primary_checkout_root_for(path: Path) -> Path | None:
-    """Return the primary beads checkout root containing `path`, or None."""
+    """Return the primary beads checkout containing path, if one exists."""
     resolved = _safe_resolve(path)
     start = resolved if resolved.is_dir() else resolved.parent
     for directory in (start, *start.parents):
@@ -127,168 +70,19 @@ def _primary_checkout_root_for(path: Path) -> Path | None:
     return None
 
 
-def _path_from_tool_input(tool_input: dict, cwd: Path) -> Path | None:
-    for key in FILE_PATH_KEYS:
-        raw = tool_input.get(key)
-        if isinstance(raw, str) and raw:
-            path = Path(raw)
-            return path if path.is_absolute() else cwd / path
-    return None
-
-
-def _extract_waiver_reason(text: str) -> str | None:
-    match = WAIVER_RE.search(text)
-    if match:
-        return match.group(1).strip()
-    env_reason = os.environ.get("ROOT_CHECKOUT_WAIVER", "").strip()
-    return env_reason or None
-
-
-def _is_substantive_waiver(reason: str | None) -> bool:
-    if not reason:
-        return False
-    normalized = reason.strip().lower()
-    return len(reason.strip()) >= MIN_WAIVER_REASON_LEN and normalized not in WAIVER_PLACEHOLDERS
-
-
-def _strip_command_prefixes(tokens: list[str]) -> int | None:
-    i = 0
-    while i < len(tokens) and ENV_ASSIGNMENT_RE.match(tokens[i]):
-        i += 1
-    while i < len(tokens) and tokens[i] in ("env", "command"):
-        i += 1
-        while i < len(tokens):
-            tok = tokens[i]
-            if ENV_ASSIGNMENT_RE.match(tok):
-                i += 1
-            elif tok in ENV_VALUE_FLAGS and i + 1 < len(tokens):
-                i += 2
-            elif tok.startswith("-"):
-                i += 1
-            else:
-                break
-    return i if i < len(tokens) else None
-
-
-def _command_name(tokens: list[str]) -> str | None:
-    i = _strip_command_prefixes(tokens)
-    return Path(tokens[i]).name if i is not None else None
-
-
-def _git_target_and_subcommand(tokens: list[str], cwd: Path) -> tuple[Path, str] | None:
-    i = _strip_command_prefixes(tokens)
-    if i is None or Path(tokens[i]).name != "git":
+def _path_from_tool_input(tool_name: str, tool_input: dict, cwd: Path) -> Path | None:
+    raw = tool_input.get(PATH_KEY_BY_TOOL[tool_name])
+    if not isinstance(raw, str) or not raw:
         return None
-    i += 1
-    target_cwd = cwd
-    while i < len(tokens):
-        tok = tokens[i]
-        if tok == "-C" and i + 1 < len(tokens):
-            candidate = Path(tokens[i + 1])
-            target_cwd = candidate if candidate.is_absolute() else target_cwd / candidate
-            i += 2
-        elif tok.startswith("-C") and len(tok) > 2:
-            candidate = Path(tok[2:])
-            target_cwd = candidate if candidate.is_absolute() else target_cwd / candidate
-            i += 1
-        elif tok in GIT_VALUE_FLAGS:
-            i += 2
-        elif any(tok.startswith(prefix + "=") for prefix in GIT_VALUE_FLAGS if prefix.startswith("--")):
-            i += 1
-        elif tok.startswith("-"):
-            i += 1
-        else:
-            return _safe_resolve(target_cwd), tok
-    return None
+    path = Path(raw)
+    return _safe_resolve(path if path.is_absolute() else cwd / path)
 
 
-def _shell_write_targets(tokens: list[str], cwd: Path) -> list[Path]:
-    """Resolve the paths a state-changing shell command actually writes to.
-
-    Returns an empty list when no operand can be identified, which lets the
-    caller keep its conservative cwd-based default rather than guessing.
-    """
-    start = _strip_command_prefixes(tokens)
-    if start is None:
-        return []
-    name = Path(tokens[start]).name
-    value_flags = SHELL_VALUE_FLAGS.get(name, frozenset())
-    takes_target_dir = name in SHELL_TARGET_DIR_COMMANDS
-
-    operands: list[str] = []
-    target_dir: str | None = None
-    end_of_options = False
-    i = start + 1
-    while i < len(tokens):
-        token = tokens[i]
-        if not end_of_options and token == "--":
-            end_of_options = True
-            i += 1
-            continue
-        if not end_of_options and token.startswith("-") and token != "-":
-            flag, _, inline_value = token.partition("=")
-            if takes_target_dir and flag in SHELL_TARGET_DIR_FLAGS:
-                if inline_value:
-                    target_dir = inline_value
-                elif i + 1 < len(tokens):
-                    target_dir = tokens[i + 1]
-                    i += 1
-            elif flag in value_flags and not inline_value and i + 1 < len(tokens):
-                i += 1
-            i += 1
-            continue
-        operands.append(token)
-        i += 1
-
-    if target_dir is not None:
-        selected = [target_dir]
-    elif name in SHELL_DEST_ONLY_COMMANDS and len(operands) > 1:
-        selected = [operands[-1]]
-    else:
-        selected = operands
-
-    resolved: list[Path] = []
-    for raw in selected:
-        candidate = Path(raw)
-        resolved.append(_safe_resolve(candidate if candidate.is_absolute() else cwd / candidate))
-    return resolved
-
-
-def _bash_mutation_target(command: str, cwd: Path) -> tuple[Path, str] | None:
-    current_cwd = cwd
-    for segment in SHELL_SEP_RE.split(command):
-        segment = segment.strip()
-        if not segment:
-            continue
-        try:
-            tokens = shlex.split(segment)
-        except ValueError:
-            return None
-        if not tokens:
-            continue
-        name = _command_name(tokens)
-        if name == "cd" and len(tokens) > 1:
-            candidate = Path(tokens[1])
-            current_cwd = _safe_resolve(candidate if candidate.is_absolute() else current_cwd / candidate)
-            continue
-        git = _git_target_and_subcommand(tokens, current_cwd)
-        if git is not None:
-            target, subcommand = git
-            if subcommand in GIT_STATE_CHANGING_SUBCOMMANDS:
-                return target, f"git {subcommand}"
-            continue
-        if name in SHELL_STATE_CHANGING_COMMANDS:
-            targets = _shell_write_targets(tokens, current_cwd)
-            if not targets:
-                # No identifiable operand: fall back to the session's cwd.
-                return _safe_resolve(current_cwd), name
-            for target in targets:
-                if _primary_checkout_root_for(target) is not None:
-                    return target, name
-            # This segment writes outside any primary checkout; keep scanning
-            # the rest of the command line rather than clearing it wholesale.
-            continue
-    return None
+def _quote(value: object) -> str:
+    text = str(value)
+    if text and all(char.isalnum() or char in "/._-" for char in text):
+        return text
+    return "'" + text.replace("'", "'\"'\"'") + "'"
 
 
 def _deny_reason(operation: str, root: Path) -> str:
@@ -296,51 +90,35 @@ def _deny_reason(operation: str, root: Path) -> str:
     if prefix is None:
         repair = (
             "Worktree creation is unavailable: broken Escapement installation; "
-            "the bundled escapement-worktree CLI "
-            "is missing. Repair or reinstall Escapement before creating a worktree."
+            "the bundled escapement-worktree CLI is missing. Repair or reinstall "
+            "Escapement before creating a worktree."
         )
     else:
-        command = (
-            f"{shlex.join(prefix)} create --repo {shlex.quote(str(root))} "
-            "--name <task> --branch <branch>"
+        invocation = (
+            " ".join(_quote(token) for token in prefix)
+            + f" create --repo {_quote(root)} --name <task> --branch <branch>"
         )
         repair = (
             "Create a linked worktree with the Escapement-owned "
-            f"`escapement-worktree create` transaction: `{command}`, then make "
-            "the change there."
+            f"escapement-worktree transaction: `{invocation}`, then make the "
+            "change there."
         )
     return (
-        f"`{operation}` targets the primary checkout of a beads-managed repo at `{root}`. "
-        "Routine agent implementation work must not dirty the root checkout. "
-        f"{repair} If this is intentional root maintenance, rerun the Bash "
-        "command with `# root-checkout-waiver: <reason>` using a substantive reason. "
-        "Placeholder waiver reasons are rejected."
+        f"`{operation}` targets the primary checkout of a beads-managed repo "
+        f"at `{root}`. Routine agent implementation work must not dirty the "
+        f"root checkout. {repair}"
     )
 
 
-def _deny(operation: str, root: Path, tool_name: str, command: str = "") -> NoReturn:
+def _deny(operation: str, root: Path, tool_name: str) -> NoReturn:
     _record_signal(
         gate_name="root_checkout_guard",
         decision="deny",
-        reason=f"primary checkout mutation blocked: {operation}",
+        reason=f"primary checkout explicit edit blocked: {operation}",
         tool=tool_name,
         target=str(root),
-        command=command,
     )
     _emit_deny(_deny_reason(operation, root))
-
-
-def _allow_waiver(reason: str, root: Path, tool_name: str, command: str) -> int:
-    _record_signal(
-        gate_name="root_checkout_guard",
-        decision="waiver-accepted",
-        reason=reason,
-        event_type="waiver",
-        tool=tool_name,
-        target=str(root),
-        command=command,
-    )
-    return 0
 
 
 def main() -> int:
@@ -351,34 +129,20 @@ def main() -> int:
     if data.get("hook_event_name") != "PreToolUse":
         return 0
     tool_name = data.get("tool_name", "")
+    if tool_name not in GATED_EDIT_TOOLS:
+        return 0
     tool_input = data.get("tool_input", {})
     if not isinstance(tool_input, dict):
         return 0
-    cwd = _safe_resolve(Path(data.get("cwd") or data.get("workingDirectory") or os.getcwd()))
-    if tool_name in GATED_EDIT_TOOLS:
-        target = _path_from_tool_input(tool_input, cwd)
-        if target is None:
-            return 0
-        root = _primary_checkout_root_for(target)
-        if root is not None:
-            _deny(f"{tool_name} {target}", root, tool_name)
+    cwd = _safe_resolve(
+        Path(data.get("cwd") or data.get("workingDirectory") or os.getcwd())
+    )
+    target = _path_from_tool_input(tool_name, tool_input, cwd)
+    if target is None:
         return 0
-    if tool_name != "Bash":
-        return 0
-    command = tool_input.get("command", "")
-    if not isinstance(command, str) or not command:
-        return 0
-    mutation = _bash_mutation_target(command, cwd)
-    if mutation is None:
-        return 0
-    target, operation = mutation
     root = _primary_checkout_root_for(target)
-    if root is None:
-        return 0
-    waiver_reason = _extract_waiver_reason(command)
-    if _is_substantive_waiver(waiver_reason):
-        return _allow_waiver(waiver_reason or "", root, tool_name, command)
-    _deny(operation, root, tool_name, command)
+    if root is not None:
+        _deny(f"{tool_name} {target}", root, tool_name)
     return 0
 
 

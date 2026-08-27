@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# file-complexity-waiver: 1087 lines; delegated Stop policy is isolated in execution_stop_adapter.py, leaving this legacy hook with one adapter import and call. Broader split remains owned by bead e9v.7.
+# file-complexity-waiver: 1091 lines; delegated Stop policy is isolated in execution_stop_adapter.py, leaving this legacy hook with one adapter import and call. Broader split remains owned by bead e9v.7.
 """
 Claude Code Stop-hook adapter for continuation-harness.
 
@@ -870,7 +870,11 @@ def main() -> int:
     # The delegated adapter owns trusted exact-session context loading. Existing
     # managed state cannot fall through to legacy behavior when that context is bad.
     session_mode, delegated = decide_task_mode(
-        session_id, thread_dir, _now_dt, harness_root=HARNESS_ROOT
+        session_id,
+        thread_dir,
+        _now_dt,
+        harness_root=HARNESS_ROOT,
+        transcript_path=transcript_path,
     )
     if delegated is not None:
         decision, reason = delegated

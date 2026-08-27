@@ -137,7 +137,7 @@
           "events": [
             {
               "event": "PreToolUse",
-              "matcher": "Write|Edit|NotebookEdit|mcp__serena__replace_symbol_body|mcp__serena__insert_after_symbol|mcp__serena__insert_before_symbol",
+              "matcher": "Write|Edit|NotebookEdit",
               "command": "python3 -B ~/.claude/hooks/test_oracle_brief_gate.py",
               "timeout": 5000
             }
@@ -199,7 +199,7 @@
     },
     {
       "id": "delegation_hook",
-      "description": "Require an explicitly prepared Beads execution before Claude Agent dispatch.",
+      "description": "Use automatic, non-blocking observation for managed Claude Agent dispatch without removing native Agent capacity.",
       "source": "harness/bin/delegation_hook.py",
       "hosts": {
         "codex": {
@@ -216,7 +216,7 @@
             }
           ],
           "fixtures": [
-            "harness/tests/test_delegation_hook.py::test_complete_claude_agent_fixture_registers_dispatch_before_allow"
+            "harness/tests/test_delegation_hook.py::test_managed_first_attempt_registers_without_prepare_or_child_bead"
           ]
         }
       }
@@ -227,30 +227,12 @@
       "source": "harness/bin/execution_reconcile.py",
       "hosts": {
         "codex": {
-          "status": "ready",
-          "events": [
-            {
-              "event": "SessionStart",
-              "matcher": "",
-              "command": "python3 -B harness/bin/execution_reconcile.py"
-            }
-          ],
-          "fixtures": [
-            "harness/tests/test_execution_reconcile.py::test_codex_sessionstart_uses_the_same_reconciliation_without_stop_claims"
-          ]
+          "status": "partial",
+          "unsupported_reason": "Expectation-aware SessionStart reconciliation is not verified; a missing ledger is normal without a trusted managed dispatch expectation."
         },
         "claude": {
-          "status": "ready",
-          "events": [
-            {
-              "event": "SessionStart",
-              "matcher": "",
-              "command": "python3 -B ~/.claude/harness/bin/execution_reconcile.py"
-            }
-          ],
-          "fixtures": [
-            "harness/tests/test_execution_reconcile.py::test_unresolved_parent_emits_actionable_continuation_context"
-          ]
+          "status": "partial",
+          "unsupported_reason": "Expectation-aware SessionStart reconciliation is not verified; a missing ledger is normal without a trusted managed dispatch expectation."
         }
       }
     },
@@ -291,50 +273,16 @@
     },
     {
       "id": "root_checkout_guard",
-      "description": "Prevent accidental mutations in the primary checkout of a beads-managed repo.",
+      "description": "Prevent Claude built-in explicit-path edit tools from mutating the primary checkout of a beads-managed repo; arbitrary process and Serena project-relative effects are outside this hard gate.",
       "source": "claude/hooks/root_checkout_guard.py",
       "hosts": {
         "codex": {
-          "status": "ready",
-          "events": [
-            {
-              "event": "PreToolUse",
-              "matcher": "Bash",
-              "command": "python3 -B claude/hooks/root_checkout_guard.py",
-              "timeout_seconds": 10
-            },
-            {
-              "event": "PreToolUse",
-              "matcher": "Write",
-              "command": "python3 -B claude/hooks/root_checkout_guard.py",
-              "timeout_seconds": 10
-            },
-            {
-              "event": "PreToolUse",
-              "matcher": "Edit",
-              "command": "python3 -B claude/hooks/root_checkout_guard.py",
-              "timeout_seconds": 10
-            },
-            {
-              "event": "PreToolUse",
-              "matcher": "NotebookEdit",
-              "command": "python3 -B claude/hooks/root_checkout_guard.py",
-              "timeout_seconds": 10
-            }
-          ],
-          "fixtures": [
-            "claude/hooks/tests/test_root_checkout_guard.py::test_codex_root_checkout_guard_denies_primary_checkout_bash",
-            "claude/hooks/tests/test_root_checkout_guard.py::test_codex_root_checkout_guard_denies_primary_checkout_write"
-          ]
+          "status": "partial",
+          "unsupported_reason": "The current Codex hook payload does not expose the effective per-command working directory, so relative mutation targets cannot be classified safely."
         },
         "claude": {
           "status": "ready",
           "events": [
-            {
-              "event": "PreToolUse",
-              "matcher": "Bash",
-              "command": "python3 -B ~/.claude/hooks/root_checkout_guard.py"
-            },
             {
               "event": "PreToolUse",
               "matcher": "Write",
@@ -353,21 +301,6 @@
             {
               "event": "PreToolUse",
               "matcher": "MultiEdit",
-              "command": "python3 -B ~/.claude/hooks/root_checkout_guard.py"
-            },
-            {
-              "event": "PreToolUse",
-              "matcher": "mcp__serena__replace_symbol_body",
-              "command": "python3 -B ~/.claude/hooks/root_checkout_guard.py"
-            },
-            {
-              "event": "PreToolUse",
-              "matcher": "mcp__serena__insert_after_symbol",
-              "command": "python3 -B ~/.claude/hooks/root_checkout_guard.py"
-            },
-            {
-              "event": "PreToolUse",
-              "matcher": "mcp__serena__insert_before_symbol",
               "command": "python3 -B ~/.claude/hooks/root_checkout_guard.py"
             }
           ],
@@ -1271,7 +1204,7 @@
       "hosts": {
         "codex": {
           "status": "unsupported",
-          "unsupported_reason": "Gates Claude Serena symbol-edit tools (mcp__serena__*) alongside Write/Edit; Serena matchers are not portable to Codex."
+          "unsupported_reason": "The Codex hook surface has no captured fixture proving an equivalent built-in edit-tool event contract."
         },
         "claude": {
           "status": "ready",
@@ -1289,21 +1222,6 @@
             {
               "event": "PreToolUse",
               "matcher": "NotebookEdit",
-              "command": "python3 -B ~/.claude/hooks/tdd-gate.py"
-            },
-            {
-              "event": "PreToolUse",
-              "matcher": "mcp__serena__replace_symbol_body",
-              "command": "python3 -B ~/.claude/hooks/tdd-gate.py"
-            },
-            {
-              "event": "PreToolUse",
-              "matcher": "mcp__serena__insert_after_symbol",
-              "command": "python3 -B ~/.claude/hooks/tdd-gate.py"
-            },
-            {
-              "event": "PreToolUse",
-              "matcher": "mcp__serena__insert_before_symbol",
               "command": "python3 -B ~/.claude/hooks/tdd-gate.py"
             }
           ],
@@ -1470,7 +1388,7 @@
     },
     {
       "id": "task_mode_entry",
-      "description": "PreToolUse: continuation-harness task-mode entry gate on Bash.",
+      "description": "PostToolUse: enter continuation-harness task mode only after a successful exact Beads claim.",
       "source": "harness/bin/task_mode_entry.py",
       "hosts": {
         "codex": {
@@ -1481,13 +1399,14 @@
           "status": "ready",
           "events": [
             {
-              "event": "PreToolUse",
+              "event": "PostToolUse",
               "matcher": "Bash",
               "command": "python3 -B ~/.claude/harness/bin/task_mode_entry.py"
             }
           ],
           "fixtures": [
-            "harness/tests/test_task_mode_scope.py"
+            "harness/tests/test_task_mode_scope.py",
+            "harness/tests/test_task_mode_root_scope.py::test_successful_posttool_claim_creates_exact_scoped_task_mode"
           ]
         }
       }

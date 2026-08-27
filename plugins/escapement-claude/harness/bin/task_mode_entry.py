@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Claude Code PreToolUse hook — task-mode entry detector.
+Claude Code PostToolUse hook — successful task-mode entry detector.
 
-Watches for bd claim operations. When the agent claims a beads task, writes
+Watches for successful exact bd claim operations. When the agent claims a beads task, writes
 session_mode.json to the thread dir so the stop hook can switch to queue-drain
 gating for this session.
 
@@ -16,7 +16,6 @@ from __future__ import annotations
 import json
 import os
 import pathlib
-import re
 import subprocess
 import sys
 import time
@@ -24,35 +23,25 @@ from typing import Optional
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from would_block_stop import InvalidActorIdentity, thread_dir_for_session, harness_home
+from task_session_mode import (
+    extract_exact_claim_task_id,
+    is_issue_id,
+    record_task_context_first_claim,
+    record_task_mode_incident,
+)
 
 HARNESS_ROOT = harness_home()
 
-_CLAIM_PATTERNS = [
-    re.compile(r'\bbd\s+update\b.*\s--claim\b'),
-    re.compile(r'\bbd\s+update\b.*\s-s\s+in_progress\b'),
-    re.compile(r'\bbd\s+update\b.*\s--status\s+in_progress\b'),
-    re.compile(r'\bbd\s+ready\b.*\s--claim\b'),
-]
-
-_ISSUE_ID_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$")
-
-
 def _is_claim_command(command: str) -> bool:
-    return any(p.search(command) for p in _CLAIM_PATTERNS)
+    return extract_exact_claim_task_id(command) is not None
 
 
 def _is_issue_id(value) -> bool:
-    return isinstance(value, str) and _ISSUE_ID_RE.fullmatch(value) is not None
+    return is_issue_id(value)
 
 
 def _extract_task_id(command: str) -> Optional[str]:
-    """Extract the beads task ID from 'bd update <id> --claim'."""
-    m = re.search(r'\bbd\s+update\s+(\S+)', command)
-    if not m:
-        return None
-    task_id = m.group(1)
-    # Molecule steps use dotted suffixes (for example escapement-858.3).
-    return task_id if _is_issue_id(task_id) else None
+    return extract_exact_claim_task_id(command)
 
 
 _MAX_PARENT_LOOKUPS = 20  # cycle / runaway-chain backstop so the hook never hangs
@@ -174,12 +163,21 @@ def main() -> int:
     except (json.JSONDecodeError, ValueError):
         return 0
 
-    if payload.get("tool_name") != "Bash":
+    if (
+        payload.get("hook_event_name") != "PostToolUse"
+        or payload.get("tool_name") != "Bash"
+    ):
         return 0
 
     tool_input = payload.get("tool_input", {})
     command = tool_input.get("command", "") if isinstance(tool_input, dict) else ""
-    if not command or not _is_claim_command(command):
+    tool_response = payload.get("tool_response")
+    if (
+        not command
+        or not isinstance(tool_response, dict)
+        or tool_response.get("interrupted") is not False
+        or not _is_claim_command(command)
+    ):
         return 0
 
     session_id = payload.get("session_id") or ""
@@ -188,11 +186,9 @@ def main() -> int:
     except InvalidActorIdentity as exc:
         print(f"task-mode entry denied: invalid actor identity: {exc}", file=sys.stderr)
         return 2
-    thread_dir.mkdir(parents=True, exist_ok=True)
-    mode_file = thread_dir / "session_mode.json"
-
-    # First-claim-wins: never overwrite an existing mode record.
-    if mode_file.exists():
+    try:
+        thread_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
         return 0
 
     task_id = _extract_task_id(command)
@@ -204,17 +200,25 @@ def main() -> int:
         return 0
     parent_id = _lookup_parent_id(task_id)
 
+    entered_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     try:
-        mode_file.write_text(json.dumps({
+        record_task_context_first_claim(thread_dir / "session_mode.json", {
             "mode": "task",
             "repo_cwd": os.getcwd(),
             "task_id": task_id,
             "parent_id": parent_id,
-            "entered_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "entered_at": entered_at,
             "session_id": session_id,
-        }))
-    except OSError:
-        pass  # Silent fail: don't block the tool call
+        })
+    except (OSError, ValueError):
+        try:
+            record_task_mode_incident(
+                thread_dir / "task_mode_incident.json",
+                parent_session_id=session_id,
+                recorded_at=entered_at,
+            )
+        except (OSError, ValueError):
+            pass
 
     return 0
 
