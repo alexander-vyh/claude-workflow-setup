@@ -417,6 +417,7 @@ def test_terminal_evidence_cannot_create_result_without_prior_native_binding(
         "terminal_event_id": "terminal-unbound",
         "terminal_reason": "completed",
         "result_digest": "sha256:must-not-apply",
+        "host_event_id": "claude:terminal:unbound",
     }
     if event_child is not None:
         event["native_child_id"] = event_child
@@ -464,6 +465,7 @@ def test_terminal_evidence_requires_exact_bound_native_identity(
         "terminal_event_id": "terminal-wrong-child",
         "terminal_reason": "completed",
         "result_digest": "sha256:must-not-apply",
+        "host_event_id": "claude:terminal:wrong-child",
     }
     if event_child is not None:
         event["native_child_id"] = event_child
@@ -493,6 +495,7 @@ def test_cancellation_evidence_requires_exact_prior_native_binding(
         "generation": 1,
         "terminal_event_id": "cancelled-wrong-child",
         "terminal_reason": "supervisor_cancelled",
+        "host_event_id": "claude:cancelled:wrong-child",
     }
     if event_child is not None:
         event["native_child_id"] = event_child
@@ -517,6 +520,7 @@ def test_cancellation_evidence_accepts_the_exact_bound_native_child() -> None:
             "native_child_id": "child-native-1",
             "terminal_event_id": "cancelled-900",
             "terminal_reason": "supervisor_cancelled",
+            "host_event_id": "claude:cancelled:900",
         },
         at("2026-08-09T20:05:00Z"),
     )
@@ -582,6 +586,7 @@ def test_terminal_event_is_idempotent_by_terminal_event_identity() -> None:
         "terminal_event_id": "terminal-900",
         "terminal_reason": "completed",
         "result_digest": "sha256:result-a",
+        "host_event_id": "claude:terminal:terminal-900",
     }
     ledger_api.apply_event(ledger, event, at("2026-08-09T20:04:00Z"))
     first = copy.deepcopy(ledger)
@@ -593,6 +598,125 @@ def test_terminal_event_is_idempotent_by_terminal_event_identity() -> None:
     assert item["terminal_event_id"] == "terminal-900"
     assert item["result_digest"] == "sha256:result-a"
     assert item["result_application"]["state"] == "unapplied"
+
+
+@pytest.mark.parametrize(
+    ("kind", "terminal_event_id", "terminal_reason", "result_digest"),
+    [
+        ("child_terminal", "terminal-idempotent-901", "completed", "sha256:result-b"),
+        ("child_cancelled", "cancelled-idempotent-901", "cancelled", None),
+    ],
+)
+def test_new_host_observation_of_idempotent_resolution_preserves_execution_state(
+    kind: str, terminal_event_id: str, terminal_reason: str, result_digest: str | None
+) -> None:
+    ledger = started()
+    event = {
+        "kind": kind,
+        "parent_session_id": "parent-7",
+        "execution_id": "exec-alpha",
+        "attempt": 1,
+        "generation": 1,
+        "native_child_id": "child-native-1",
+        "terminal_event_id": terminal_event_id,
+        "terminal_reason": terminal_reason,
+        "host_event_id": f"claude:{kind}:first-observation",
+    }
+    if result_digest is not None:
+        event["result_digest"] = result_digest
+    ledger_api.apply_event(ledger, event, at("2026-08-09T20:04:00Z"))
+    first_execution = copy.deepcopy(execution(ledger))
+
+    ledger_api.apply_event(
+        ledger,
+        {**event, "host_event_id": f"claude:{kind}:second-observation"},
+        at("2026-08-09T20:09:00Z"),
+    )
+
+    assert execution(ledger) == first_execution
+    observations = [
+        incident
+        for incident in ledger["incidents"]
+        if incident["type"] == "host_event_observation"
+    ]
+    assert [incident["host_event_id"] for incident in observations] == [
+        f"claude:{kind}:first-observation",
+        f"claude:{kind}:second-observation",
+    ]
+    before_conflict = copy.deepcopy(ledger)
+    with pytest.raises(ValueError, match="host event|replay|identity"):
+        ledger_api.apply_event(
+            ledger,
+            {**event, "host_event_id": f"claude:{kind}:second-observation", "terminal_reason": "changed"},
+            at("2026-08-09T20:10:00Z"),
+        )
+    assert ledger == before_conflict
+
+
+@pytest.mark.parametrize(
+    ("kind", "base", "missing"),
+    [
+        (
+            "child_terminal",
+            {
+                "native_child_id": "child-native-1",
+                "terminal_event_id": "terminal-atomic",
+                "terminal_reason": "completed",
+                "result_digest": "sha256:atomic",
+                "host_event_id": "claude:terminal:atomic",
+            },
+            "result_digest",
+        ),
+        (
+            "child_terminal",
+            {
+                "native_child_id": "child-native-1",
+                "terminal_event_id": "terminal-atomic-reason",
+                "terminal_reason": "completed",
+                "result_digest": "sha256:atomic-reason",
+                "host_event_id": "claude:terminal:atomic-reason",
+            },
+            "terminal_reason",
+        ),
+        (
+            "child_cancelled",
+            {
+                "native_child_id": "child-native-1",
+                "terminal_event_id": "cancelled-atomic",
+                "terminal_reason": "cancelled",
+                "host_event_id": "claude:cancelled:atomic",
+            },
+            "host_event_id",
+        ),
+        (
+            "dispatch_aborted",
+            {
+                "terminal_reason": "native_dispatch_rejected_before_spawn",
+                "host_event_id": "claude:abort:atomic",
+            },
+            "host_event_id",
+        ),
+    ],
+)
+def test_invalid_resolution_evidence_rejects_without_partial_mutation(
+    kind: str, base: dict, missing: str
+) -> None:
+    ledger = registered() if kind == "dispatch_aborted" else started()
+    event = {
+        "kind": kind,
+        "parent_session_id": "parent-7",
+        "execution_id": "exec-alpha",
+        "attempt": 1,
+        "generation": 1,
+        **base,
+    }
+    event.pop(missing)
+    before = copy.deepcopy(ledger)
+
+    with pytest.raises(ValueError):
+        ledger_api.apply_event(ledger, event, at("2026-08-09T20:05:00Z"))
+
+    assert ledger == before
 
 
 def test_old_generation_terminal_is_evidence_not_active_result() -> None:
@@ -619,6 +743,7 @@ def test_old_generation_terminal_is_evidence_not_active_result() -> None:
             "terminal_event_id": "late-generation-one",
             "terminal_reason": "completed",
             "result_digest": "sha256:stale",
+            "host_event_id": "claude:terminal:late-generation-one",
         },
         at("2026-08-09T20:03:00Z"),
     )
@@ -635,6 +760,24 @@ def test_old_generation_terminal_is_evidence_not_active_result() -> None:
         "active_generation": 2,
         "recorded_at": "2026-08-09T20:03:00Z",
     }
+    assert ledger["incidents"][-2]["host_event_id"] == "claude:terminal:late-generation-one"
+    before_replay = copy.deepcopy(ledger)
+    ledger_api.apply_event(
+        ledger,
+        {
+            "kind": "child_terminal",
+            "parent_session_id": "parent-7",
+            "execution_id": "exec-alpha",
+            "attempt": 1,
+            "generation": 1,
+            "terminal_event_id": "late-generation-one",
+            "terminal_reason": "completed",
+            "result_digest": "sha256:stale",
+            "host_event_id": "claude:terminal:late-generation-one",
+        },
+        at("2026-08-09T20:04:00Z"),
+    )
+    assert ledger == before_replay
 
 
 def test_start_deadline_sets_sticky_reconcile_without_terminal_state() -> None:

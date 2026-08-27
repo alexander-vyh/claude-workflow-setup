@@ -22,6 +22,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
+from jsonschema import Draft202012Validator
 
 BIN = pathlib.Path(__file__).resolve().parent.parent / "bin"
 sys.path.insert(0, str(BIN))
@@ -322,6 +323,7 @@ def test_schema_declares_closed_enums_for_runtime_decisions():
         "running",
         "terminal",
         "cancelled",
+        "aborted",
         "unknown",
     ]
     assert execution_properties["reconcile_due"]["enum"] == [
@@ -337,6 +339,45 @@ def test_schema_declares_closed_enums_for_runtime_decisions():
         "applying",
         "applied",
     ]
+
+
+def test_schema_enforces_resolved_deadline_and_host_observation_contracts():
+    schema_path = BIN.parent / "schemas" / "executions.schema.json"
+    schema = json.loads(schema_path.read_text())
+    validator = Draft202012Validator(schema)
+    resolved = _valid_ledger()
+    item = resolved["executions"][0]
+    item.update(
+        {
+            "state": "terminal",
+            "terminal_at": "2026-08-09T20:05:00Z",
+            "terminal_reason": "completed",
+            "terminal_event_id": "terminal-schema-control",
+            "result_digest": "sha256:schema-control",
+            "start_deadline": None,
+            "idle_deadline": None,
+            "hard_deadline": None,
+            "reconcile_due": None,
+            "recovery_claim": None,
+        }
+    )
+    assert validator.is_valid(resolved)
+
+    retained_deadline = json.loads(json.dumps(resolved))
+    retained_deadline["executions"][0]["idle_deadline"] = "2026-08-09T20:19:00Z"
+    assert not validator.is_valid(retained_deadline)
+
+    invalid_observation = json.loads(json.dumps(resolved))
+    invalid_observation["incidents"] = [
+        {
+            "type": "host_event_observation",
+            "execution_id": "exec-alpha",
+            "attempt": 1,
+            "generation": 1,
+            "host_event_id": "claude:schema:invalid",
+        }
+    ]
+    assert not validator.is_valid(invalid_observation)
 
 
 def test_concurrent_mutations_serialize_without_lost_updates(tmp_path):

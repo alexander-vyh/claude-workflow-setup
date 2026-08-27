@@ -11,9 +11,9 @@ from __future__ import annotations
 import copy
 import datetime as dt
 
+from execution_event_identity import inspect_host_event, record_host_event
 from execution_store import load_trusted as load_trusted
 from execution_store import mutate_atomic as mutate_atomic
-from execution_store import inspect_host_event, record_host_event
 
 UTC = dt.timezone.utc
 START_SECONDS = 2 * 60
@@ -202,12 +202,36 @@ def _record_old_generation(
         existing.append(incident)
         ledger["updated_at"] = incident["recorded_at"]
 
+
+def _resolution_fields(kind: str, event: dict) -> dict[str, str]:
+    if kind not in {"child_terminal", "child_cancelled", "dispatch_aborted"}:
+        return {}
+    fields = {"host_event_id": _required_text(event, "host_event_id")}
+    if kind == "dispatch_aborted":
+        fields["terminal_reason"] = _required_text(event, "terminal_reason")
+        return fields
+    fields["terminal_event_id"] = _required_text(event, "terminal_event_id")
+    fields["terminal_reason"] = _required_text(event, "terminal_reason")
+    if kind == "child_terminal":
+        fields["result_digest"] = _required_text(event, "result_digest")
+    return fields
+
+
 def _clear_resolution_residue(item: dict) -> None:
     for field in ("start_deadline", "idle_deadline", "hard_deadline", "reconcile_due", "recovery_claim"):
         item[field] = None
 
 
 def apply_event(ledger: dict, event: dict, now: dt.datetime) -> dict:
+    """Apply one event atomically, preserving the caller ledger on rejection."""
+    updated = copy.deepcopy(ledger)
+    _apply_event(updated, event, now)
+    ledger.clear()
+    ledger.update(updated)
+    return ledger
+
+
+def _apply_event(ledger: dict, event: dict, now: dt.datetime) -> dict:
     """Apply one normalized host event, rejecting ambiguous identity."""
     timestamp = _iso(now)
     kind = event.get("kind")
@@ -215,6 +239,7 @@ def apply_event(ledger: dict, event: dict, now: dt.datetime) -> dict:
         raise ValueError("unknown event kind")
     item = find_execution(ledger, _required_text(event, "execution_id"))
     _attempt, generation = _validate_event_identity(ledger, event, item)
+    resolution = _resolution_fields(kind, event)
     observation, replayed = inspect_host_event(ledger.get("incidents", []), event)
     if replayed:
         return ledger
@@ -223,6 +248,7 @@ def apply_event(ledger: dict, event: dict, now: dt.datetime) -> dict:
             "child_terminal",
             "child_cancelled",
         }:
+            record_host_event(ledger.setdefault("incidents", []), event, observation)
             _record_old_generation(ledger, item, event, now)
             return ledger
         raise ValueError("generation does not match active execution")
@@ -268,34 +294,36 @@ def apply_event(ledger: dict, event: dict, now: dt.datetime) -> dict:
         item["last_activity_kind"] = activity_kind
         item["idle_deadline"] = _after(now, IDLE_SECONDS)
     elif kind == "child_terminal":
-        terminal_event_id = _required_text(event, "terminal_event_id")
+        terminal_event_id = resolution["terminal_event_id"]
         if (
             item["state"] == "terminal"
             and item["terminal_event_id"] == terminal_event_id
         ):
+            record_host_event(ledger.setdefault("incidents", []), event, observation)
             return ledger
         if item["state"] in RESOLVED_STATES:
             raise ValueError("execution already has different terminal evidence")
         item["state"] = "terminal"
         item["terminal_at"] = timestamp
-        item["terminal_reason"] = _required_text(event, "terminal_reason")
+        item["terminal_reason"] = resolution["terminal_reason"]
         item["terminal_event_id"] = terminal_event_id
-        item["result_digest"] = _required_text(event, "result_digest")
+        item["result_digest"] = resolution["result_digest"]
         item["last_activity_at"] = timestamp
         item["last_activity_kind"] = "terminal_event"
         _clear_resolution_residue(item)
     elif kind == "child_cancelled":
-        terminal_event_id = _required_text(event, "terminal_event_id")
+        terminal_event_id = resolution["terminal_event_id"]
         if (
             item["state"] == "cancelled"
             and item["terminal_event_id"] == terminal_event_id
         ):
+            record_host_event(ledger.setdefault("incidents", []), event, observation)
             return ledger
         if item["state"] in RESOLVED_STATES:
             raise ValueError("execution already has different terminal evidence")
         item["state"] = "cancelled"
         item["terminal_at"] = timestamp
-        item["terminal_reason"] = _required_text(event, "terminal_reason")
+        item["terminal_reason"] = resolution["terminal_reason"]
         item["terminal_event_id"] = terminal_event_id
         item["last_activity_at"] = timestamp
         item["last_activity_kind"] = "terminal_event"
@@ -305,13 +333,13 @@ def apply_event(ledger: dict, event: dict, now: dt.datetime) -> dict:
             raise ValueError("dispatch can be aborted only while queued and unbound")
         item["state"] = "aborted"
         item["terminal_at"] = timestamp
-        item["terminal_reason"] = _required_text(event, "terminal_reason")
-        item["terminal_event_id"] = _required_text(event, "host_event_id")
+        item["terminal_reason"] = resolution["terminal_reason"]
+        item["terminal_event_id"] = resolution["host_event_id"]
         item["result_digest"] = None
         _clear_resolution_residue(item)
     # snapshot_reconciled and the three diagnostic kinds are recognized but
     # intentionally cannot renew activity or deadlines.
-    record_host_event(ledger.setdefault("incidents", []), item, observation)
+    record_host_event(ledger.setdefault("incidents", []), event, observation)
     ledger["updated_at"] = timestamp
     return ledger
 

@@ -139,6 +139,7 @@ def late_generation_one_terminal(session_id: str = SESSION) -> dict:
         "terminal_event_id": "literal-late-generation-one",
         "terminal_reason": "completed",
         "result_digest": "sha256:late-generation-one",
+        "host_event_id": "claude:terminal:literal-late-generation-one",
     }
 
 
@@ -638,6 +639,7 @@ def test_public_sessionstart_durably_merges_reconciliation_with_concurrent_chang
             "recorded_at": incident["recorded_at"],
         }
         for incident in persisted["incidents"]
+        if incident["type"] == "old_generation_event"
     )
     assert active["generation"] == 2
     assert active["native_child_id"] == "native-generation-2"

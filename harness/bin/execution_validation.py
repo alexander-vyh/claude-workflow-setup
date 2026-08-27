@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import copy
 import datetime as dt
 from typing import Any
 
@@ -61,6 +62,14 @@ _RECOVERY_CLAIM_KEYS = {
     "expires_at",
 }
 _APPLICATION_CLAIM_KEYS = _RECOVERY_CLAIM_KEYS | {"claim_generation"}
+_HOST_OBSERVATION_KEYS = {
+    "type",
+    "execution_id",
+    "attempt",
+    "generation",
+    "host_event_id",
+    "event_fingerprint",
+}
 
 
 def _parse(value: str) -> dt.datetime:
@@ -202,6 +211,64 @@ def _valid_running_state(item: dict) -> bool:
     )
 
 
+def _legacy_resolved_evidence(item: object) -> bool:
+    if not isinstance(item, dict) or item.get("state") not in {"terminal", "cancelled"}:
+        return False
+    terminal_fields = ("terminal_at", "terminal_reason", "terminal_event_id")
+    if not _nonempty_text(item.get("native_child_id")) or not all(
+        _nonempty_text(item.get(field)) for field in terminal_fields
+    ):
+        return False
+    if item["state"] == "terminal":
+        return _nonempty_text(item.get("result_digest"))
+    return item.get("result_digest") is None
+
+
+def normalize_legacy_resolved_ledger(value: Any) -> Any:
+    """Clear only pre-resolution residue from version-one terminal evidence."""
+    if not isinstance(value, dict) or value.get("version") != 1:
+        return value
+    executions = value.get("executions")
+    if not isinstance(executions, list):
+        return value
+    resolved = [
+        item
+        for item in executions
+        if isinstance(item, dict) and item.get("state") in {"terminal", "cancelled"}
+    ]
+    if not all(_legacy_resolved_evidence(item) for item in resolved):
+        return value
+    normalized = copy.deepcopy(value)
+    for item in normalized["executions"]:
+        if item.get("state") in {"terminal", "cancelled"}:
+            for field in (
+                "start_deadline",
+                "idle_deadline",
+                "hard_deadline",
+                "reconcile_due",
+                "recovery_claim",
+            ):
+                item[field] = None
+    return normalized
+
+
+def _valid_host_observation(incident: dict, executions: dict[str, dict]) -> bool:
+    if set(incident) != _HOST_OBSERVATION_KEYS:
+        return False
+    execution = executions.get(incident.get("execution_id"))
+    fingerprint = incident.get("event_fingerprint")
+    return (
+        execution is not None
+        and _integer(incident.get("attempt"), minimum=1)
+        and incident["attempt"] == execution["attempt"]
+        and _integer(incident.get("generation"), minimum=1)
+        and _nonempty_text(incident.get("host_event_id"))
+        and isinstance(fingerprint, str)
+        and len(fingerprint) == 64
+        and set(fingerprint) <= set("0123456789abcdef")
+    )
+
+
 def _valid_execution(item: Any) -> bool:
     if not isinstance(item, dict) or set(item) != _EXECUTION_KEYS:
         return False
@@ -306,5 +373,15 @@ def is_valid_ledger(value: Any) -> bool:
     if not isinstance(incidents, list) or not all(
         isinstance(item, dict) for item in incidents
     ):
+        return False
+    executions_by_id = {item["execution_id"]: item for item in executions}
+    observations = [
+        item for item in incidents if item.get("type") == "host_event_observation"
+    ]
+    if not all(
+        _valid_host_observation(item, executions_by_id) for item in observations
+    ):
+        return False
+    if len({item["host_event_id"] for item in observations}) != len(observations):
         return False
     return True

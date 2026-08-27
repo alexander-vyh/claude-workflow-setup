@@ -719,6 +719,7 @@ def test_late_generation_terminal_is_incident_only_after_takeover(tmp_path) -> N
         "terminal_event_id": "late-terminal-generation-one",
         "terminal_reason": "completed",
         "result_digest": "sha256:late-generation-one",
+        "host_event_id": "claude:terminal:late-terminal-generation-one",
     }
 
     supervisor.reconcile_all(
@@ -756,6 +757,7 @@ def test_current_terminal_evidence_never_closes_beads(tmp_path) -> None:
         "terminal_event_id": "terminal-needs-verification",
         "terminal_reason": "completed",
         "result_digest": "sha256:unverified-result",
+        "host_event_id": "claude:terminal:needs-verification",
     }
 
     supervisor.reconcile_all(
@@ -917,6 +919,7 @@ def test_fresh_process_restart_recovers_once_with_canonical_context(tmp_path) ->
                 "terminal_event_id": "public-terminal-needs-verification",
                 "terminal_reason": "completed",
                 "result_digest": "sha256:public-unverified-result",
+                "host_event_id": "claude:terminal:public-needs-verification",
             },
             at("2026-08-09T20:04:00Z"),
         )

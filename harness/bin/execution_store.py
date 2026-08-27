@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import copy
 import fcntl
-import hashlib
 import json
 import os
 import pathlib
@@ -13,52 +12,8 @@ import stat
 import tempfile
 from collections.abc import Callable
 
-from execution_validation import is_valid_ledger
+from execution_validation import is_valid_ledger, normalize_legacy_resolved_ledger
 from trusted_source import is_trusted_file
-
-
-def inspect_host_event(
-    incidents: list[object], event: dict
-) -> tuple[tuple[str, str] | None, bool]:
-    """Return a normalized observation and whether it is an identical replay."""
-    host_event_id = event.get("host_event_id")
-    if host_event_id is None:
-        return None, False
-    if not isinstance(host_event_id, str) or not host_event_id:
-        raise ValueError("host event identity must be a non-empty string")
-    try:
-        canonical = json.dumps(event, sort_keys=True, separators=(",", ":"))
-    except (TypeError, ValueError) as exc:
-        raise ValueError("host event semantics are not serializable") from exc
-    observation = host_event_id, hashlib.sha256(canonical.encode()).hexdigest()
-    for incident in incidents:
-        if not isinstance(incident, dict) or incident.get("type") != "host_event_observation":
-            continue
-        if incident.get("host_event_id") != host_event_id:
-            continue
-        if incident.get("event_fingerprint") != observation[1]:
-            raise ValueError("host event replay has conflicting identity or semantics")
-        return observation, True
-    return observation, False
-
-
-def record_host_event(
-    incidents: list[dict], item: dict, observation: tuple[str, str] | None
-) -> None:
-    """Persist one accepted normalized host observation for replay comparison."""
-    if observation is None:
-        return
-    host_event_id, fingerprint = observation
-    incidents.append(
-        {
-            "type": "host_event_observation",
-            "execution_id": item["execution_id"],
-            "attempt": item["attempt"],
-            "generation": item["generation"],
-            "host_event_id": host_event_id,
-            "event_fingerprint": fingerprint,
-        }
-    )
 
 
 def load_trusted(path: pathlib.Path, expected_parent: str) -> dict | None:
@@ -70,6 +25,7 @@ def load_trusted(path: pathlib.Path, expected_parent: str) -> dict | None:
         value = json.loads(path.read_text())
     except (OSError, UnicodeError, json.JSONDecodeError):
         return None
+    value = normalize_legacy_resolved_ledger(value)
     if not is_valid_ledger(value) or value["parent_session_id"] != expected_parent:
         return None
     return value
@@ -102,6 +58,7 @@ def mutate_atomic(
                     current = json.loads(path.read_text())
                 except (OSError, UnicodeError, json.JSONDecodeError) as exc:
                     raise ValueError("ledger JSON is malformed") from exc
+                current = normalize_legacy_resolved_ledger(current)
                 if not is_valid_ledger(current):
                     raise ValueError("ledger does not match the execution schema")
             elif os.path.lexists(path) or initializer is None:
