@@ -21,6 +21,7 @@ SETTINGS="$CLAUDE_DIR/settings.json"
 PLUGIN_ID="escapement@escapement"
 INSTALLED="$CLAUDE_DIR/plugins/installed_plugins.json"
 TRANSACTION_HELPER="$REPO_DIR/scripts/plugin-update-transaction.py"
+WRAPPER_TARGET_HELPER="$REPO_DIR/scripts/plugin-wrapper-target.py"
 TRANSACTION_JOURNAL="$CLAUDE_DIR/.plugin-update-transaction.json"
 TRANSACTION_GUARD="$TRANSACTION_JOURNAL.commit-guard"
 TRANSACTION_LOCK="$CLAUDE_DIR/harness/.continuation-supervisor-install.lock"
@@ -42,6 +43,10 @@ done
 
 [[ -x "$TRANSACTION_HELPER" ]] || {
   echo "FATAL: plugin cutover transaction helper is missing: $TRANSACTION_HELPER" >&2
+  exit 1
+}
+[[ -x "$WRAPPER_TARGET_HELPER" ]] || {
+  echo "FATAL: plugin wrapper target helper is missing: $WRAPPER_TARGET_HELPER" >&2
   exit 1
 }
 [[ -x "$supervisor_installer" ]] || {
@@ -120,17 +125,42 @@ validate_plugin_root() {
   done
 }
 
+classify_managed_cache_wrapper_target() {
+  python3 -B "$WRAPPER_TARGET_HELPER" "$1" "$2" "$3" "$4"
+}
+
 is_managed_wrapper_target() {
   local target="$1"
   local component="$2"
-  case "$target" in
-    "$REPO_DIR/harness/$component" | \
-    "$CLAUDE_DIR"/.escapement-pinned*/harness/"$component" | \
-    "$CLAUDE_DIR"/.cws-pinned*/harness/"$component" | \
-    "$CLAUDE_DIR"/plugins/cache/escapement/escapement/*/harness/"$component")
-      return 0
-      ;;
-  esac
+  local status
+  local codex_cache="${CODEX_HOME:-$HOME/.codex}/plugins/cache/escapement/escapement"
+  local claude_cache="$CLAUDE_DIR/plugins/cache/escapement/escapement"
+
+  if classify_managed_cache_wrapper_target \
+    "$target" "$component" "$codex_cache" versioned-cache
+  then
+    return 0
+  else
+    status=$?
+    [[ "$status" -eq 1 ]] || return 1
+  fi
+  [[ "$target" == "$REPO_DIR/harness/$component" ]] && return 0
+  if classify_managed_cache_wrapper_target \
+    "$target" "$component" "$CLAUDE_DIR" pinned
+  then
+    return 0
+  else
+    status=$?
+    [[ "$status" -eq 1 ]] || return 1
+  fi
+  if classify_managed_cache_wrapper_target \
+    "$target" "$component" "$claude_cache" versioned-cache
+  then
+    return 0
+  else
+    status=$?
+    [[ "$status" -eq 1 ]] || return 1
+  fi
   return 1
 }
 
