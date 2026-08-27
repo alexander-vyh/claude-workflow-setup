@@ -84,6 +84,14 @@ SHARED_HOOK_SUPPORT = {
     "claude/hooks/oracle_brief_rapid.py",
     "claude/hooks/test_oracle_brief_policy.py",
     "claude/hooks/test_oracle_brief_landing.py",
+    # review_gate keeps its evidence store and its Claude-only dispatch ledger
+    # in bounded siblings. Omitting either makes the gate fail to import in the
+    # installed host, so `bd close` would stop being gated at all.
+    "claude/hooks/_review_record.py",
+    "claude/hooks/_review_ledger.py",
+    # The recording CLI is the escape path review_gate names in every denial.
+    # An installed gate that denies with an unrunnable remedy is a dead end.
+    "claude/hooks/escapement_review.py",
 }
 SHARED_RUNTIME_SUPPORT = {
     "bin/escapement-worktree",

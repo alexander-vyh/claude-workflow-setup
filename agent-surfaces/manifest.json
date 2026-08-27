@@ -150,12 +150,24 @@
     },
     {
       "id": "review_gate",
-      "description": "Claude in-session review-dispatch nudge.",
+      "description": "Require an independent, bead-bound, non-stale review before a bead can be closed.",
       "source": "claude/hooks/review_gate.py",
       "hosts": {
         "codex": {
-          "status": "unsupported",
-          "unsupported_reason": "Depends on Claude Agent tool metadata and review-dispatch semantics; Codex subagent mapping needs a dedicated adapter."
+          "status": "ready",
+          "events": [
+            {
+              "event": "PreToolUse",
+              "matcher": "Bash",
+              "command": "python3 -B claude/hooks/review_gate.py",
+              "timeout_seconds": 15
+            }
+          ],
+          "fixtures": [
+            "claude/hooks/tests/test_review_gate.py::test_codex_shape_allows_unverified_independence",
+            "claude/hooks/tests/test_review_gate.py::test_codex_shape_still_refuses_an_unreviewed_close",
+            "claude/hooks/tests/test_review_gate.py::test_codex_shape_records_no_dispatch"
+          ]
         },
         "claude": {
           "status": "ready",
@@ -167,7 +179,8 @@
             }
           ],
           "fixtures": [
-            "claude/hooks/tests/test_review_gate.py"
+            "claude/hooks/tests/test_review_gate.py",
+            "claude/hooks/tests/test_review_record.py"
           ]
         }
       }
