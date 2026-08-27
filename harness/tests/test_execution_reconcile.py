@@ -153,7 +153,7 @@ def beads_runner(parent_status: str = "closed", *, missing: str | None = None):
             if missing == "child":
                 return []
             if missing == "canonical_parent":
-                return [{"id": BEAD, "status": "closed"}]
+                return [{"id": BEAD, "status": "closed", "parent": ""}]
             return [{"id": BEAD, "status": "closed", "parent": ROOT}]
         if args == ["show", ROOT]:
             if missing == "parent":
@@ -347,7 +347,7 @@ def test_missing_beads_state_emits_unresolved_context() -> None:
     assert calls == [["show", BEAD]]
 
 
-def test_missing_canonical_parent_relationship_is_actionable_and_unresolved() -> None:
+def test_malformed_canonical_parent_relationship_is_actionable_and_unresolved() -> None:
     ledger = registered()
     run_bd, calls = beads_runner(missing="canonical_parent")
     payload = claude_session_start()

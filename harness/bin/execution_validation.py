@@ -7,7 +7,7 @@ import datetime as dt
 from typing import Any
 
 UTC = dt.timezone.utc
-EXECUTION_STATES = {"queued", "running", "terminal", "cancelled", "unknown"}
+EXECUTION_STATES = {"queued", "running", "terminal", "cancelled", "aborted", "unknown"}
 RECONCILE_STATES = {None, "start", "idle", "hard"}
 APPLICATION_STATES = {"unapplied", "applying", "applied"}
 RUNNING_ACTIVITY_KINDS = {
@@ -171,6 +171,15 @@ def _valid_terminal_state(item: dict) -> bool:
             all(_nonempty_text(item[key]) for key in terminal_fields)
             and item["result_digest"] is None
         )
+    if state == "aborted":
+        return (
+            item["native_child_id"] is None
+            and item["started_at"] is None
+            and item["last_activity_at"] is None
+            and item["last_activity_kind"] is None
+            and all(_nonempty_text(item[key]) for key in terminal_fields)
+            and item["result_digest"] is None
+        )
     return all(item[key] is None for key in (*terminal_fields, "result_digest"))
 
 
@@ -219,9 +228,12 @@ def _valid_execution(item: Any) -> bool:
         or item.get("reconcile_due") not in RECONCILE_STATES
     ):
         return False
+    if not _valid_timestamp(item.get("queued_at")):
+        return False
+    deadline_fields = ("start_deadline", "idle_deadline", "hard_deadline")
+    resolved = item["state"] in {"terminal", "cancelled", "aborted"}
     if not all(
-        _valid_timestamp(item.get(key))
-        for key in ("queued_at", "start_deadline", "idle_deadline", "hard_deadline")
+        _valid_timestamp(item.get(key), nullable=resolved) for key in deadline_fields
     ):
         return False
     if not all(
@@ -244,6 +256,12 @@ def _valid_execution(item: Any) -> bool:
         return False
     if recovery_claim is not None and not _claim_matches_execution(
         recovery_claim, item
+    ):
+        return False
+    if resolved and (
+        item["reconcile_due"] is not None
+        or recovery_claim is not None
+        or any(item[field] is not None for field in deadline_fields)
     ):
         return False
     if not _valid_running_state(item):

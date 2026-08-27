@@ -18,6 +18,7 @@ import sys
 
 from execution_cancellation import cancel_unreported, overdue_reason
 from execution_ledger import apply_event, reconcile_deadlines
+from execution_parent import classify_canonical_parent
 from execution_store import load_trusted, mutate_atomic
 import gate_signal
 from thread_identity import InvalidActorIdentity, resolve_thread_dir
@@ -104,8 +105,10 @@ def _canonical_parent_messages(ledger: dict, run_bd, messages: list[str]) -> Non
                 f"{bead_id}` before continuing.",
             )
             continue
-        parent_id = child.get("parent") or child.get("parent_id")
-        if not isinstance(parent_id, str) or not parent_id:
+        relationship, parent_id = classify_canonical_parent(child)
+        if relationship == "standalone":
+            continue
+        if relationship != "parented":
             _append_once(
                 messages,
                 f"canonical parent relationship for {bead_id} is unresolved; run `bd "
