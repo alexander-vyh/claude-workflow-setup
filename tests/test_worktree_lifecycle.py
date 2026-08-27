@@ -60,8 +60,9 @@ if "graphql" in args:
             "hasNextPage": False, "endCursor": None}}}
     print(json.dumps({"data": {"repository": repo}}))
 elif "/compare/" in joined:
-    print(json.dumps({"status": "ahead", "base_commit": {"sha": facts["merge_result"]},
-                      "head_commit": {"sha": facts["default_sha"]}}))
+    print(json.dumps(facts.get("compare", {
+        "status": "ahead", "base_commit": {"sha": facts["merge_result"]},
+        "head_commit": {"sha": facts["default_sha"]}})))
 else:
     print(json.dumps({"id": 42, "databaseId": 42, "full_name": "acme/widget",
                       "default_branch": "trunk", "defaultBranchRef": {
@@ -194,7 +195,7 @@ def _scenario(tmp_path: Path) -> LifecycleScenario:
     )
 
 
-def _land(scenario: LifecycleScenario) -> str:
+def _land(scenario: LifecycleScenario, *, advance_default: bool = True) -> str:
     (scenario.worktree / "feature.txt").write_text("feature\n", encoding="utf-8")
     git(scenario.worktree, "add", "feature.txt")
     git(scenario.worktree, "commit", "-m", "feature")
@@ -208,9 +209,10 @@ def _land(scenario: LifecycleScenario) -> str:
     )
     git(scenario.seed, "merge", "--no-ff", "--no-edit", f"origin/{scenario.branch}")
     merge_result = rev(scenario.seed)
-    (scenario.seed / "later.txt").write_text("later\n", encoding="utf-8")
-    git(scenario.seed, "add", "later.txt")
-    git(scenario.seed, "commit", "-m", "later")
+    if advance_default:
+        (scenario.seed / "later.txt").write_text("later\n", encoding="utf-8")
+        git(scenario.seed, "add", "later.txt")
+        git(scenario.seed, "commit", "-m", "later")
     default_sha = rev(scenario.seed)
     git(scenario.seed, "push", "origin", "trunk")
     Path(scenario.env["LIFECYCLE_GITHUB_FACTS"]).write_text(
