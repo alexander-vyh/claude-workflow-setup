@@ -34,7 +34,9 @@ def _session(record: object) -> str | None:
     return _text(record.get("session_id")) if isinstance(record, dict) else None
 
 
-def _only_execution(ledger: dict, session_id: str, dispatch_id: str, name: str) -> dict | None:
+def _only_execution(
+    ledger: dict, session_id: str, dispatch_id: str, name: str
+) -> dict | None:
     if ledger.get("parent_session_id") != session_id:
         return None
     matches = [
@@ -85,7 +87,12 @@ def _agent_use(record: object) -> tuple[str, str, str] | None:
     tool_id = _text(content.get("id"))
     input_value = content.get("input")
     name = _text(input_value.get("name")) if isinstance(input_value, dict) else None
-    if content.get("type") != "tool_use" or content.get("name") != "Agent":
+    if (
+        content.get("type") != "tool_use"
+        or content.get("name") != "Agent"
+        or not isinstance(input_value, dict)
+        or input_value.get("run_in_background") is not True
+    ):
         return None
     if tool_id is None or name is None:
         return None
@@ -99,7 +106,8 @@ def _result_tool_id(record: object) -> str | None:
     return _text(content.get("tool_use_id"))
 
 
-def _spawn_events(record: dict, ledger: dict) -> list[dict]:
+def _historical_interactive_spawn(record: dict, ledger: dict) -> list[dict]:
+    """Accept only the retained, exact historical interactive spawn result."""
     session_id = _session(record)
     result = record.get("toolUseResult")
     dispatch_id = _result_tool_id(record)
@@ -131,13 +139,56 @@ def _spawn_events(record: dict, ledger: dict) -> list[dict]:
 
 
 def observe_post_tool(payload: dict, ledger: dict) -> dict:
-    """Observe the exact interactive teammate-spawn result, if present."""
+    """Observe the public Claude 2.1.248 Agent PostToolUse envelope."""
     if not isinstance(payload, dict) or not isinstance(ledger, dict):
-        return {"status": "unresolved", "reason": "native_child_identity_unverified", "events": []}
-    events = _spawn_events(payload, ledger)
-    if not events:
-        return {"status": "unresolved", "reason": "native_child_identity_unverified", "events": []}
-    return {"status": "observed", "events": events}
+        return {
+            "status": "unresolved",
+            "reason": "native_child_identity_unverified",
+            "events": [],
+        }
+    session_id = _session(payload)
+    dispatch_id = _text(payload.get("tool_use_id"))
+    tool_input = payload.get("tool_input")
+    tool_response = payload.get("tool_response")
+    name = _text(tool_input.get("name")) if isinstance(tool_input, dict) else None
+    child_id = (
+        _text(tool_response.get("agentId")) if isinstance(tool_response, dict) else None
+    )
+    if (
+        payload.get("hook_event_name") != "PostToolUse"
+        or payload.get("tool_name") != "Agent"
+        or session_id is None
+        or dispatch_id is None
+        or not isinstance(tool_input, dict)
+        or name is None
+        or tool_input.get("run_in_background") is not True
+        or _text(tool_input.get("subagent_type")) is None
+        or not isinstance(tool_response, dict)
+        or tool_response.get("status") != "async_launched"
+        or tool_response.get("isAsync") is not True
+        or child_id is None
+    ):
+        return {
+            "status": "unresolved",
+            "reason": "native_child_identity_unverified",
+            "events": [],
+        }
+    execution = _only_execution(ledger, session_id, dispatch_id, name)
+    if (
+        execution is None
+        or execution.get("state") != "queued"
+        or execution.get("native_child_id") is not None
+    ):
+        return {
+            "status": "unresolved",
+            "reason": "native_child_identity_unverified",
+            "events": [],
+        }
+    bound = _event_base(ledger, execution, "child_bound", payload)
+    bound["native_child_id"] = child_id
+    started = _event_base(ledger, execution, "child_started", payload)
+    started["native_child_id"] = child_id
+    return {"status": "observed", "events": [bound, started]}
 
 
 def _background_spawn(records: list[dict], ledger: dict) -> list[dict]:
@@ -154,15 +205,19 @@ def _background_spawn(records: list[dict], ledger: dict) -> list[dict]:
         ):
             continue
         starts = [
-            item for item in records
+            item
+            for item in records
             if _session(item) == session_id
             and item.get("type") == "system"
             and item.get("subtype") == "task_started"
             and item.get("tool_use_id") == dispatch_id
             and _text(item.get("task_id")) is not None
+            and item.get("is_backgrounded") is True
+            and item.get("task_type") == "local_agent"
         ]
         launches = [
-            item for item in records
+            item
+            for item in records
             if _session(item) == session_id
             and _result_tool_id(item) == dispatch_id
             and isinstance(item.get("tool_use_result"), dict)
@@ -202,7 +257,11 @@ def _abort_events(records: list[dict], ledger: dict) -> list[dict]:
             content = _tool_content(item)
             if _session(item) != session_id or content is None:
                 continue
-            if content == {"type": "tool_result", "is_error": True, "tool_use_id": dispatch_id}:
+            if content == {
+                "type": "tool_result",
+                "is_error": True,
+                "tool_use_id": dispatch_id,
+            }:
                 matches.append(item)
         if len(matches) == 1:
             event = _event_base(ledger, execution, "dispatch_aborted", matches[0])
@@ -216,14 +275,19 @@ def _peer_events(records: list[dict], ledger: dict) -> list[dict]:
     for record in records:
         session_id = _session(record)
         origin = record.get("origin") if isinstance(record, dict) else None
-        if session_id is None or not isinstance(origin, dict) or origin.get("kind") != "peer":
+        if (
+            session_id is None
+            or not isinstance(origin, dict)
+            or origin.get("kind") != "peer"
+        ):
             continue
         child_id = _text(origin.get("senderTaskId"))
         name = _text(origin.get("name"))
         if child_id is None or name is None or origin.get("from") != name:
             continue
         matches = [
-            item for item in ledger.get("executions", [])
+            item
+            for item in ledger.get("executions", [])
             if isinstance(item, dict)
             and ledger.get("parent_session_id") == session_id
             and item.get("host") == "claude"
@@ -246,7 +310,9 @@ def _terminal_events(records: list[dict], ledger: dict) -> list[dict]:
     events: list[dict] = []
     for record in records:
         session_id = _session(record)
-        dispatch_id = _text(record.get("tool_use_id")) if isinstance(record, dict) else None
+        dispatch_id = (
+            _text(record.get("tool_use_id")) if isinstance(record, dict) else None
+        )
         child_id = _text(record.get("task_id")) if isinstance(record, dict) else None
         terminal_id = _text(record.get("uuid")) if isinstance(record, dict) else None
         if (
@@ -260,7 +326,8 @@ def _terminal_events(records: list[dict], ledger: dict) -> list[dict]:
         ):
             continue
         matches = [
-            item for item in ledger.get("executions", [])
+            item
+            for item in ledger.get("executions", [])
             if isinstance(item, dict)
             and ledger.get("parent_session_id") == session_id
             and item.get("host") == "claude"
@@ -288,14 +355,22 @@ def _terminal_events(records: list[dict], ledger: dict) -> list[dict]:
 def observe_transcript(path: Path, ledger: dict) -> list[dict]:
     """Read one transcript and emit only corroborated Claude lifecycle events."""
     try:
-        records = [json.loads(line) for line in Path(path).read_text().splitlines() if line]
+        records = [
+            json.loads(line) for line in Path(path).read_text().splitlines() if line
+        ]
     except (OSError, UnicodeError, json.JSONDecodeError):
         return []
-    if not all(isinstance(record, dict) for record in records) or not isinstance(ledger, dict):
+    if not all(isinstance(record, dict) for record in records) or not isinstance(
+        ledger, dict
+    ):
         return []
     spawn = _background_spawn(records, ledger)
     if spawn:
         return spawn
+    for record in records:
+        spawn = _historical_interactive_spawn(record, ledger)
+        if spawn:
+            return spawn
     abort = _abort_events(records, ledger)
     if abort:
         return abort

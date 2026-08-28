@@ -69,11 +69,17 @@ def _apply_normalized_events(
         try:
             from claude_agent_lifecycle import observe_transcript
 
-            events = [*events, *observe_transcript(pathlib.Path(transcript_path), ledger)]
-        except (OSError, TypeError, ValueError):
-            # Host observation is deliberately fail-open.  Its missing evidence
-            # remains visible through the managed ledger/completion boundary.
-            pass
+            observed = observe_transcript(pathlib.Path(transcript_path), ledger)
+        except Exception:
+            # The observer is optional host evidence.  Never let its own drift
+            # mutate durable state or deny Claude; leave managed completion
+            # unresolved and make that fact visible at SessionStart.
+            _append_once(
+                messages,
+                "Claude lifecycle observation failed; managed completion remains unresolved.",
+            )
+            return
+        events = [*events, *observed]
     for event in events:
         if not isinstance(event, dict) or not isinstance(event.get("generation"), int):
             _append_once(

@@ -31,6 +31,148 @@ import would_block_stop as stop_policy  # noqa: E402
 BACKGROUND_EXECUTION = "fixture-background-execution"
 INTERACTIVE_EXECUTION = "fixture-interactive-execution"
 NOW = dt.datetime(2026, 8, 27, 22, 10, 8, tzinfo=dt.timezone.utc)
+PROVENANCE_CONTRACT = {
+    "background_agent_tool_use": (
+        "78c8b09dfcc7371999c43da9ee1a74aa3800e469ac8a4e4284a218589729a21d",
+        [
+            "/type",
+            "/uuid",
+            "/session_id",
+            "/timestamp",
+            "/message/role",
+            "/message/content/0/type",
+            "/message/content/0/id",
+            "/message/content/0/name",
+            "/message/content/0/input/name",
+            "/message/content/0/input/subagent_type",
+            "/message/content/0/input/run_in_background",
+        ],
+    ),
+    "background_task_started": (
+        "dafa4f8c114e61c1bd9faf69e62ef5d6934ac886dd5f3fb6f4b16bf115685a6d",
+        [
+            "/type",
+            "/uuid",
+            "/session_id",
+            "/subtype",
+            "/task_id",
+            "/tool_use_id",
+            "/subagent_type",
+            "/is_backgrounded",
+            "/spawn_depth",
+            "/task_type",
+        ],
+    ),
+    "background_async_result": (
+        "78ba975b730adaea2b6a80bb4b9dfb3e3d731bc7372417e3a67c99ec4fadd5fb",
+        [
+            "/type",
+            "/uuid",
+            "/session_id",
+            "/timestamp",
+            "/message/role",
+            "/message/content/0/type",
+            "/message/content/0/tool_use_id",
+            "/tool_use_result/isAsync",
+            "/tool_use_result/status",
+            "/tool_use_result/agentId",
+        ],
+    ),
+    "background_task_terminal": (
+        "e3b459c9494e79abdfdccfac5f3d84bc408aa718fee00affb5876ca244fff7c4",
+        [
+            "/type",
+            "/uuid",
+            "/session_id",
+            "/subtype",
+            "/task_id",
+            "/tool_use_id",
+            "/status",
+        ],
+    ),
+    "background_peer_activity": (
+        "9bbbbc16f804706114a17c25469f032f4ffe90af3dd8c63e61ccddcc88f3bd70",
+        [
+            "/type",
+            "/uuid",
+            "/session_id",
+            "/subtype",
+            "/origin/kind",
+            "/origin/from",
+            "/origin/senderTaskId",
+            "/origin/name",
+        ],
+    ),
+    "no_spawn_agent_tool_use": (
+        "0a221ad1c32a6eec0a132a0c165fc157c664610394df5fe042469097f9d377b2",
+        [
+            "/type",
+            "/uuid",
+            "/session_id",
+            "/timestamp",
+            "/message/role",
+            "/message/content/0/type",
+            "/message/content/0/id",
+            "/message/content/0/name",
+            "/message/content/0/input/name",
+            "/message/content/0/input/subagent_type",
+            "/message/content/0/input/run_in_background",
+        ],
+    ),
+    "no_spawn_error_result": (
+        "42c69bb6808eeb65de10048e340ea84765f55b289d8bba2f556d12bcbdea8804",
+        [
+            "/type",
+            "/uuid",
+            "/session_id",
+            "/timestamp",
+            "/message/role",
+            "/message/content/0/type",
+            "/message/content/0/is_error",
+            "/message/content/0/tool_use_id",
+        ],
+    ),
+    "interactive_spawn_result": (
+        "e785e139cb81b696087f81ff73bc0a6414f0d591951ca61a6810b07c2beee4f2",
+        [
+            "/type",
+            "/uuid",
+            "/timestamp",
+            "/session_id",
+            "/version",
+            "/message/role",
+            "/message/content/0/type",
+            "/message/content/0/tool_use_id",
+            "/toolUseResult/status",
+            "/toolUseResult/teammate_id",
+            "/toolUseResult/agent_id",
+            "/toolUseResult/agent_type",
+            "/toolUseResult/name",
+        ],
+    ),
+    "historical_idle_notification": (
+        "47dc2363619ae0843d2b3482054c0b37c009deecd1b0113e0396edbe2f7acbd3",
+        [
+            "/type",
+            "/uuid",
+            "/timestamp",
+            "/version",
+            "/message/role",
+            "/message/content",
+        ],
+    ),
+    "historical_later_child_idle": (
+        "770c34d9c529f7a09f6350355373f995ba8d50e911c3865cf5f02b3a57a3a740",
+        [
+            "/type",
+            "/uuid",
+            "/timestamp",
+            "/version",
+            "/message/role",
+            "/message/content",
+        ],
+    ),
+}
 
 
 def at(value: str) -> dt.datetime:
@@ -150,12 +292,13 @@ def test_fixture_contract_is_independently_witnessed_and_structurally_exact() ->
     assert provenance["host"] == {"product": "Claude Code", "version": "2.1.247"}
     assert provenance["sanitizer"]["version"] == "1"
     assert provenance["sanitizer"]["name"] == "sanitize_claude_lifecycle_fixtures.py"
-    assert {record["fixture_id"] for record in provenance["records"]} == expected_ids
-    assert all(
-        re.fullmatch(r"[0-9a-f]{64}", record["raw_record_sha256"])
+    assert {
+        record["fixture_id"]: (
+            record["raw_record_sha256"],
+            record["retained_json_pointers"],
+        )
         for record in provenance["records"]
-    )
-    assert all(record["retained_json_pointers"] for record in provenance["records"])
+    } == PROVENANCE_CONTRACT
 
     dispatch = tool_use(captured["background_agent_tool_use"])
     started = captured["background_task_started"]
@@ -264,7 +407,9 @@ def test_matching_peer_activity_and_terminal_are_separate_prefixes(tmp_path) -> 
         captured["background_task_started"],
         captured["background_async_result"],
     )
-    apply_events(ledger, adapter.observe_transcript(spawn, ledger), "2026-08-27T22:10:08Z")
+    apply_events(
+        ledger, adapter.observe_transcript(spawn, ledger), "2026-08-27T22:10:08Z"
+    )
 
     peer = write_transcript(
         tmp_path / "peer.jsonl", captured["background_peer_activity"]
@@ -298,9 +443,7 @@ def test_matching_peer_activity_and_terminal_are_separate_prefixes(tmp_path) -> 
         "state": "applied",
         "claim": None,
         "claim_generation": 1,
-        "idempotency_key": (
-            f"execution:{BACKGROUND_EXECUTION}:attempt:1:generation:1"
-        ),
+        "idempotency_key": (f"execution:{BACKGROUND_EXECUTION}:attempt:1:generation:1"),
         "applied_at": "2026-08-27T22:10:13Z",
     }
     assert completion(ledger) == ("allow", "delegated_outcome_complete")
@@ -318,7 +461,9 @@ def test_historical_idle_text_is_nonterminal_and_later_peer_activity_is_accepted
         captured["background_task_started"],
         captured["background_async_result"],
     )
-    apply_events(ledger, adapter.observe_transcript(spawn, ledger), "2026-08-27T22:10:08Z")
+    apply_events(
+        ledger, adapter.observe_transcript(spawn, ledger), "2026-08-27T22:10:08Z"
+    )
     before_idle = copy.deepcopy(ledger)
     idle = write_transcript(
         tmp_path / "idle.jsonl",
@@ -380,6 +525,26 @@ def test_proven_no_spawn_aborts_without_fabricating_child_identity(tmp_path) -> 
     assert completion(ledger) == ("allow", "delegated_outcome_complete")
 
 
+def test_historical_interactive_spawn_requires_exact_structured_identity(
+    tmp_path,
+) -> None:
+    adapter = load_adapter()
+    ledger = interactive_ledger()
+    transcript = write_transcript(
+        tmp_path / "interactive-spawn.jsonl", fixtures()["interactive_spawn_result"]
+    )
+
+    events = adapter.observe_transcript(transcript, ledger)
+
+    assert [event["kind"] for event in events] == ["child_bound", "child_started"]
+    apply_events(ledger, events, "2026-08-27T18:00:23Z")
+    assert item(ledger)["state"] == "running"
+    assert (
+        item(ledger)["native_child_id"]
+        == (fixtures()["interactive_spawn_result"]["toolUseResult"]["agent_id"])
+    )
+
+
 @pytest.mark.parametrize(
     "mutation",
     [
@@ -392,6 +557,7 @@ def test_proven_no_spawn_aborts_without_fabricating_child_identity(tmp_path) -> 
     ],
 )
 def test_invalid_interactive_spawn_identity_shapes_produce_no_events_or_mutation(
+    tmp_path,
     mutation: str,
 ) -> None:
     adapter = load_adapter()
@@ -417,18 +583,26 @@ def test_invalid_interactive_spawn_identity_shapes_produce_no_events_or_mutation
     ledger = interactive_ledger()
     before = copy.deepcopy(ledger)
 
-    observed = adapter.observe_post_tool(payload, ledger)
+    transcript = write_transcript(tmp_path / f"interactive-{mutation}.jsonl", payload)
+    observed = adapter.observe_transcript(transcript, ledger)
 
-    assert observed["events"] == []
+    assert observed == []
     assert ledger == before
     assert item(ledger)["native_child_id"] is None
     assert completion(ledger) == ("block", "delegated_execution_unresolved")
-    assert observed.get("decision") != "deny"
 
 
 @pytest.mark.parametrize(
     "mutation",
-    ["agent-name", "tool-use-id", "task-id", "late-generation"],
+    [
+        "agent-name",
+        "tool-use-id",
+        "task-id",
+        "not-background",
+        "not-backgrounded",
+        "foreign-task-type",
+        "late-generation",
+    ],
 )
 def test_background_identity_mismatch_or_late_generation_mutates_nothing(
     tmp_path, mutation: str
@@ -447,6 +621,12 @@ def test_background_identity_mismatch_or_late_generation_mutates_nothing(
         records[1]["tool_use_id"] = "foreign-tool-use"
     elif mutation == "task-id":
         records[1]["task_id"] = "foreign-task-id"
+    elif mutation == "not-background":
+        tool_use(records[0])["input"]["run_in_background"] = False
+    elif mutation == "not-backgrounded":
+        records[1]["is_backgrounded"] = False
+    elif mutation == "foreign-task-type":
+        records[1]["task_type"] = "foreign_agent"
     else:
         ledger["executions"][0]["generation"] = 2
         ledger["executions"][0]["result_application"]["idempotency_key"] = (
@@ -472,7 +652,9 @@ def test_terminal_requires_exact_tool_and_bound_task_identity(tmp_path) -> None:
         captured["background_task_started"],
         captured["background_async_result"],
     )
-    apply_events(ledger, adapter.observe_transcript(spawn, ledger), "2026-08-27T22:10:08Z")
+    apply_events(
+        ledger, adapter.observe_transcript(spawn, ledger), "2026-08-27T22:10:08Z"
+    )
     for field in ("tool_use_id", "task_id"):
         malformed = copy.deepcopy(captured["background_task_terminal"])
         malformed[field] = f"foreign-{field}"
@@ -498,7 +680,9 @@ def test_replayed_spawn_prefix_does_not_mask_later_terminal_in_same_transcript(
         captured["background_task_terminal"],
     )
 
-    apply_events(ledger, adapter.observe_transcript(transcript, ledger), "2026-08-27T22:10:08Z")
+    apply_events(
+        ledger, adapter.observe_transcript(transcript, ledger), "2026-08-27T22:10:08Z"
+    )
 
     events = adapter.observe_transcript(transcript, ledger)
 

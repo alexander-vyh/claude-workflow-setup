@@ -27,6 +27,18 @@ SANITIZER_COMMAND = (
     "--provenance "
     "harness/tests/fixtures/claude-agent-lifecycle-2.1.247.provenance.json"
 )
+POST_TOOL_POINTERS = (
+    "/hook_event_name",
+    "/session_id",
+    "/tool_name",
+    "/tool_use_id",
+    "/tool_input/name",
+    "/tool_input/run_in_background",
+    "/tool_input/subagent_type",
+    "/tool_response/status",
+    "/tool_response/isAsync",
+    "/tool_response/agentId",
+)
 
 
 @dataclass(frozen=True)
@@ -292,6 +304,35 @@ def build(source_paths: dict[str, Path]) -> tuple[list[dict], dict]:
     return fixtures, provenance
 
 
+def build_post_tool(source_path: Path) -> tuple[dict, dict]:
+    """Sanitize the one reviewed Claude 2.1.248 PostToolUse capture."""
+    raw, digest = _record_and_digest(_read_lines(source_path), 1)
+    retained: dict[str, Any] = {}
+    for pointer in POST_TOOL_POINTERS:
+        _assign(retained, pointer, _lookup(raw, pointer))
+    provenance = {
+        "schema_version": 1,
+        "host": {"product": "Claude Code", "version": "2.1.248"},
+        "raw_digest_mode": "sha256 of exact UTF-8 JSONL record bytes including LF",
+        "raw_record_sha256": digest,
+        "source": {"capture_id": "post_tool_stream", "line": 1},
+        "retained_json_pointers": list(POST_TOOL_POINTERS),
+        "sanitizer": {
+            "name": Path(__file__).name,
+            "version": SANITIZER_VERSION,
+            "command": (
+                "python3 tools/sanitize_claude_lifecycle_fixtures.py "
+                "--post-tool-stream \"$XNCX_POST_TOOL_STREAM\" "
+                "--post-tool-fixture "
+                "harness/tests/fixtures/claude-post-tool-2.1.248.jsonl "
+                "--post-tool-provenance "
+                "harness/tests/fixtures/claude-post-tool-2.1.248.provenance.json"
+            ),
+        },
+    }
+    return retained, provenance
+
+
 def _fixture_text(fixtures: list[dict]) -> str:
     return "".join(json.dumps(item, sort_keys=True) + "\n" for item in fixtures)
 
@@ -307,6 +348,9 @@ def main() -> int:
     parser.add_argument("--historical-transcript", required=True, type=Path)
     parser.add_argument("--fixture", required=True, type=Path)
     parser.add_argument("--provenance", required=True, type=Path)
+    parser.add_argument("--post-tool-stream", type=Path)
+    parser.add_argument("--post-tool-fixture", type=Path)
+    parser.add_argument("--post-tool-provenance", type=Path)
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
     fixtures, provenance = build(
@@ -323,11 +367,32 @@ def main() -> int:
             raise SystemExit("fixture differs from reviewed raw capture allowlist")
         if args.provenance.read_text(encoding="utf-8") != expected_provenance:
             raise SystemExit("provenance differs from reviewed raw capture allowlist")
-        return 0
-    args.fixture.parent.mkdir(parents=True, exist_ok=True)
-    args.provenance.parent.mkdir(parents=True, exist_ok=True)
-    args.fixture.write_text(expected_fixture, encoding="utf-8")
-    args.provenance.write_text(expected_provenance, encoding="utf-8")
+    else:
+        args.fixture.parent.mkdir(parents=True, exist_ok=True)
+        args.provenance.parent.mkdir(parents=True, exist_ok=True)
+        args.fixture.write_text(expected_fixture, encoding="utf-8")
+        args.provenance.write_text(expected_provenance, encoding="utf-8")
+    post_tool_args = (
+        args.post_tool_stream,
+        args.post_tool_fixture,
+        args.post_tool_provenance,
+    )
+    if any(post_tool_args) and not all(post_tool_args):
+        raise SystemExit("post-tool stream, fixture, and provenance must be supplied together")
+    if all(post_tool_args):
+        post_fixture, post_provenance = build_post_tool(args.post_tool_stream)
+        expected_post_fixture = json.dumps(post_fixture, sort_keys=True) + "\n"
+        expected_post_provenance = _provenance_text(post_provenance)
+        if args.check:
+            if args.post_tool_fixture.read_text(encoding="utf-8") != expected_post_fixture:
+                raise SystemExit("post-tool fixture differs from reviewed raw capture allowlist")
+            if args.post_tool_provenance.read_text(encoding="utf-8") != expected_post_provenance:
+                raise SystemExit("post-tool provenance differs from reviewed raw capture allowlist")
+        else:
+            args.post_tool_fixture.parent.mkdir(parents=True, exist_ok=True)
+            args.post_tool_provenance.parent.mkdir(parents=True, exist_ok=True)
+            args.post_tool_fixture.write_text(expected_post_fixture, encoding="utf-8")
+            args.post_tool_provenance.write_text(expected_post_provenance, encoding="utf-8")
     return 0
 
 

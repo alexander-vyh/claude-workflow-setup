@@ -23,6 +23,7 @@ import pathlib
 import select
 import subprocess
 import sys
+import types
 
 import pytest
 
@@ -248,6 +249,32 @@ def test_closed_parent_with_no_due_attempts_emits_nothing() -> None:
     assert calls == [["show", BEAD], ["show", ROOT]]
 
 
+def test_lifecycle_adapter_failure_is_fail_open_and_leaves_ledger_unchanged(
+    tmp_path, monkeypatch
+) -> None:
+    ledger = registered()
+    before = copy.deepcopy(ledger)
+    transcript = tmp_path / "claude.jsonl"
+    transcript.write_text("{}\n", encoding="utf-8")
+    payload = claude_session_start()
+    payload["transcript_path"] = str(transcript)
+    adapter = types.SimpleNamespace(
+        observe_transcript=lambda _path, _ledger: (_ for _ in ()).throw(
+            RuntimeError("adapter drift")
+        )
+    )
+    monkeypatch.setitem(sys.modules, "claude_agent_lifecycle", adapter)
+    run_bd, _calls = beads_runner("closed")
+
+    result = execution_reconcile.reconcile_session(
+        payload, run_bd, lambda _session: ledger, at("2026-08-09T20:01:00Z")
+    )
+
+    assert result["status"] == "continue"
+    assert "managed completion remains unresolved" in result["additional_context"]
+    assert ledger == before
+
+
 @pytest.mark.parametrize(
     ("present", "value"),
     [(False, None), (True, None)],
@@ -279,9 +306,7 @@ def test_malformed_parent_never_becomes_standalone_at_session_start(
     malformed_parent,
 ) -> None:
     ledger = registered()
-    run_bd, calls = beads_runner_with_parent_value(
-        present=True, value=malformed_parent
-    )
+    run_bd, calls = beads_runner_with_parent_value(present=True, value=malformed_parent)
 
     result = execution_reconcile.reconcile_session(
         claude_session_start(),
@@ -291,9 +316,10 @@ def test_malformed_parent_never_becomes_standalone_at_session_start(
     )
 
     assert result["status"] == "continue"
-    assert f"canonical parent relationship for {BEAD} is unresolved" in result[
-        "additional_context"
-    ]
+    assert (
+        f"canonical parent relationship for {BEAD} is unresolved"
+        in result["additional_context"]
+    )
     assert calls == [["show", BEAD]]
 
 
