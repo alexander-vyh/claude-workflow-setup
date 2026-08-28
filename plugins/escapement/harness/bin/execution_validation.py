@@ -160,9 +160,15 @@ def _valid_terminal_state(item: dict) -> bool:
             and _nonempty_text(item["result_digest"])
         )
     if state == "cancelled":
+        # A cancellation records that no result will arrive, so it does NOT
+        # require a bound native child: the failure this recovers from is the
+        # child that dies before the host ever reports its identity. Requiring
+        # one here is what made an unreported execution permanently
+        # unterminalizable. `terminal` still requires it — a real result digest
+        # implies a real child that produced it — and a cancelled execution
+        # still carries no result_digest, so it can never be mistaken for one.
         return (
-            _nonempty_text(item["native_child_id"])
-            and all(_nonempty_text(item[key]) for key in terminal_fields)
+            all(_nonempty_text(item[key]) for key in terminal_fields)
             and item["result_digest"] is None
         )
     return all(item[key] is None for key in (*terminal_fields, "result_digest"))
