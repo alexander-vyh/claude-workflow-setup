@@ -78,11 +78,28 @@ class TestReviewIsBoundToTheStateItRead:
         ledger.record_dispatch("s1", [BEAD], REVIEWER, None)
         assert ledger.has_dispatch(BEAD, "s1", None)
 
-    def test_the_scan_path_also_compares_the_fingerprint(self):
-        """The session-less fallback must not be the weaker door."""
+    def test_a_session_less_lookup_reads_no_other_session(self):
+        """The session-less scan is gone; it was a cross-repo leak, not a door.
+
+        It used to glob every ledger in the shared `/tmp/claude-review-gate`,
+        and because `CLAUDE_SESSION_ID` is unset in this environment it was the
+        only branch that ever ran — so one repository's reviewer verdict could
+        corroborate another repository's bead.
+
+        A dispatch recorded by session s1 must be invisible to a lookup that
+        cannot name s1, EVEN when bead and fingerprint both match. Matching on
+        those two is precisely the coincidence that made the leak plausible
+        across repos, so this is the case that has to fail.
+        """
         ledger.record_dispatch("s1", [BEAD], REVIEWER, FP_A)
-        assert ledger.has_dispatch(BEAD, None, FP_A)
-        assert not ledger.has_dispatch(BEAD, None, FP_B)
+        assert ledger.has_dispatch(BEAD, "s1", FP_A), "own session still resolves"
+        assert not ledger.has_dispatch(BEAD, None, FP_A)
+        assert not ledger.has_dispatch(BEAD, None, None)
+
+    def test_one_session_cannot_read_another_sessions_dispatch(self):
+        """Naming a DIFFERENT session must not reach s1's ledger either."""
+        ledger.record_dispatch("s1", [BEAD], REVIEWER, FP_A)
+        assert not ledger.has_dispatch(BEAD, "s2", FP_A)
 
 
 class TestTheLedgerCannotBeForged:

@@ -162,7 +162,7 @@ class TestSelfWrittenReviewerIsNotIndependent:
             "prompt": "Please review escapement-abc1 and confirm it is fine.",
             "subagent_type": "general-purpose",
         })
-        assert not _review_ledger.has_dispatch("escapement-abc1")
+        assert not _review_ledger.has_dispatch("escapement-abc1", "s1")
 
     def test_isolated_reviewer_subagent_type_does_count(self):
         _dispatch({
@@ -171,7 +171,7 @@ class TestSelfWrittenReviewerIsNotIndependent:
             "prompt": "Find every way escapement-abc1 fails to deliver.",
             "subagent_type": "adversarial-reviewer",
         })
-        assert _review_ledger.has_dispatch("escapement-abc1")
+        assert _review_ledger.has_dispatch("escapement-abc1", "s1")
 
     def test_reviewer_dispatch_naming_no_bead_is_not_bound(self):
         """A reviewer that names no bead cannot vouch for a specific one."""
@@ -181,7 +181,7 @@ class TestSelfWrittenReviewerIsNotIndependent:
             "prompt": "Review the working tree.",
             "subagent_type": "adversarial-reviewer",
         })
-        assert not _review_ledger.has_dispatch("escapement-abc1")
+        assert not _review_ledger.has_dispatch("escapement-abc1", "s1")
 
 
 # ---------------------------------------------------------------------------
@@ -219,7 +219,7 @@ def test_codex_shape_records_no_dispatch():
         "subagent_type": "adversarial-reviewer",
         "prompt": "Review escapement-abc1.",
     }, session_id=None)
-    assert not _review_ledger.has_dispatch("escapement-abc1")
+    assert not _review_ledger.has_dispatch("escapement-abc1", "s1")
 
 
 # ---------------------------------------------------------------------------
