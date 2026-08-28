@@ -333,16 +333,35 @@ class TestReviewerAllowlistMatchesTheAgentRegistry:
 
 
 class TestStoreAvailability:
-    def test_a_bad_bead_id_is_not_an_unavailable_store(self):
-        """The split that closed the `-r "prose"` bypass.
+    """`bd show <not-a-bead>` fails exactly like `bd` being absent.
 
-        `bd show <not-a-bead>` fails exactly like `bd` being absent. Collapsing
-        the two meant any unresolvable target fell through the fail-open path
-        and closed unchecked.
-        """
-        assert rr.store_available() is True
-        assert rr.read_record("definitely-not-a-real-bead-xyz9") is None
+    Collapsing the two meant any unresolvable target fell through the
+    unreachable-store fail-open and closed unchecked — which is how
+    `bd close -r "finished the work"` got through, since the reason prose was
+    looked up as a bead id and naturally failed.
 
-    def test_unavailable_when_bd_cannot_run(self, monkeypatch):
+    Both cases are simulated rather than measured. An earlier version asserted
+    `store_available() is True` against the real machine and passed locally
+    while failing in CI, where `bd` is not installed — the assertion was about
+    the environment, not about the behaviour under test.
+    """
+
+    @staticmethod
+    def _bd_present_but_show_fails(args, cwd=None):
+        return "bd version 1.1.0" if args[:2] == ["bd", "--version"] else None
+
+    def test_a_bead_that_cannot_be_read_fails_closed(self, monkeypatch):
+        monkeypatch.setattr(rr, "_run", self._bd_present_but_show_fails)
+        assert rr.read_record("escapement-abc1") is None, (
+            "an unreadable bead must not be reported as an unreachable store"
+        )
+
+    def test_unavailable_only_when_bd_itself_cannot_run(self, monkeypatch):
         monkeypatch.setattr(rr, "_run", lambda *_a, **_k: None)
         assert rr.read_record("escapement-abc1") is rr.UNAVAILABLE
+
+    def test_store_available_reflects_whether_bd_runs(self, monkeypatch):
+        monkeypatch.setattr(rr, "_run", lambda *_a, **_k: "bd version 1.1.0")
+        assert rr.store_available() is True
+        monkeypatch.setattr(rr, "_run", lambda *_a, **_k: None)
+        assert rr.store_available() is False
