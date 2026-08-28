@@ -228,3 +228,71 @@ class TestReservedMetadataIsNotHandWritable:
     ])
     def test_unrelated_metadata_is_untouched(self, command):
         assert not rc.writes_reserved_metadata(command, "escapement_review")
+
+
+class TestCommandSubstitutionIsNotAHidingPlace:
+    """A `bd close` inside `$(...)` or backticks executes, so it must be seen.
+
+    Found the hard way, and by accident, which is the part that matters. While
+    filing an unrelated bead I wrote a description containing the literal text
+    "a gate whose compliant path is unreachable" alongside a backticked
+    `bd close` as an illustration. The shell performed the substitution — inside
+    a double-quoted argument, which is exactly where the shell DOES expand it —
+    and really closed the last-touched issue. The gate never saw the command,
+    because `_bd_segments` looked at argv[0] of each separator-delimited segment
+    and argv[0] there was `bd create`.
+
+    This is the same failure class the module docstring already lists — an
+    ordinary usage that silently isn't gated, so no signal is produced and
+    nobody learns anything — and it is strictly more common than the `eval` and
+    `sh -c` cases named as conscious limits. Single quotes are a real exception
+    and stay one: the shell does not expand inside them either.
+    """
+
+    @pytest.mark.parametrize("command", [
+        "echo $(bd close escapement-abc1)",
+        "echo `bd close escapement-abc1`",
+        'bd create "t" -d "see `bd close escapement-abc1` here"',
+        'RESULT="$(bd close escapement-abc1)"; echo done',
+        "echo $(echo $(bd close escapement-abc1))",
+    ])
+    def test_a_substituted_close_is_still_a_close(self, command):
+        assert rc.close_targets(command) == ["escapement-abc1"], command
+
+    @pytest.mark.parametrize("command", [
+        "echo $(bd close)",
+        'bd create "t" -d "run `bd close` to finish"',
+    ])
+    def test_an_unidentifiable_substituted_close_is_refused_not_ignored(
+        self, command
+    ):
+        """`[]` means "refuse", `None` means "not a close" — the difference is
+        the whole bypass. A bare `bd close` shuts the last-touched issue."""
+        assert rc.close_targets(command) == [], command
+
+    def test_single_quotes_really_do_protect_the_text(self):
+        """The shell does not expand inside single quotes, so neither do we.
+
+        Refusing this would deny agents writing about the gate in prose — the
+        false-positive direction that teaches people to route around it.
+        """
+        assert rc.close_targets(
+            "bd create 'doc' -d 'the literal text $(bd close x) is an example'"
+        ) is None
+
+    def test_an_ordinary_parenthesis_in_a_reason_is_not_a_boundary(self):
+        """A `)` only closes a substitution that was opened.
+
+        Treating every `)` as a separator would split a waiver reason in half,
+        strand the env prefix in a different segment, and silently turn a valid
+        waiver into an unwaived close.
+        """
+        assert rc.close_targets(
+            'REVIEW_WAIVER="tracked separately (see escapement-mn2q) and not '
+            'reviewable here" bd close escapement-abc1'
+        ) == ["escapement-abc1"]
+        assert rc.waiver_reason(
+            'REVIEW_WAIVER="tracked separately (see escapement-mn2q) and not '
+            'reviewable here" bd close escapement-abc1',
+            "REVIEW_WAIVER",
+        ).startswith("tracked separately (see")

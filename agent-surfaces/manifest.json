@@ -150,7 +150,7 @@
     },
     {
       "id": "review_gate",
-      "description": "Require an independent, bead-bound, non-stale review before a bead can be closed.",
+      "description": "Require an independent, bead-bound, non-stale review before a bead can be closed. On Claude the reviewer's own returned text is captured at Agent PostToolUse and stored as the verdict, so recorded findings are the reviewer's rather than the implementer's, and a verdict naming unresolved blocking findings refuses the close until the work changes and is re-reviewed. CAPABILITY NOTE: verdict capture is conditional on _review_verdict.VERDICT_CAPTURE_SUPPORTED, which is currently False because whether a hook can observe a subagent's final text is still UNPROVEN (escapement-g27c holds the open probe; the only evidence is binary-string inference, not a captured payload). Until it is True the traceability rule is inert and only the dispatch-level corroboration, the blocking rule, and the reviewer allowlist are enforced.",
       "source": "claude/hooks/review_gate.py",
       "hosts": {
         "codex": {
@@ -176,11 +176,18 @@
               "event": "PreToolUse",
               "matcher": "Agent|Bash",
               "command": "python3 -B ~/.claude/hooks/review_gate.py"
+            },
+            {
+              "event": "PostToolUse",
+              "matcher": "Agent",
+              "command": "python3 -B ~/.claude/hooks/review_gate.py"
             }
           ],
           "fixtures": [
             "claude/hooks/tests/test_review_gate.py",
-            "claude/hooks/tests/test_review_record.py"
+            "claude/hooks/tests/test_review_record.py",
+            "claude/hooks/tests/test_review_verdict.py",
+            "claude/hooks/tests/test_review_ledger.py"
           ]
         }
       }

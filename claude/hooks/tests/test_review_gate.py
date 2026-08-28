@@ -61,7 +61,9 @@ def isolated_ledger(tmp_path):
 
 
 def _record(bead="escapement-abc1", findings=SUBSTANTIVE, fingerprint=FINGERPRINT,
-            independent=True, reviewer="adversarial-reviewer"):
+            independent=True, reviewer="adversarial-reviewer",
+            blocking=False, verdict_source="captured",
+            verdict_digest="c" * 64):
     return {
         "v": _review_record.RECORD_VERSION,
         "bead": bead,
@@ -70,6 +72,9 @@ def _record(bead="escapement-abc1", findings=SUBSTANTIVE, fingerprint=FINGERPRIN
         "recorded_at": "2026-08-27T00:00:00+00:00",
         "findings": findings,
         "independent": independent,
+        "blocking": blocking,
+        "verdict_source": verdict_source,
+        "verdict_digest": verdict_digest,
         "host": "cli",
     }
 
@@ -100,7 +105,7 @@ def _close(command="bd close escapement-abc1", record=None,
     return code, decision, signal
 
 
-def _dispatch(tool_input, session_id="s1"):
+def _dispatch(tool_input, session_id="s1", fingerprint=FINGERPRINT):
     payload = {
         "hook_event_name": "PreToolUse",
         "tool_name": "Agent",
@@ -109,7 +114,7 @@ def _dispatch(tool_input, session_id="s1"):
     }
     if session_id is not None:
         payload["session_id"] = session_id
-    with patch.object(review_gate, "work_fingerprint", return_value=FINGERPRINT), \
+    with patch.object(review_gate, "work_fingerprint", return_value=fingerprint), \
          patch("sys.stdin", io.StringIO(json.dumps(payload))), \
          patch("sys.stdout", io.StringIO()):
         review_gate.main()
@@ -543,3 +548,309 @@ class TestCommandToBeadBinding:
         assert self._bead_asked_for(
             "bd close escapement-abc1 escapement-zzz9"
         ) == ["escapement-abc1", "escapement-zzz9"]
+
+
+# ---------------------------------------------------------------------------
+# escapement-1l04 — the recorded findings must be the reviewer's own output
+# ---------------------------------------------------------------------------
+
+class TestVerdictBinding:
+    """The bypass that survived every earlier hardening pass.
+
+    Dispatch a genuinely isolated `escapement:adversarial-reviewer` naming the
+    bead, never read its answer, write your own >=120-character verdict, close.
+    `independent: true` was granted for the DISPATCH — recorded at `Agent`
+    PreToolUse, before the subagent emitted a single token — so the reviewer's
+    verdict, or its total failure to produce one, was never consulted.
+
+    These are the controls for that. Each one must FAIL to close.
+    """
+
+    def test_verdict_written_by_the_implementer_is_refused(self):
+        """The whole bead in one control.
+
+        A dispatch happened (so `independent` is legitimately true) but the
+        findings are the implementer's own prose. If this ever passes again,
+        the gate has gone back to certifying that a reviewer was *summoned*
+        rather than that a reviewer was *read*.
+        """
+        with patch.object(review_gate, "VERDICT_CAPTURE_SUPPORTED", True):
+            _, decision, _ = _close(
+                record=_record(verdict_source="implementer")
+            )
+        assert decision is not None, "an unread reviewer must not close the bead"
+        assert decision["permissionDecision"] == "deny"
+        reason = decision["permissionDecisionReason"]
+        assert "reviewer" in reason.lower()
+        assert "REVIEW_WAIVER" in reason, "every deny must carry its escape"
+
+    def test_verdict_missing_entirely_is_refused(self):
+        """The reviewer crashed, or returned nothing, and nobody noticed."""
+        with patch.object(review_gate, "VERDICT_CAPTURE_SUPPORTED", True):
+            _, decision, _ = _close(
+                record=_record(verdict_source=None, verdict_digest=None)
+            )
+        assert decision["permissionDecision"] == "deny"
+
+    def test_captured_verdict_closes_normally(self):
+        """Positive control: the honest path must stay frictionless."""
+        with patch.object(review_gate, "VERDICT_CAPTURE_SUPPORTED", True):
+            _, decision, signal = _close(record=_record())
+        assert decision is None
+        assert signal.call_args.kwargs["decision"] == "allow"
+
+    def test_blocking_verdict_at_an_unchanged_tree_is_refused(self):
+        """Re-review-after-repair, expressed through the existing fingerprint.
+
+        The reviewer said BLOCK. The fingerprint on the record equals the
+        current one, so *nothing has changed since it said so* — the blockers
+        cannot have been addressed. The complementary case (the code did
+        change) is already refused by the staleness rule, so between the two a
+        blocking verdict forces both a repair and a fresh review.
+        """
+        _, decision, _ = _close(record=_record(blocking=True))
+        assert decision is not None, "unaddressed blockers must not close"
+        assert decision["permissionDecision"] == "deny"
+        assert "blocking" in decision["permissionDecisionReason"].lower()
+
+    def test_blocking_verdict_closes_after_repair_and_a_fresh_verdict(self):
+        """Positive control for the repair loop.
+
+        Repair moved the tree to a new fingerprint and a re-review recorded a
+        non-blocking verdict there. That must close — a gate that cannot be
+        satisfied after the work is fixed is a dead end, not a gate.
+        """
+        repaired = "b" * 64
+        _, decision, _ = _close(
+            record=_record(blocking=False, fingerprint=repaired),
+            fingerprint=repaired,
+        )
+        assert decision is None
+
+    def test_blocking_verdict_can_still_be_waived_with_a_reason(self):
+        """Rule 1: the escape path has to actually work on this branch too."""
+        _, decision, signal = _close(
+            command=(
+                'REVIEW_WAIVER="reviewer flagged a pre-existing defect that '
+                'is tracked separately as escapement-mn2q" bd close escapement-abc1'
+            ),
+            record=_record(blocking=True),
+        )
+        assert decision is None
+        assert signal.call_args.kwargs["decision"] == "allow"
+
+    def test_verdict_schema_predating_this_gate_is_refused_accurately(self):
+        """Migration: a v1 record must not be described as "no review".
+
+        v1 records were written under an oracle that never looked at the
+        reviewer's output. Honouring them would grandfather in exactly the
+        evidence this bead exists to stop accepting. But the denial has to say
+        *which* thing is wrong: telling an agent that no review exists, when
+        one plainly does, sends it to re-run a reviewer without ever
+        explaining why the first one stopped counting.
+        """
+        stale_schema = _record()
+        stale_schema["v"] = 1
+        stale_schema.pop("verdict_source", None)
+        _, decision, _ = _close(record=stale_schema)
+        assert decision["permissionDecision"] == "deny"
+        reason = decision["permissionDecisionReason"]
+        assert "no independent review is on record" not in reason.lower(), (
+            "a v1 record is an OUTDATED review, not an absent one"
+        )
+        assert "re-record" in reason.lower() or "record" in reason.lower()
+
+    def test_codex_shape_skips_verdict_capture_rather_than_failing(self):
+        """A check we cannot run must not read as a check that failed.
+
+        Codex exposes no `Agent` event at all, so no verdict can ever be
+        captured there. Denying on that would make the gate unsatisfiable on
+        one of the two supported hosts.
+        """
+        with patch.object(review_gate, "VERDICT_CAPTURE_SUPPORTED", True):
+            _, decision, _ = _close(
+                record=_record(independent="unverified", verdict_source=None),
+                session_id=None,
+            )
+        assert decision is None
+
+
+class TestVerdictChainEndToEnd:
+    """The whole path with nothing between the reviewer and the close mocked.
+
+    Three real defects in this gate shipped green because the tests mocked
+    exactly the boundary that was broken: `read_record` and `work_fingerprint`
+    here, `write_record` in test_review_record.py. Every assertion above this
+    class sits above at least one of those mocks, so a regression in the
+    PreToolUse -> PostToolUse -> record -> close chain — the ledger never being
+    updated, the verdict binding to the wrong dispatch entry, the record's
+    schema version drifting out of the readable set — would keep them all green
+    while the shipped gate stopped delivering the outcome.
+
+    So here the ledger is a real directory, the record is built by the real
+    recording CLI from what the real ledger holds, and only `bd` itself is
+    replaced. The question each test asks is the user-facing one: after this
+    exact sequence of events, does the bead close?
+    """
+
+    BLOCKING_VERDICT = (
+        "BLOCKER: the dispatch ledger is written at PreToolUse, so the "
+        "reviewer's verdict is never consulted. An implementer can dispatch a "
+        "real reviewer, ignore it, and write its own findings. Also: "
+        "--reviewer is never validated against the allowlist."
+    )
+    CLEAN_VERDICT = (
+        "Read the close path against the bead's acceptance criteria and traced "
+        "the ledger through PreToolUse and PostToolUse. No blockers: the "
+        "captured verdict is what reaches the record, and the fingerprint "
+        "comparison rejects a reviewer that read an earlier state."
+    )
+
+    def _run_chain(self, verdict, *, capture=True, bead="escapement-abc1",
+                   fingerprint=FINGERPRINT):
+        """Dispatch a reviewer, optionally let it answer, then record.
+
+        Returns the record the CLI actually wrote, or None if it wrote none.
+        """
+        import escapement_review as cli
+
+        tool_input = {
+            "subagent_type": "escapement:adversarial-reviewer",
+            "description": f"review {bead}",
+            "prompt": f"Review the implementation of {bead}.",
+        }
+        _dispatch(tool_input, fingerprint=fingerprint)
+
+        if capture and verdict is not None:
+            payload = {
+                "hook_event_name": "PostToolUse",
+                "tool_name": "Agent",
+                "session_id": "s1",
+                "tool_input": tool_input,
+                "tool_response": {"content": [{"type": "text", "text": verdict}]},
+                "cwd": "/tmp",
+            }
+            with patch("sys.stdin", io.StringIO(json.dumps(payload))), \
+                 patch("sys.stdout", io.StringIO()):
+                review_gate.main()
+
+        written = []
+        with patch.object(cli, "write_record",
+                          side_effect=lambda b, r, cwd=None: written.append(r) or True), \
+             patch.object(cli, "work_fingerprint", return_value=fingerprint), \
+             patch.dict("os.environ", {"CLAUDE_SESSION_ID": "s1"}):
+            cli.main([
+                "record", "--bead", bead,
+                "--findings", "I read the reviewer's output and it looked fine "
+                              "to me, so I am recording that the work is good "
+                              "and ready to land without further changes.",
+            ])
+        return written[0] if written else None
+
+    def test_verdict_the_reviewer_actually_returned_is_what_gets_stored(self):
+        record = self._run_chain(self.CLEAN_VERDICT)
+        assert record["findings"] == self.CLEAN_VERDICT
+        assert record["verdict_source"] == "captured"
+        assert "looked fine to me" in (record["response"] or ""), (
+            "the implementer's own account should survive as advisory text"
+        )
+        assert record["reviewer"] == "escapement:adversarial-reviewer"
+
+    def test_clean_captured_verdict_closes_the_bead(self):
+        record = self._run_chain(self.CLEAN_VERDICT)
+        with patch.object(review_gate, "VERDICT_CAPTURE_SUPPORTED", True):
+            _, decision, _ = _close(record=record)
+        assert decision is None, "an honestly reviewed bead must still close"
+
+    def test_reviewer_findings_ignored_by_the_implementer_do_not_close(self):
+        """The bead's acceptance criterion, end to end.
+
+        A real isolated reviewer ran and said BLOCKER. The implementer recorded
+        its own cheerful summary anyway. The close must be refused, and refused
+        because of what the REVIEWER said — not because of anything the
+        implementer typed.
+        """
+        record = self._run_chain(self.BLOCKING_VERDICT)
+        assert record["blocking"] is True, (
+            "the reviewer's own text must drive the classification"
+        )
+        _, decision, _ = _close(record=record)
+        assert decision is not None
+        assert decision["permissionDecision"] == "deny"
+        assert "blocking" in decision["permissionDecisionReason"].lower()
+
+    def test_dispatch_with_no_answer_is_not_a_review(self):
+        """The reviewer never returned — crashed, aborted, or still running.
+
+        Before this bead, this was indistinguishable from a completed clean
+        review, because the ledger entry that vouched for it was written before
+        the subagent started.
+        """
+        record = self._run_chain(None, capture=False)
+        assert record["verdict_source"] is None
+        assert record["independent"] is True, (
+            "a dispatch DID happen; that fact is not what is in doubt"
+        )
+        with patch.object(review_gate, "VERDICT_CAPTURE_SUPPORTED", True):
+            _, decision, _ = _close(record=record)
+        assert decision["permissionDecision"] == "deny"
+        assert "never captured" in decision["permissionDecisionReason"]
+
+    def test_the_repair_loop_actually_terminates(self):
+        """Blocked -> repair -> re-review -> closes. The full cycle.
+
+        A repair is not just "a second review"; it MOVES THE FINGERPRINT,
+        because changing the code is what a repair is. That is what retires the
+        first reviewer's blocking entry — it no longer corroborates anything at
+        the new tree state — and it is why the blocking rule needs no expiry of
+        its own.
+
+        This test originally simulated the repair without moving the
+        fingerprint, and the concurrent-reviewer fix (blocking outranks clean)
+        correctly broke it: at one unchanged tree state, an earlier BLOCK is
+        not superseded by a later clean opinion. Two reviews at the same
+        fingerprint are second opinions; two reviews at different fingerprints
+        are a repair loop. Only the second one closes.
+        """
+        blocked = self._run_chain(self.BLOCKING_VERDICT)
+        assert blocked["blocking"] is True
+        _, decision, _ = _close(record=blocked)
+        assert decision["permissionDecision"] == "deny"
+
+        repaired_fp = "b" * 64
+        after = self._run_chain(self.CLEAN_VERDICT, fingerprint=repaired_fp)
+        assert after["findings"] == self.CLEAN_VERDICT
+        assert after["blocking"] is False
+        _, decision, _ = _close(record=after, fingerprint=repaired_fp)
+        assert decision is None, (
+            "a gate that cannot be satisfied after the work is fixed is a dead "
+            "end, not a gate"
+        )
+
+    def test_a_later_clean_opinion_does_not_retire_a_blocker(self):
+        """Same tree, two reviewers, one blocking — the blocker still stands.
+
+        The negative half of the test above. Without this, "run a second
+        reviewer until one of them likes it" replaces "fix what the first one
+        found", and no code has to change for the close to succeed.
+        """
+        self._run_chain(self.BLOCKING_VERDICT)
+        second = self._run_chain(self.CLEAN_VERDICT)
+        assert second["blocking"] is True, (
+            "a second opinion at the same tree state does not overrule a BLOCK"
+        )
+        _, decision, _ = _close(record=second)
+        assert decision["permissionDecision"] == "deny"
+
+    def test_the_record_written_is_readable_by_the_gate(self):
+        """Guards the version bump against a one-sided edit.
+
+        `RECORD_VERSION` is what the CLI writes and `READABLE_RECORD_VERSIONS`
+        is what the gate will parse. Bumping the first without the second makes
+        every fresh record unreadable, and the gate would then tell every agent
+        in the repository that no review is on record — with all unit tests
+        still green, because they construct their records by hand.
+        """
+        record = self._run_chain(self.CLEAN_VERDICT)
+        assert record["v"] == _review_record.RECORD_VERSION
+        assert record["v"] in _review_record.READABLE_RECORD_VERSIONS

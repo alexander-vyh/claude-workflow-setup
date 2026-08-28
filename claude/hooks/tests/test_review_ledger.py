@@ -157,3 +157,43 @@ class TestStaleness:
         old = os.stat(path).st_mtime - ledger.MAX_DISPATCH_AGE_SECONDS - 60
         os.utime(path, (old, old))
         assert not ledger.has_dispatch(BEAD, None, FP_A)
+
+
+class TestConcurrentReviewersCannotBeShoppedFor:
+    """Two reviewers, one blocking — the blocking one must win.
+
+    Found by mutation testing, not by reasoning: flipping `record_verdict`'s
+    tiebreak from newest to oldest left the whole suite green, which meant the
+    choice of *which* concurrent verdict counts was unconstrained. With two
+    reviewers dispatched in parallel against the same bead at the same tree
+    state, the entries' relative order is arbitrary, so an unconstrained
+    tiebreak makes "dispatch two reviewers and record whichever one liked it"
+    a working bypass — and it needs no bad faith to happen by accident.
+    """
+
+    def _two_reviewers(self, tmp_path, monkeypatch, blocking_first: bool):
+        monkeypatch.setattr(ledger, "LEDGER_DIR", tmp_path / "ledger")
+        fp = "f" * 64
+        for _ in range(2):
+            ledger.record_dispatch(
+                "s1", ["escapement-abc1"], "escapement:adversarial-reviewer", fp
+            )
+        blocking = "BLOCKER: the captured verdict is never compared to anything."
+        clean = "No blockers. The close path binds the record to the bead id."
+        order = [blocking, clean] if blocking_first else [clean, blocking]
+        for verdict in order:
+            ledger.record_verdict(
+                "s1", ["escapement-abc1"], "escapement:adversarial-reviewer", verdict
+            )
+        return ledger.find_dispatch("escapement-abc1", "s1", fp)
+
+    @pytest.mark.parametrize("blocking_first", [True, False])
+    def test_the_blocking_verdict_is_the_one_that_counts(
+        self, tmp_path, monkeypatch, blocking_first
+    ):
+        entry = self._two_reviewers(tmp_path, monkeypatch, blocking_first)
+        assert entry is not None
+        assert entry["blocking"] is True, (
+            "arrival order must not decide whether a blocker is honoured"
+        )
+        assert "BLOCKER" in entry["verdict"]

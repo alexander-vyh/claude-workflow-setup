@@ -90,6 +90,11 @@ SHARED_HOOK_SUPPORT = {
     "claude/hooks/_review_record.py",
     "claude/hooks/_review_ledger.py",
     "claude/hooks/_review_command.py",
+    # Verdict capture and blocking classification. `_review_ledger` imports it
+    # lazily so capture degrades rather than taking the gate down, but
+    # review_gate imports it at module scope — omit it and every `bd close`
+    # stops being gated.
+    "claude/hooks/_review_verdict.py",
     # The recording CLI is the escape path review_gate names in every denial.
     # An installed gate that denies with an unrunnable remedy is a dead end.
     "claude/hooks/escapement_review.py",

@@ -18,6 +18,7 @@ it) while the shipped gate stopped detecting stale reviews entirely.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -254,7 +255,7 @@ class TestRecordingCLI:
         assert calls[0][1]["fingerprint"] == FP
 
     def test_marks_independence_unverified_without_a_dispatch(self, monkeypatch):
-        monkeypatch.setattr(cli, "has_dispatch", lambda _b, _s=None, _f=None: False)
+        monkeypatch.setattr(cli, "find_dispatch", lambda _b, _s=None, _f=None: None)
         _, calls = self._run(
             ["record", "--bead", "escapement-abc1", "--findings", LONG],
             monkeypatch,
@@ -262,7 +263,10 @@ class TestRecordingCLI:
         assert calls[0][1]["independent"] == "unverified"
 
     def test_marks_independence_true_with_a_dispatch(self, monkeypatch):
-        monkeypatch.setattr(cli, "has_dispatch", lambda _b, _s=None, _f=None: True)
+        monkeypatch.setattr(
+            cli, "find_dispatch",
+            lambda _b, _s=None, _f=None: {"subagent_type": "adversarial-reviewer"},
+        )
         _, calls = self._run(
             ["record", "--bead", "escapement-abc1", "--findings", LONG],
             monkeypatch,
@@ -280,9 +284,9 @@ class TestRecordingCLI:
 
         def spy(bead, session=None, fingerprint=None):
             seen.update(bead=bead, fingerprint=fingerprint)
-            return True
+            return {"subagent_type": "adversarial-reviewer"}
 
-        monkeypatch.setattr(cli, "has_dispatch", spy)
+        monkeypatch.setattr(cli, "find_dispatch", spy)
         self._run(
             ["record", "--bead", "escapement-abc1", "--findings", LONG],
             monkeypatch,
@@ -290,6 +294,70 @@ class TestRecordingCLI:
         assert seen["bead"] == "escapement-abc1"
         assert seen["fingerprint"] == FP, (
             "the dispatch check must be given the CURRENT work fingerprint"
+        )
+
+    # -- escapement-1l04: the reviewer's output, not the implementer's ------
+
+    def test_captured_verdict_replaces_the_implementer_text(self, monkeypatch):
+        """The bead's outcome, at the CLI boundary.
+
+        When the host captured what the reviewer returned, those bytes become
+        `findings` and the implementer's prose is demoted to `response`. If a
+        refactor ever reverses this, the gate goes back to certifying text
+        written by the author of the code under review.
+        """
+        captured = (
+            "BLOCKER: has_dispatch never compares the stored fingerprint, so a "
+            "reviewer that read state A still corroborates a record written at "
+            "state B. Also the ledger dir is world-writable."
+        )
+        monkeypatch.setattr(cli, "find_dispatch", lambda _b, _s=None, _f=None: {
+            "subagent_type": "escapement:adversarial-reviewer",
+            "verdict": captured,
+            "verdict_digest": "d" * 64,
+            "blocking": True,
+        })
+        _, calls = self._run(
+            ["record", "--bead", "escapement-abc1", "--findings", LONG],
+            monkeypatch,
+        )
+        written = calls[0][1]
+        assert written["findings"] == captured
+        assert written["response"] == LONG, (
+            "the implementer's account is kept, just not as the verdict"
+        )
+        assert written["verdict_source"] == "captured"
+        assert written["blocking"] is True
+
+    def test_reviewer_identity_comes_from_the_dispatch_not_the_flag(self, monkeypatch):
+        """`--reviewer` must not be able to misname who actually reviewed."""
+        monkeypatch.setattr(cli, "find_dispatch", lambda _b, _s=None, _f=None: {
+            "subagent_type": "escapement:test-quality-reviewer",
+        })
+        _, calls = self._run(
+            ["record", "--bead", "escapement-abc1", "--findings", LONG,
+             "--reviewer", "escapement:adversarial-reviewer"],
+            monkeypatch,
+        )
+        assert calls[0][1]["reviewer"] == "escapement:test-quality-reviewer"
+
+    def test_reviewer_flag_naming_no_real_agent_is_refused(self, monkeypatch, capsys):
+        """Rule 3: validate the value, not its presence.
+
+        `--reviewer` defaulted to "unspecified" and was never checked against
+        the allowlist, so a record could assert that work had been reviewed
+        while the field naming the reviewer said nothing at all.
+        """
+        monkeypatch.setattr(cli, "find_dispatch", lambda _b, _s=None, _f=None: None)
+        code, calls = self._run(
+            ["record", "--bead", "escapement-abc1", "--findings", LONG,
+             "--reviewer", "my-helpful-review-buddy"],
+            monkeypatch,
+        )
+        assert code != 0
+        assert calls == [], "a bogus reviewer must not reach the store"
+        assert "does not name a structurally independent reviewer" in (
+            capsys.readouterr().err
         )
 
     def test_reads_findings_from_a_file(self, monkeypatch, tmp_path):
@@ -388,3 +456,96 @@ class TestStoreAvailability:
         assert rr.store_available() is True
         monkeypatch.setattr(rr, "_run", lambda *_a, **_k: None)
         assert rr.store_available() is False
+
+
+class TestRecordVersionGatingAgainstARealBd:
+    """`read_record`'s version handling, with the subprocess boundary real.
+
+    Every other test in this repo either constructs a record dict by hand or
+    mocks `read_record` outright, so the JSON-parsing and version-gating path
+    between `bd show --json` and the gate's decision is untested end to end.
+    That is precisely the shape of the three defects that already shipped green
+    here. A fake `bd` on PATH makes the boundary real without needing a beads
+    workspace.
+
+    The regression this catches: bumping `RECORD_VERSION` without extending
+    `READABLE_RECORD_VERSIONS`. Every hand-built-dict test stays green, while
+    the shipped gate reports "no independent review is on record" for every
+    bead in the repository.
+    """
+
+    def _bd(self, tmp_path, metadata_value):
+        """Put a fake `bd` on PATH that answers `show --json`."""
+        import json as _json
+
+        payload = _json.dumps({
+            "id": "escapement-abc1",
+            "metadata": {rr.METADATA_KEY: metadata_value}
+            if metadata_value is not None else {},
+        })
+        script = tmp_path / "bd"
+        script.write_text(
+            "#!/bin/sh\n"
+            "if [ \"$1\" = \"--version\" ]; then echo 'bd 1.0.5'; exit 0; fi\n"
+            f"cat <<'JSON'\n{payload}\nJSON\n"
+        )
+        script.chmod(0o755)
+        return str(tmp_path)
+
+    def test_a_current_record_round_trips(self, tmp_path, monkeypatch):
+        import json as _json
+
+        written = rr.build_record(
+            bead_id="escapement-abc1",
+            findings="x" * 200,
+            reviewer="escapement:adversarial-reviewer",
+            fingerprint="f" * 64,
+            recorded_at="2026-08-27T00:00:00+00:00",
+            verdict_source="captured",
+        )
+        monkeypatch.setenv(
+            "PATH", self._bd(tmp_path, _json.dumps(written)), prepend=os.pathsep
+        )
+        got = rr.read_record("escapement-abc1")
+        assert got is not None and got is not rr.UNAVAILABLE, (
+            "a record the CLI just wrote must be readable by the gate"
+        )
+        assert got["verdict_source"] == "captured"
+
+    def test_an_unreadable_schema_version_is_absent_not_unavailable(
+        self, tmp_path, monkeypatch
+    ):
+        """A future/garbage version must fail CLOSED, not fail open.
+
+        UNAVAILABLE means "the store is down" and allows the close. A record we
+        cannot parse is not the store being down.
+        """
+        import json as _json
+
+        monkeypatch.setenv(
+            "PATH",
+            self._bd(tmp_path, _json.dumps({"v": 99, "bead": "escapement-abc1"})),
+            prepend=os.pathsep,
+        )
+        assert rr.read_record("escapement-abc1") is None
+
+    def test_a_v1_record_still_parses_so_the_denial_can_be_accurate(
+        self, tmp_path, monkeypatch
+    ):
+        """v1 must come back as a record, not as None.
+
+        The gate refuses v1 — it was written under an oracle that never read
+        the reviewer's output — but it has to refuse it *as an outdated
+        review*. Returning None here would make the denial say no review
+        exists, sending the agent to re-run a reviewer with no explanation of
+        why the first one stopped counting.
+        """
+        import json as _json
+
+        monkeypatch.setenv(
+            "PATH",
+            self._bd(tmp_path, _json.dumps({"v": 1, "bead": "escapement-abc1"})),
+            prepend=os.pathsep,
+        )
+        got = rr.read_record("escapement-abc1")
+        assert got is not None and got["v"] == 1
