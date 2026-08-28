@@ -303,10 +303,45 @@ def classify_blocking(text: str | None) -> bool:
     if not text:
         return False
     visible = _strip_quoted(text)
+    # Order matters, and a declared PASS does NOT short-circuit (escapement-o84f).
+    # A review that lists findings under its BLOCK heading and then declares
+    # PASS contradicts itself, and the safe reading of a contradiction is the
+    # blocking one. Letting the declaration win there was a false negative.
+    # Quoted material is already gone, so a round-two review citing round one's
+    # blockers to say they were addressed still reads as clean -- that
+    # composition is asserted, not assumed, in test_review_verdict.py.
     declared = declared_verdict(visible)
-    if declared is not None:
-        return declared
+    if declared is True:
+        return True
+    if _block_section_has_findings(visible):
+        return True
+    if declared is False:
+        return False
     return _prose_asserts_blocker(visible)
+
+
+def _block_section_has_findings(text: str) -> bool:
+    """True when a finding HEADING introduces a non-empty, non-negating body.
+
+    Deliberately narrower than the prose scan: only a section the reviewer
+    headed as findings counts. Scoping matters — a reviewer writing "Last round
+    I wrote: BLOCKER: x. That is now fixed." inside a NOTE is *citing* a
+    blocker, not raising one, and a full prose scan would override their
+    declared PASS on the strength of their own repair note. That is the review
+    which must pass for a repair loop to terminate.
+    """
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        if not _HEADING_LINE.match(line):
+            continue
+        for match in _MARKER_RE.finditer(line):
+            if _negated(line, match.start()) or not _is_label(line, match):
+                continue
+            inline = line[match.end():].strip(" \t*:>-\u2013\u2014]")
+            body = inline or _section_body(lines, index)
+            if not _body_is_empty(body):
+                return True
+    return False
 
 
 def _strip_quoted(text: str) -> str:
@@ -351,12 +386,20 @@ def _is_label(line: str, match: re.Match) -> bool:
     label (`:`, `]`, a spaced dash, or end of line) rather than continuing into
     a sentence, which is what "Critical sections are correctly guarded" does.
     """
+    after = line[match.end():].lstrip("*_")
+    if after[:1] == ":":
+        # An adjacent colon overrides the opening requirement (escapement-o84f).
+        # "This is a BLOCKER: ..." is a labelled finding introduced by ordinary
+        # sentence structure; demanding the marker start its clause missed it,
+        # which is a FALSE NEGATIVE -- the direction that lets unreviewed work
+        # through silently. Adjacency is what keeps this tight: "Critical to
+        # note:" holds the colon at a distance and stays prose.
+        return True
     before = line[:match.start()]
     if before.strip(_DECORATION):
         if not _CLAUSE_BOUNDARY.search(before) or before.rstrip()[-1:].isalnum():
             return False
-    after = line[match.end():].lstrip("*_")
-    return not after.strip() or after[:1] in ":]).," or after[:2] in (" -", " \u2013", " \u2014")
+    return not after.strip() or after[:1] in "]).," or after[:2] in (" -", " \u2013", " \u2014")
 
 
 def _is_counted(line: str, match: re.Match) -> bool:
