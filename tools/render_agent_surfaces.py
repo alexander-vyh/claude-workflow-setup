@@ -134,6 +134,9 @@ CODEX_HOOK_SUPPORT = {
     # command that is not installed.
     "harness/bin/execution_cancellation.py",
     "harness/bin/gate_signal.py",
+    # delegation_hook routes Agent completion events into this sibling; without
+    # it the bundled dispatch hook cannot import at all.
+    "harness/bin/delegation_completion.py",
     "harness/bin/execution_supervisor.py",
     "harness/bin/schedule_store.py",
     "harness/bin/supervisor_health.py",

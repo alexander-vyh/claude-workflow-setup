@@ -1257,7 +1257,24 @@ def _generated_hook_commands(plugin_root, event):
 
 
 def test_manifest_registers_only_nonblocking_managed_dispatch_observation():
-    """PreTool observation is ready; incomplete reconciliation stays disabled."""
+    """Dispatch AND completion observation are ready; reconciliation stays disabled.
+
+    This assertion used to enumerate PreToolUse alone. That was containment, not
+    the invariant: the completion events were unregistered because no installed
+    payload capture proved the host emitted a native child identity or a verdict
+    (escapement-g27c). The capture now exists
+    (`harness/tests/fixtures/agent_dispatch_hook_payloads.json`), so the
+    enumeration is widened to the four events the adapter actually consumes.
+
+    The invariant that has NOT moved, and must not: every registered delegation
+    event is observation only. PreToolUse may answer a permission question but
+    only ever with an allow, and the completion events return no decision at all
+    — asserted behaviorally in
+    `harness/tests/test_delegation_completion.py::test_the_real_entry_point_stays_silent_on_completion_events`.
+    Registering a decision-bearing hook on any of these would take native Agent
+    capacity away from the user, which is the failure this contract exists to
+    prevent.
+    """
     hook = _manifest_hook("delegation_hook")
     claude = hook["hosts"]["claude"]
     codex = hook["hosts"]["codex"]
@@ -1266,16 +1283,20 @@ def test_manifest_registers_only_nonblocking_managed_dispatch_observation():
     assert "automatic" in hook["description"]
     assert "non-blocking" in hook["description"]
     assert claude["status"] == "ready"
+    command = "python3 -B ~/.claude/harness/bin/delegation_hook.py"
     assert claude["events"] == [
-        {
-            "event": "PreToolUse",
-            "matcher": "Agent",
-            "command": "python3 -B ~/.claude/harness/bin/delegation_hook.py",
-        }
+        {"event": "PreToolUse", "matcher": "Agent", "command": command},
+        {"event": "PostToolUse", "matcher": "Agent", "command": command},
+        {"event": "PostToolUseFailure", "matcher": "Agent", "command": command},
+        {"event": "SubagentStop", "command": command},
     ]
     assert (
         "harness/tests/test_delegation_hook.py::"
         "test_managed_first_attempt_registers_without_prepare_or_child_bead"
+    ) in claude["fixtures"]
+    assert (
+        "harness/tests/test_delegation_completion.py::"
+        "test_captured_dispatch_reaches_terminal_carrying_the_childs_own_verdict"
     ) in claude["fixtures"]
     assert codex["status"] == "unsupported"
     assert "Agent" in codex["unsupported_reason"]
@@ -1322,18 +1343,28 @@ def test_generated_plugins_only_register_safe_delegation_observation():
 
     assert all("execution_reconcile.py" not in command for _, _, command in codex_commands)
     assert all("execution_reconcile.py" not in command for _, _, command in claude_commands)
-    delegation_commands = [
-        (event, matcher, command)
+    delegation_command = (
+        'python3 -B "${CLAUDE_PLUGIN_ROOT}/harness/bin/delegation_hook.py"'
+    )
+    delegation_commands = {
+        (event, matcher)
         for event, matcher, command in claude_commands
         if "delegation_hook.py" in command
-    ]
-    assert delegation_commands == [
-        (
-            "PreToolUse",
-            "Agent",
-            'python3 -B "${CLAUDE_PLUGIN_ROOT}/harness/bin/delegation_hook.py"',
-        )
-    ]
+    }
+    # Exactly the four observation points the captured host payloads support —
+    # no more (a fifth would be unproven) and no fewer (a missing completion
+    # event strands the execution its PreToolUse registered).
+    assert delegation_commands == {
+        ("PreToolUse", "Agent"),
+        ("PostToolUse", "Agent"),
+        ("PostToolUseFailure", "Agent"),
+        ("SubagentStop", ""),
+    }
+    assert all(
+        command == delegation_command
+        for _, _, command in claude_commands
+        if "delegation_hook.py" in command
+    )
     assert all("delegation_hook.py" not in command for _, _, command in codex_commands)
 
     for _event, _matcher, command in codex_commands + claude_commands:
