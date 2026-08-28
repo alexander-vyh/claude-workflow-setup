@@ -490,3 +490,56 @@ class TestDecisionContract:
             assert decision["hookEventName"] == "PreToolUse"
             assert decision["permissionDecision"] == "deny"
             assert decision["permissionDecisionReason"].strip()
+
+
+class TestCommandToBeadBinding:
+    """The gate's single point of authority: WHICH bead is it protecting?
+
+    `read_record` is mocked in every other test here, and none of them assert
+    what it was called with — so the whole command→bead-id binding sat above
+    the mock boundary and was untested. That is precisely where the `-r`
+    bypass lived: the gate faithfully checked a review for a bead named
+    "finished the work here".
+    """
+
+    def _bead_asked_for(self, command):
+        asked = []
+
+        def spy(bead_id, cwd=None):
+            asked.append(bead_id)
+            return _record(bead=bead_id)
+
+        payload = {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": command},
+            "session_id": "s1",
+            "cwd": "/tmp",
+        }
+        with patch.object(review_gate, "read_record", side_effect=spy), \
+             patch.object(review_gate, "work_fingerprint", return_value=FINGERPRINT), \
+             patch.object(review_gate, "_record_signal"), \
+             patch("sys.stdin", io.StringIO(json.dumps(payload))), \
+             patch("sys.stdout", io.StringIO()):
+            review_gate.main()
+        return asked
+
+    @pytest.mark.parametrize("command", [
+        "bd close escapement-abc1",
+        'bd close escapement-abc1 -r "shipped and verified"',
+        'bd close -r "shipped and verified" escapement-abc1',
+        "bd update escapement-abc1 -s closed",
+        "bd -C . --actor bot done escapement-abc1",
+    ])
+    def test_the_real_bead_is_the_one_looked_up(self, command):
+        assert self._bead_asked_for(command) == ["escapement-abc1"]
+
+    def test_a_reason_is_never_looked_up_as_a_bead(self):
+        """The `-r` bypass in one assertion."""
+        asked = self._bead_asked_for('bd close -r "finished the work here"')
+        assert "finished the work here" not in asked
+
+    def test_both_beads_of_a_multi_close_are_looked_up(self):
+        assert self._bead_asked_for(
+            "bd close escapement-abc1 escapement-zzz9"
+        ) == ["escapement-abc1", "escapement-zzz9"]
