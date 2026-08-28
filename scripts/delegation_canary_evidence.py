@@ -156,6 +156,45 @@ def terminal_record(records: list[dict], execution: dict) -> tuple[int, dict] | 
     return matches[0] if len(matches) == 1 else None
 
 
+def _peer_acknowledgement(item: dict) -> dict | None:
+    expected_keys = {"type", "tool_use_id", "content"}
+    if item.get("is_error", False) is not False:
+        return None
+    if set(item) not in (expected_keys, expected_keys | {"is_error"}):
+        return None
+    content = item.get("content")
+    if not isinstance(content, list) or len(content) != 1:
+        return None
+    text_item = content[0]
+    if (
+        not isinstance(text_item, dict)
+        or set(text_item) != {"type", "text"}
+        or text_item.get("type") != "text"
+        or not isinstance(text_item.get("text"), str)
+    ):
+        return None
+    try:
+        acknowledgement = json.loads(text_item["text"])
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(acknowledgement, dict) or set(acknowledgement) != {
+        "success", "message", "pin"
+    }:
+        return None
+    pin = acknowledgement.get("pin")
+    if (
+        acknowledgement.get("success") is not True
+        or not isinstance(acknowledgement.get("message"), str)
+        or not acknowledgement["message"]
+        or not isinstance(pin, dict)
+        or set(pin) != {"id", "name", "ref"}
+        or not isinstance(pin.get("ref"), str)
+        or not pin["ref"]
+    ):
+        return None
+    return acknowledgement
+
+
 def verify_peer_dependency(records: list[dict], terminal: list[dict]) -> None:
     by_name = {item["agent_name"]: item for item in terminal}
     sender = by_name.get("canary-child-1")
@@ -192,13 +231,7 @@ def verify_peer_dependency(records: list[dict], terminal: list[dict]) -> None:
         request = requests.get(tool_id)
         if item.get("type") != "tool_result" or request is None:
             continue
-        content = item.get("content")
-        first = content[0] if isinstance(content, list) and content else None
-        text = first.get("text") if isinstance(first, dict) else None
-        try:
-            acknowledgement = json.loads(text) if isinstance(text, str) else None
-        except json.JSONDecodeError:
-            acknowledgement = None
+        acknowledgement = _peer_acknowledgement(item)
         pin = acknowledgement.get("pin") if isinstance(acknowledgement, dict) else None
         tokens = request[1]
         if (

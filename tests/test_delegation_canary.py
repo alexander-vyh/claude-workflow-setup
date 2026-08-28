@@ -178,9 +178,14 @@ def _live_peer_records(launches: list[list[dict]], scenario: str) -> list[dict]:
                             "text": json.dumps(
                                 {
                                     "success": True,
+                                    "message": (
+                                        "Message queued for delivery to canary-child-2 "
+                                        "at its next tool round."
+                                    ),
                                     "pin": {
                                         "id": launches[pin_index][1]["task_id"],
                                         "name": f"canary-child-{pin_index + 1}",
+                                        "ref": "fixture-ref",
                                     },
                                 }
                             ),
@@ -190,6 +195,25 @@ def _live_peer_records(launches: list[list[dict]], scenario: str) -> list[dict]:
             ],
         },
     }
+    result_item = response["message"]["content"][0]
+    text_item = result_item["content"][0]
+    acknowledgement = json.loads(text_item["text"])
+    if scenario == "live-peer-error-true":
+        result_item["is_error"] = True
+    elif scenario == "live-peer-multiple-content":
+        result_item["content"].append({"type": "text", "text": "ambiguous"})
+    elif scenario == "live-peer-non-text-content":
+        text_item["type"] = "json"
+    elif scenario == "live-peer-malformed-json":
+        text_item["text"] = "{not-json"
+    elif scenario == "live-peer-extra-envelope":
+        text_item["status"] = "success"
+    elif scenario == "live-peer-conflicting-status":
+        acknowledgement["status"] = "failed"
+        text_item["text"] = json.dumps(acknowledgement)
+    elif scenario == "live-peer-conflicting-identity":
+        acknowledgement["pin"]["agentId"] = launches[2][1]["task_id"]
+        text_item["text"] = json.dumps(acknowledgement)
     return [request, response]
 
 
@@ -403,6 +427,13 @@ def test_result_release_rejects_cross_swapped_terminal_evidence(tmp_path) -> Non
         ("live-peer-unacknowledged", "peer_dependency_unproven"),
         ("live-peer-after-terminal", "peer_dependency_unproven"),
         ("live-peer-ack-after-terminal", "peer_dependency_unproven"),
+        ("live-peer-error-true", "peer_dependency_unproven"),
+        ("live-peer-multiple-content", "peer_dependency_unproven"),
+        ("live-peer-non-text-content", "peer_dependency_unproven"),
+        ("live-peer-malformed-json", "peer_dependency_unproven"),
+        ("live-peer-extra-envelope", "peer_dependency_unproven"),
+        ("live-peer-conflicting-status", "peer_dependency_unproven"),
+        ("live-peer-conflicting-identity", "peer_dependency_unproven"),
         ("unresolved-terminal", "managed_completion_unresolved"),
     ],
 )
