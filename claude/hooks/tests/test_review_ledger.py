@@ -197,3 +197,99 @@ class TestConcurrentReviewersCannotBeShoppedFor:
             "arrival order must not decide whether a blocker is honoured"
         )
         assert "BLOCKER" in entry["verdict"]
+
+
+VERDICT_TEXT = (
+    "### BLOCK\n- has_dispatch never reads the stored fingerprint.\n\n"
+    "### Verdict\nREJECT\n"
+)
+
+
+class TestVerdictArrivesFromSubagentStop:
+    """The verdict lives on SubagentStop, not on the tool result.
+
+    escapement-g27c proved the capability by observation: the subagent's final
+    text is `SubagentStop.last_assistant_message`, joined to its dispatch by
+    `tool_response.agentId == SubagentStop.agent_id`. The first implementation
+    read `PostToolUse.tool_response` instead and would have captured nothing —
+    silently, because "no verdict" is indistinguishable from "reviewer said
+    nothing" unless something asserts the difference. These tests are that
+    assertion.
+    """
+
+    def _dispatch(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(ledger, "LEDGER_DIR", tmp_path / "ledger")
+        ledger.record_dispatch(
+            "s1", ["escapement-abc1"], "escapement:adversarial-reviewer", "f" * 64
+        )
+
+    def test_background_order_post_tool_use_then_stop(self, tmp_path, monkeypatch):
+        """The common case: the dispatch is bound, then the verdict arrives."""
+        self._dispatch(monkeypatch, tmp_path)
+        ledger.record_agent_id(
+            "s1", ["escapement-abc1"], "escapement:adversarial-reviewer", "agent-1"
+        )
+        assert ledger.record_subagent_verdict("s1", "agent-1", VERDICT_TEXT) is True
+        entry = ledger.find_dispatch("escapement-abc1", "s1", "f" * 64)
+        assert entry["verdict"].startswith("### BLOCK")
+        assert entry["verdict_digest"], "the digest pins the full text"
+
+    def test_foreground_order_stop_then_post_tool_use(self, tmp_path, monkeypatch):
+        """The trap. For a FOREGROUND dispatch, SubagentStop fires FIRST.
+
+        g27c pinned this as mode-dependent and neither order is reliable, so a
+        verdict that arrives before the agent_id is bound must be held and
+        claimed later. An implementation that simply drops it works perfectly
+        in testing and loses every foreground review in production.
+        """
+        self._dispatch(monkeypatch, tmp_path)
+        assert ledger.record_subagent_verdict("s1", "agent-1", VERDICT_TEXT) is False, (
+            "nothing to attach to yet — it must be stashed, not applied"
+        )
+        ledger.record_agent_id(
+            "s1", ["escapement-abc1"], "escapement:adversarial-reviewer", "agent-1"
+        )
+        entry = ledger.find_dispatch("escapement-abc1", "s1", "f" * 64)
+        assert entry.get("verdict", "").startswith("### BLOCK"), (
+            "the stashed verdict must be claimed when its dispatch is bound"
+        )
+
+    def test_two_concurrent_reviewers_do_not_swap_verdicts(self, tmp_path, monkeypatch):
+        """agent_id is the join key; it must actually be used as one."""
+        monkeypatch.setattr(ledger, "LEDGER_DIR", tmp_path / "ledger")
+        for bead in ("escapement-aaa1", "escapement-bbb2"):
+            ledger.record_dispatch(
+                "s1", [bead], "escapement:adversarial-reviewer", "f" * 64
+            )
+        ledger.record_agent_id(
+            "s1", ["escapement-aaa1"], "escapement:adversarial-reviewer", "agent-A"
+        )
+        ledger.record_agent_id(
+            "s1", ["escapement-bbb2"], "escapement:adversarial-reviewer", "agent-B"
+        )
+        ledger.record_subagent_verdict("s1", "agent-A", "verdict for the FIRST bead")
+        ledger.record_subagent_verdict("s1", "agent-B", "verdict for the SECOND bead")
+
+        a = ledger.find_dispatch("escapement-aaa1", "s1", "f" * 64)
+        b = ledger.find_dispatch("escapement-bbb2", "s1", "f" * 64)
+        # Asserted on the verdict TEXT rather than on `blocking`, deliberately:
+        # the ledger's job is the join, and classification is a separate
+        # concern with its own in-flight repair (escapement-1nzm). A ledger
+        # test that asserted `blocking` would go red on a classifier change
+        # and green on a join that swapped the two reviewers' verdicts —
+        # exactly backwards.
+        assert a["verdict"] == "verdict for the FIRST bead"
+        assert b["verdict"] == "verdict for the SECOND bead"
+
+    def test_an_unknown_agent_id_is_not_forced_onto_some_other_dispatch(
+        self, tmp_path, monkeypatch
+    ):
+        self._dispatch(monkeypatch, tmp_path)
+        ledger.record_agent_id(
+            "s1", ["escapement-abc1"], "escapement:adversarial-reviewer", "agent-1"
+        )
+        ledger.record_subagent_verdict("s1", "someone-else", "### Verdict\nPASS\n")
+        entry = ledger.find_dispatch("escapement-abc1", "s1", "f" * 64)
+        assert entry.get("verdict") is None, (
+            "a verdict from an unrelated subagent must not attach here"
+        )

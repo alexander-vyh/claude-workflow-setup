@@ -188,3 +188,41 @@ def test_capture_capability_is_declared_with_its_evidence():
         "the capability constant must state what evidence set it"
     )
     assert len(rv.CAPTURE_EVIDENCE) >= 80
+
+
+class TestTheDispatcherSPromptIsNotTheReviewersVerdict:
+    """The echo hazard escapement-g27c recorded as an executable assertion.
+
+    `PostToolUse.tool_response.prompt` repeats what the DISPATCHER asked for.
+    A consumer that searches the payload broadly for verdict-shaped text can be
+    satisfied by the implementer's own prompt instead of the subagent's reply —
+    which is exactly the forgery this whole gate exists to prevent, arriving
+    through the capture path rather than around it.
+
+    So the extractor reads NAMED reply fields only. These pin that it never
+    starts reading `prompt` or `description`, either by someone adding them to
+    the key list or by a future "just stringify the payload" shortcut.
+    """
+
+    ECHO = (
+        "Review escapement-1l04 and report BLOCKERS. Format: ### BLOCK / "
+        "### Verdict with PASS or REJECT."
+    )
+
+    def test_a_tool_response_carrying_only_an_echoed_prompt_yields_nothing(self):
+        assert rv.extract_verdict({
+            "prompt": self.ECHO,
+            "description": "review escapement-1l04",
+            "agentId": "agent-1",
+        }) is None
+
+    def test_a_real_reply_is_preferred_over_the_echoed_prompt(self):
+        got = rv.extract_verdict({
+            "prompt": self.ECHO,
+            "content": [{"type": "text", "text": "### Verdict\nPASS"}],
+        })
+        assert got == "### Verdict\nPASS"
+        assert "Review escapement-1l04" not in got
+
+    def test_the_agent_id_field_is_never_mistaken_for_prose(self):
+        assert rv.extract_verdict({"agentId": "agent-abc123"}) is None

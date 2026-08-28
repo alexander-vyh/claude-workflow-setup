@@ -247,6 +247,118 @@ def has_dispatch(
     return find_dispatch(bead_id, session_id, fingerprint) is not None
 
 
+def record_agent_id(
+    session_id: str,
+    bead_ids: list[str],
+    subagent_type: str,
+    agent_id: str,
+) -> bool:
+    """Bind the native child identifier to its dispatch, claiming any verdict.
+
+    `PostToolUse` carries both `tool_input` (which names the bead) and
+    `tool_response.agentId` (the child's identity). `SubagentStop` carries the
+    identity and the verdict but NOT the bead, and the two events share no
+    `tool_use_id`. So `agent_id` is the only join key, and this is where it is
+    established.
+
+    The claim step exists because the event ORDER is mode-dependent: a
+    background dispatch fires PostToolUse first, a foreground one fires
+    SubagentStop first (escapement-g27c pinned both). A verdict that arrived
+    early was stashed by `record_subagent_verdict`; it is collected here.
+    """
+    if not agent_id or subagent_type not in INDEPENDENT_REVIEWER_TYPES:
+        return False
+
+    def apply(state: dict) -> bool:
+        entry = _newest_open(state.get("dispatches", []), bead_ids, subagent_type)
+        if entry is None:
+            return False
+        entry["agent_id"] = agent_id
+        pending = (state.get("pending_verdicts") or {}).pop(agent_id, None)
+        if pending:
+            _attach_verdict(entry, pending)
+        return True
+
+    return _mutate(session_id, apply)
+
+
+def record_subagent_verdict(session_id: str, agent_id: str, verdict: str) -> bool:
+    """Attach a `SubagentStop` verdict to its dispatch, or stash it.
+
+    Returns True when it landed on a dispatch entry, False when it was held for
+    one that has not been bound yet. False is not an error — it is the ordinary
+    foreground case, and dropping the verdict there would silently lose every
+    review dispatched in the foreground.
+    """
+    if not agent_id or not verdict:
+        return False
+
+    def apply(state: dict) -> bool:
+        for entry in state.get("dispatches", []):
+            if isinstance(entry, dict) and entry.get("agent_id") == agent_id:
+                _attach_verdict(entry, verdict)
+                return True
+        state.setdefault("pending_verdicts", {})[agent_id] = verdict
+        return False
+
+    return _mutate(session_id, apply)
+
+
+def _newest_open(entries: list, bead_ids: list[str], subagent_type: str) -> dict | None:
+    """The most recent dispatch for this bead and reviewer with no verdict yet."""
+    open_entries = [
+        e for e in entries
+        if isinstance(e, dict)
+        and not e.get("verdict")
+        and e.get("subagent_type") == subagent_type
+        and any(b in (e.get("beads") or []) for b in bead_ids)
+    ]
+    if not open_entries:
+        return None
+    return max(open_entries, key=lambda e: e.get("at") or 0)
+
+
+def _attach_verdict(entry: dict, verdict: str) -> None:
+    module = _verdict_module()
+    entry["verdict"] = module.clip_verdict(verdict)
+    entry["verdict_digest"] = module.verdict_digest(verdict)
+    entry["blocking"] = module.classify_blocking(verdict)
+    entry["verdict_at"] = time.time()
+
+
+def _mutate(session_id: str, apply) -> bool:
+    """Read the session ledger, apply a change, write it back."""
+    path = ledger_path(session_id)
+    state = _load_state(path)
+    result = apply(state)
+    try:
+        LEDGER_DIR.mkdir(parents=True, exist_ok=True, mode=_DIR_MODE)
+        os.chmod(LEDGER_DIR, _DIR_MODE)
+        path.write_text(json.dumps(state))
+        os.chmod(path, _FILE_MODE)
+    except OSError:
+        return False
+    return result
+
+
+def _load_state(path: Path) -> dict:
+    """Whole trusted ledger document, including any stashed verdicts."""
+    if not is_trusted_ledger(path):
+        return {"dispatches": [], "pending_verdicts": {}}
+    try:
+        parsed = json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return {"dispatches": [], "pending_verdicts": {}}
+    if not isinstance(parsed, dict):
+        return {"dispatches": [], "pending_verdicts": {}}
+    entries = parsed.get("dispatches")
+    pending = parsed.get("pending_verdicts")
+    return {
+        "dispatches": entries if isinstance(entries, list) else [],
+        "pending_verdicts": pending if isinstance(pending, dict) else {},
+    }
+
+
 def record_verdict(
     session_id: str,
     bead_ids: list[str],

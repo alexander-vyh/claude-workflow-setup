@@ -62,11 +62,25 @@ described as mechanically enforced when it is not:
   NOT ENFORCED YET — THE WHOLE VERDICT-CAPTURE FEATURE. Both the traceability
     rule (the recorded findings must BE the reviewer's returned text) and the
     blocking rule (a verdict naming unresolved blockers refuses the close until
-    the work changes and is re-reviewed) depend on a hook being able to observe
-    a subagent's final output, which
-    `_review_verdict.VERDICT_CAPTURE_SUPPORTED` reports as unavailable pending
-    escapement-g27c. Both deny branches are conditional on that one flag and
-    switch on together.
+    the work changes and is re-reviewed) are gated behind the single flag
+    `_review_verdict.VERDICT_CAPTURE_SUPPORTED`, and switch on together.
+
+    The CAPABILITY is now proven, so the flag no longer means "we do not know".
+    escapement-g27c established by observation that the reviewer's final text
+    is `SubagentStop.last_assistant_message`, joined to its dispatch by
+    `tool_response.agentId`, and the wiring below reads exactly those fields.
+    The flag stays False for a different and specific reason: escapement-1nzm
+    showed the blocking classifier returns "blocking" for a clean PASS on the
+    format `adversarial-reviewer.md` mandates. Enabling capture on top of that
+    classifier would deny honest closes with a denial its own remedy cannot
+    clear. The flag flips when 1nzm lands, not before.
+
+    An earlier version of this docstring claimed the rule would "switch on the
+    moment escapement-g27c produces a real captured payload". It produced one,
+    and flipping the flag would NOT have worked, because capture was wired to
+    `PostToolUse.tool_response` — which for a background dispatch carries no
+    reply at all. Recording that here because a capability claim that quietly
+    stops being true is the failure this whole gate is built against.
 
     The blocking deny was NOT originally gated, and that was a live defect
     rather than a tidiness issue: `record_verdict` runs at `Agent` PostToolUse
@@ -129,7 +143,11 @@ from _review_command import (  # noqa: E402
     waiver_reason,
     writes_reserved_metadata,
 )
-from _review_ledger import record_dispatch, record_verdict  # noqa: E402
+from _review_ledger import (  # noqa: E402
+    record_agent_id,
+    record_dispatch,
+    record_subagent_verdict,
+)
 from _review_record import (  # noqa: E402
     INDEPENDENT_REVIEWER_TYPES,
     METADATA_KEY,
@@ -452,21 +470,62 @@ def _handle_agent_event(data: dict, tool_input: dict, beads: list[str],
     subagent_type = (tool_input.get("subagent_type") or "").strip()
 
     if data.get("hook_event_name") == "PostToolUse":
-        verdict = extract_verdict(data.get("tool_response"))
-        if verdict:
-            record_verdict(session_id, beads, subagent_type, verdict)
-        # A reviewer that returned nothing usable leaves its PreToolUse entry
-        # without a verdict, which is the honest state: a dispatch happened and
-        # no findings came back. It must not be upgraded into a review.
+        # NOT the verdict. escapement-g27c established by observation that for a
+        # background dispatch — which is how current Claude Code builds run every
+        # subagent — the reply is absent from `tool_response` entirely, and that
+        # `tool_response.prompt` echoes the DISPATCHER's own text. Reading the
+        # verdict here would capture nothing in the common case and the
+        # implementer's own prompt in the worst one, which is precisely the
+        # forgery this gate exists to prevent.
+        #
+        # What PostToolUse uniquely provides is the join key: it is the only
+        # event carrying both `tool_input` (which names the bead) and the
+        # child's identity.
+        agent_id = _agent_id(data.get("tool_response"))
+        if agent_id:
+            record_agent_id(session_id, beads, subagent_type, agent_id)
         return
 
     record_dispatch(session_id, beads, subagent_type, work_fingerprint(cwd))
+
+
+def _agent_id(tool_response: object) -> str:
+    """The native child identifier, read from its named field only."""
+    if isinstance(tool_response, dict):
+        value = tool_response.get("agentId")
+        if isinstance(value, str):
+            return value.strip()
+    return ""
+
+
+def _handle_subagent_stop(data: dict, session_id: str) -> None:
+    """Capture the reviewer's final text — the one event that carries it.
+
+    `SubagentStop.last_assistant_message` is the mode-independent verdict
+    source, joined to its dispatch by `agent_id`. The subagent events carry no
+    `tool_use_id`, so that identity is the only join available, and the ledger
+    holds a verdict that arrives before its dispatch is bound because the event
+    order is mode-dependent: background fires PostToolUse first, foreground
+    fires SubagentStop first.
+    """
+    agent_id = data.get("agent_id")
+    verdict = extract_verdict(data.get("last_assistant_message"))
+    if isinstance(agent_id, str) and agent_id and verdict:
+        record_subagent_verdict(session_id, agent_id, verdict)
 
 
 def main() -> int:
     try:
         data = json.load(sys.stdin)
     except json.JSONDecodeError:
+        return 0
+
+    # SubagentStop carries neither tool_name nor tool_input — it is the
+    # subagent's own terminal event, and the only one holding its final text.
+    if data.get("hook_event_name") == "SubagentStop":
+        session_id = data.get("session_id") or os.environ.get("CLAUDE_SESSION_ID")
+        if session_id:
+            _handle_subagent_stop(data, session_id)
         return 0
 
     tool_name = data.get("tool_name", "")

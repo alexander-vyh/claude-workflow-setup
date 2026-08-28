@@ -593,6 +593,15 @@
       {
         "hooks": [
           {
+            "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/hooks/review_gate.py\"",
+            "type": "command"
+          }
+        ],
+        "matcher": ""
+      },
+      {
+        "hooks": [
+          {
             "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/harness/bin/delegation_hook.py\"",
             "type": "command"
           }
