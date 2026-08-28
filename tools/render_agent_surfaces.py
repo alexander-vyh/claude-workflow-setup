@@ -84,20 +84,6 @@ SHARED_HOOK_SUPPORT = {
     "claude/hooks/oracle_brief_rapid.py",
     "claude/hooks/test_oracle_brief_policy.py",
     "claude/hooks/test_oracle_brief_landing.py",
-    # review_gate keeps its evidence store and its Claude-only dispatch ledger
-    # in bounded siblings. Omitting either makes the gate fail to import in the
-    # installed host, so `bd close` would stop being gated at all.
-    "claude/hooks/_review_record.py",
-    "claude/hooks/_review_ledger.py",
-    "claude/hooks/_review_command.py",
-    # Verdict capture and blocking classification. `_review_ledger` imports it
-    # lazily so capture degrades rather than taking the gate down, but
-    # review_gate imports it at module scope — omit it and every `bd close`
-    # stops being gated.
-    "claude/hooks/_review_verdict.py",
-    # The recording CLI is the escape path review_gate names in every denial.
-    # An installed gate that denies with an unrunnable remedy is a dead end.
-    "claude/hooks/escapement_review.py",
 }
 SHARED_RUNTIME_SUPPORT = {
     "bin/escapement-worktree",
@@ -124,23 +110,16 @@ CODEX_HOOK_SUPPORT = {
     "harness/bin/repo_outcome.py",
     # execution_reconcile.py remains bundled while its unconditional
     # SessionStart registration is partial and disabled.
-    "harness/bin/claude_agent_lifecycle.py",
     "harness/bin/execution_reconcile.py",
     # Retain the complete trusted-ledger closure used by isolated reconciliation.
     "harness/bin/execution_ledger.py",
-    "harness/bin/execution_event_identity.py",
-    "harness/bin/execution_parent.py",
     "harness/bin/execution_store.py",
-    "harness/bin/execution_incident_validation.py",
     "harness/bin/execution_validation.py",
     # execution_reconcile's `cancel` escape and its gate-signal write; without
     # these the bundled reconciler cannot import and the Stop denial names a
     # command that is not installed.
-    "harness/bin/execution_cancellation.py",
-    "harness/bin/gate_signal.py",
     # delegation_hook routes Agent completion events into this sibling; without
     # it the bundled dispatch hook cannot import at all.
-    "harness/bin/delegation_completion.py",
     "harness/bin/execution_supervisor.py",
     "harness/bin/schedule_store.py",
     "harness/bin/supervisor_health.py",

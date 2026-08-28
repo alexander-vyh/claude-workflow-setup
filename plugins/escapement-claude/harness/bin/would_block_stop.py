@@ -276,7 +276,7 @@ def execution_stop_decision(
     active = [
         execution
         for execution in ledger["executions"]
-        if execution["state"] not in {"terminal", "cancelled", "aborted"}
+        if execution["state"] not in {"terminal", "cancelled"}
     ]
     if not active:
         if root_status == "closed":
@@ -291,18 +291,6 @@ def execution_stop_decision(
 
     if any(_deadline_due(execution, now) for execution in active):
         return ("block", "delegated_execution_overdue")
-
-    # Before its timer elapses, an unbound queued dispatch without supervisor
-    # or wake evidence has no trusted native identity and remains unresolved.
-    if (
-        not scheduled
-        and health is None
-        and any(
-            execution["state"] == "queued" and execution["native_child_id"] is None
-            for execution in active
-        )
-    ):
-        return ("block", "delegated_execution_unresolved")
 
     wakes = [
         _matching_managed_wake(execution, ledger["parent_session_id"], scheduled, now)

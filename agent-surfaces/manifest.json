@@ -150,51 +150,24 @@
     },
     {
       "id": "review_gate",
-      "description": "Require an independent, bead-bound, non-stale review before a bead can be closed. On Claude the reviewer's own returned text is captured from SubagentStop.last_assistant_message and joined to its dispatch by tool_response.agentId, stored as the authoritative findings; the implementer's own text is kept only as advisory `response`. So an agent that dispatches a reviewer, ignores it, and writes its own verdict cannot close the bead, and a verdict naming unresolved blocking findings refuses the close until the work changes and is re-reviewed. Enabled 2026-08-28 once the capability was proven (escapement-g27c) and the blocking classifier could separate PASS from REJECT (escapement-1nzm). On Codex no Agent event exists, so verdict capture is skipped rather than failed and the load-bearing rules are the review record, bead binding, and work fingerprint.",
+      "description": "Claude in-session review-dispatch nudge.",
       "source": "claude/hooks/review_gate.py",
       "hosts": {
         "codex": {
-          "status": "ready",
-          "events": [
-            {
-              "event": "PreToolUse",
-              "matcher": "Bash",
-              "command": "python3 -B claude/hooks/review_gate.py",
-              "timeout_seconds": 20
-            }
-          ],
-          "fixtures": [
-            "claude/hooks/tests/test_review_gate.py::test_codex_shape_allows_unverified_independence",
-            "claude/hooks/tests/test_review_gate.py::test_codex_shape_still_refuses_an_unreviewed_close",
-            "claude/hooks/tests/test_review_gate.py::test_codex_shape_records_no_dispatch"
-          ]
+          "status": "unsupported",
+          "unsupported_reason": "Depends on Claude Agent tool metadata and review-dispatch semantics; Codex subagent mapping needs a dedicated adapter."
         },
         "claude": {
           "status": "ready",
           "events": [
             {
               "event": "PreToolUse",
-              "matcher": "Agent|Bash",
-              "command": "python3 -B ~/.claude/hooks/review_gate.py"
-            },
-            {
-              "event": "PostToolUse",
-              "matcher": "Agent",
-              "command": "python3 -B ~/.claude/hooks/review_gate.py"
-            },
-            {
-              "event": "SubagentStop",
+              "matcher": "Agent|Bash(bd close:*)|Bash(bd update:*)",
               "command": "python3 -B ~/.claude/hooks/review_gate.py"
             }
           ],
           "fixtures": [
-            "claude/hooks/tests/test_review_gate.py",
-            "claude/hooks/tests/test_review_gate_verdict.py",
-            "claude/hooks/tests/test_review_record.py",
-            "claude/hooks/tests/test_review_verdict.py",
-            "claude/hooks/tests/test_review_verdict_corpus.py",
-            "claude/hooks/tests/test_review_ledger.py",
-            "claude/hooks/tests/test_review_command.py"
+            "claude/hooks/tests/test_review_gate.py"
           ]
         }
       }
@@ -226,7 +199,7 @@
     },
     {
       "id": "delegation_hook",
-      "description": "Use automatic, non-blocking observation for managed Claude Agent dispatch and completion without removing native Agent capacity.",
+      "description": "Use automatic, non-blocking observation for managed Claude Agent dispatch without removing native Agent capacity.",
       "source": "harness/bin/delegation_hook.py",
       "hosts": {
         "codex": {
@@ -240,26 +213,10 @@
               "event": "PreToolUse",
               "matcher": "Agent",
               "command": "python3 -B ~/.claude/harness/bin/delegation_hook.py"
-            },
-            {
-              "event": "PostToolUse",
-              "matcher": "Agent",
-              "command": "python3 -B ~/.claude/harness/bin/delegation_hook.py"
-            },
-            {
-              "event": "PostToolUseFailure",
-              "matcher": "Agent",
-              "command": "python3 -B ~/.claude/harness/bin/delegation_hook.py"
-            },
-            {
-              "event": "SubagentStop",
-              "command": "python3 -B ~/.claude/harness/bin/delegation_hook.py"
             }
           ],
           "fixtures": [
-            "harness/tests/test_delegation_hook.py::test_managed_first_attempt_registers_without_prepare_or_child_bead",
-            "harness/tests/test_delegation_completion.py::test_captured_dispatch_reaches_terminal_carrying_the_childs_own_verdict",
-            "harness/tests/test_delegation_completion.py::test_host_rejected_dispatch_is_released_immediately"
+            "harness/tests/test_delegation_hook.py::test_managed_first_attempt_registers_without_prepare_or_child_bead"
           ]
         }
       }

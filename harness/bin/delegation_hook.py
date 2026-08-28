@@ -1,28 +1,9 @@
 #!/usr/bin/env python3
-"""Observe managed Claude Agent dispatch and completion without denying capacity.
+"""Observe managed Claude Agent dispatch without denying native capacity.
 
-Every handler here is non-blocking. PreToolUse returns an allow and never
-denies native Agent capacity; the completion handlers return no decision at all,
-because the events they observe do not ask for one.
-
-The completion side (escapement-mn2q) is built entirely on the payloads
-escapement-g27c captured from a real host (Claude Code 2.1.248), stored at
-harness/tests/fixtures/agent_dispatch_hook_payloads.json. Four captured facts
-shape it:
-
-- Agent PostToolUse carries the native child id at tool_response.agentId. That
-  is the ONLY place the dispatch's tool_use_id and the child's identity appear
-  together, so it is the binding event.
-- The relative order of PostToolUse and SubagentStop is dispatch-mode
-  dependent, so binding must be order-tolerant.
-- tool_use_id is absent from the subagent events, so agent_id is the only join
-  back to the dispatch.
-- A backgrounded PostToolUse is a launch receipt, not a verdict. The child's
-  final text comes from SubagentStop.last_assistant_message when backgrounded,
-  and from tool_response.content when synchronous.
-
-A dispatch the host rejects fires PostToolUseFailure and no subagent event,
-which would otherwise strand the execution registered at PreToolUse.
+Agent PreToolUse is expectation-first and non-blocking. Agent PostToolUse
+remains unregistered until an installed payload capture proves native child
+identity and terminal semantics.
 """
 
 from __future__ import annotations
@@ -35,7 +16,6 @@ import pathlib
 import sys
 import uuid
 
-from delegation_completion import post_tool, post_tool_failure, subagent_stop
 from execution_expectation import record_expectation, record_incident
 from execution_ledger import new_ledger, register_execution
 from execution_store import initialize_or_mutate_atomic
@@ -103,9 +83,7 @@ def pre_tool(payload: dict, run_bd, ledger_path) -> dict:
             record_incident(
                 path.parent / "execution_incident.json",
                 parent_session_id=session_id,
-                tool_use_id=tool_use_id
-                if isinstance(tool_use_id, str) and tool_use_id
-                else None,
+                tool_use_id=tool_use_id if isinstance(tool_use_id, str) and tool_use_id else None,
                 reason="invalid_agent_dispatch_payload",
                 now=_iso_now(),
             )
@@ -128,7 +106,7 @@ def pre_tool(payload: dict, run_bd, ledger_path) -> dict:
             host="claude",
             now=now,
         )
-    except (OSError, TypeError, ValueError, KeyError):
+    except (OSError, ValueError):
         try:
             record_incident(
                 incident_path,
@@ -177,7 +155,7 @@ def pre_tool(payload: dict, run_bd, ledger_path) -> dict:
             lambda: new_ledger(session_id),
             register,
         )
-    except (OSError, TypeError, ValueError, KeyError):
+    except (OSError, ValueError):
         return {"decision": "allow", "reason": "dispatch_evidence_unresolved"}
 
     dispatched = next(
@@ -191,6 +169,15 @@ def pre_tool(payload: dict, run_bd, ledger_path) -> dict:
         "execution_id": dispatched["execution_id"],
         "attempt": dispatched["attempt"],
         "generation": dispatched["generation"],
+    }
+
+
+def post_tool(payload: dict, ledger_path) -> dict:
+    """Fail closed until an installed Agent result fixture proves child identity."""
+    del payload, ledger_path
+    return {
+        "status": "unresolved",
+        "reason": "native_child_identity_unverified",
     }
 
 
@@ -257,18 +244,8 @@ def _hook_main() -> int:
             )
         )
         return 0
-    # Completion observation never speaks: these events carry no decision, and
-    # a SubagentStop hook that printed a decision would be steering the child.
-    # Observation must also never fail the host, so the appliers swallow their
-    # own errors and the unresolved execution falls through to the deadline
-    # path rather than taking the session down.
-    completion = {
-        "PostToolUse": post_tool,
-        "PostToolUseFailure": post_tool_failure,
-        "SubagentStop": subagent_stop,
-    }.get(payload.get("hook_event_name"))
-    if completion is not None:
-        completion(payload, ledger_path)
+    if payload.get("hook_event_name") == "PostToolUse":
+        post_tool(payload, ledger_path)
         return 0
     result = pre_tool(
         payload,

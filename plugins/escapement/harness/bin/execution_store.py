@@ -12,7 +12,7 @@ import stat
 import tempfile
 from collections.abc import Callable
 
-from execution_validation import is_valid_ledger, normalize_legacy_resolved_ledger
+from execution_validation import is_valid_ledger
 from trusted_source import is_trusted_file
 
 
@@ -25,7 +25,6 @@ def load_trusted(path: pathlib.Path, expected_parent: str) -> dict | None:
         value = json.loads(path.read_text())
     except (OSError, UnicodeError, json.JSONDecodeError):
         return None
-    value = normalize_legacy_resolved_ledger(value)
     if not is_valid_ledger(value) or value["parent_session_id"] != expected_parent:
         return None
     return value
@@ -58,7 +57,6 @@ def mutate_atomic(
                     current = json.loads(path.read_text())
                 except (OSError, UnicodeError, json.JSONDecodeError) as exc:
                     raise ValueError("ledger JSON is malformed") from exc
-                current = normalize_legacy_resolved_ledger(current)
                 if not is_valid_ledger(current):
                     raise ValueError("ledger does not match the execution schema")
             elif os.path.lexists(path) or initializer is None:

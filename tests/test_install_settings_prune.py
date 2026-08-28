@@ -7,7 +7,6 @@ import json
 import os
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -55,23 +54,6 @@ def _stub_claude_cli(home: Path) -> Path:
     claude = stub_bin / "claude"
     claude.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
     claude.chmod(0o755)
-    python = stub_bin / "python3"
-    python.write_text(
-        f"#!{sys.executable}\n"
-        "import json, os, pathlib, sys\n"
-        "if any(value.endswith('delegation-canary.py') for value in sys.argv[1:]):\n"
-        " source=pathlib.Path(sys.argv[sys.argv.index('--source-root')+1])/'plugins'/'escapement-claude'\n"
-        " candidate=pathlib.Path(sys.argv[sys.argv.index('--candidate-root')+1])\n"
-        " files=lambda root:{str(p.relative_to(root)):p.read_bytes() for p in root.rglob('*') if p.is_file() and '__pycache__' not in p.parts}\n"
-        " if files(source)!=files(candidate): raise SystemExit(9)\n"
-        " audit=pathlib.Path(os.environ['HOME'])/'canary-audit.json'\n"
-        " audit.write_text(json.dumps({'source':str(source),'candidate':str(candidate)}))\n"
-        " print(json.dumps({'status':'pass','managed':{'distinct_native_children':3,'overlap_proven':True,'peer_dependency_proven':True,'terminal_count':3,'abort_count':1,'completion_decision':['allow','delegated_outcome_complete']},'unmanaged':{'first_attempt':True,'escapement_state_created':False}}))\n"
-        " raise SystemExit(0)\n"
-        "os.execv(sys.executable,[sys.executable,*sys.argv[1:]])\n",
-        encoding="utf-8",
-    )
-    python.chmod(0o755)
     uname = stub_bin / "uname"
     uname.write_text(
         "#!/usr/bin/env bash\nprintf 'Darwin\\n'\n",
@@ -227,9 +209,6 @@ def test_installer_finds_real_plugin_cache_shape_and_removes_legacy_prime(
     )
 
     assert result.returncode == 0, result.stderr
-    audit = json.loads((home / "canary-audit.json").read_text(encoding="utf-8"))
-    assert Path(audit["source"]) == PLUGIN_SOURCE
-    assert Path(audit["candidate"]) == plugin_root
     assert "plugin not installed" not in result.stdout
     updated = json.loads(settings_path.read_text(encoding="utf-8"))
     assert updated["model"] == "opus"

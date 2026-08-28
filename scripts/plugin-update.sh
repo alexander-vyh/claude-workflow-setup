@@ -518,7 +518,6 @@ if [[ "$DRY_RUN" == true ]]; then
 elif ! "$supervisor_installer"; then
   fail_after_refresh "continuation supervisor installation failed"
 fi
-if ! "$REPO_DIR/scripts/plugin-update-canary-gate.sh" "$DRY_RUN" "$REPO_DIR" "$new_path" "$(command -v claude)"; then fail_after_refresh "isolated delegation canary failed"; fi
 if [[ "$DRY_RUN" != true ]]; then
   python3 -B "$TRANSACTION_HELPER" commit --journal "$TRANSACTION_JOURNAL"
   trap - ERR

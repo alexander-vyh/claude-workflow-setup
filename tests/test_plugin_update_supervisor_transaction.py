@@ -98,13 +98,6 @@ def _cutover_fixture(tmp_path: Path) -> tuple[Path, Path, Path, Path, dict[str, 
     fake_bin.mkdir()
     _write_executable(fake_bin / "uname", "#!/bin/sh\nprintf 'Darwin\\n'\n")
     _write_executable(
-        fake_bin / "python3",
-        f"#!{sys.executable}\n"
-        "import os,sys\n"
-        "if any(value.endswith('delegation-canary.py') for value in sys.argv[1:]): raise SystemExit(0)\n"
-        "os.execv(os.environ['REAL_PYTHON'], [os.environ['REAL_PYTHON'], *sys.argv[1:]])\n",
-    )
-    _write_executable(
         fake_bin / "claude",
         f"#!{sys.executable}\n"
         + r"""
@@ -139,21 +132,6 @@ elif args[:2] == ["plugin", "disable"]:
     data = json.loads(settings.read_text())
     data.setdefault("enabledPlugins", {})["escapement@escapement"] = False
     settings.write_text(json.dumps(data, indent=2) + "\n")
-elif "--print" in args:
-    data = json.loads(settings.read_text())
-    if data.get("enabledPlugins", {}).get("escapement@escapement") is not False:
-        raise SystemExit(91)
-    session = "post-rollback-native-session"
-    tool = "toolu_post_rollback_native"
-    task = "post-rollback-native-child"
-    records = [
-        {"type":"system","subtype":"init","session_id":session,"claude_code_version":"2.1.248"},
-        {"type":"assistant","session_id":session,"message":{"role":"assistant","content":[{"type":"tool_use","id":tool,"name":"Agent","input":{"name":"post-rollback-native","subagent_type":"general-purpose","run_in_background":True}}]}},
-        {"type":"system","subtype":"task_started","session_id":session,"tool_use_id":tool,"task_id":task,"is_backgrounded":True,"task_type":"local_agent"},
-        {"type":"system","subtype":"task_notification","session_id":session,"tool_use_id":tool,"task_id":task,"status":"completed","uuid":"post-rollback-terminal"},
-        {"type":"result","subtype":"success","session_id":session,"result":"NATIVE_AGENT_OK"},
-    ]
-    print("\n".join(json.dumps(record) for record in records))
 raise SystemExit(0)
 """,
     )
@@ -162,7 +140,6 @@ raise SystemExit(0)
         "HOME": str(home),
         "PATH": f"{fake_bin}:/usr/bin:/bin",
         "NEW_PLUGIN_CACHE": str(new_cache),
-        "REAL_PYTHON": sys.executable,
         "BASH_FUNC_launchctl%%": _shell_launchctl(),
         "PYTHONDONTWRITEBYTECODE": "1",
     }
@@ -178,24 +155,6 @@ def _run(env: dict[str, str]) -> subprocess.CompletedProcess:
         text=True,
         timeout=40,
     )
-
-
-def _native_agent_probe(fake_bin: Path, env: dict[str, str]) -> list[dict]:
-    result = subprocess.run(
-        [
-            str(fake_bin / "claude"),
-            "--print",
-            "--output-format",
-            "stream-json",
-            "Use Agent once in the background and return NATIVE_AGENT_OK.",
-        ],
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
-    return [json.loads(line) for line in result.stdout.splitlines()]
 
 
 def _link_target(path: Path) -> str | None:
@@ -226,16 +185,16 @@ def _shell_launchctl() -> str:
     return r"""() {
   state="$HOME/launchctl.loaded"
   label="com.escapement.continuation-supervisor"
+  touch "$state"
   printf '%s\n' "$*" >> "$HOME/launchctl.log"
   if [[ "${1:-}" == print ]]; then
-    [[ -f "$state" ]] && grep -Fxq "$label" "$state" && return 0
+    grep -Fxq "$label" "$state" && return 0
     return 113
   fi
   if [[ "${1:-}" == bootout ]]; then
-    [[ -f "$state" ]] && grep -Fxq "$label" "$state" || return 3
+    grep -Fxq "$label" "$state" || return 3
     grep -Fvx "$label" "$state" > "$state.next" || true
     mv -f "$state.next" "$state"
-    [[ -s "$state" ]] || rm -f "$state"
     return 0
   fi
   if [[ "${1:-}" == bootstrap ]]; then
@@ -244,7 +203,7 @@ def _shell_launchctl() -> str:
       return 75
     fi
     [[ "${LAUNCHCTL_BOOTSTRAP_FAIL:-0}" != 1 ]] || return 75
-    [[ -f "$state" ]] && grep -Fxq "$label" "$state" && return 72
+    grep -Fxq "$label" "$state" && return 72
     printf '%s\n' "$label" >> "$state"
   fi
   return 0
@@ -641,8 +600,6 @@ import sys
 if any(value.endswith("plugin-update-transaction.py") for value in sys.argv[1:]) and "commit" in sys.argv[1:]:
     os.kill(os.getppid(), signal.SIGKILL)
     os.kill(os.getpid(), signal.SIGKILL)
-if any(value.endswith("delegation-canary.py") for value in sys.argv[1:]):
-    raise SystemExit(0)
 os.execv(os.environ["REAL_PYTHON"], [os.environ["REAL_PYTHON"], *sys.argv[1:]])
 """,
     )
@@ -901,7 +858,6 @@ def test_recovery_quiesces_new_service_before_restoring_filesystem(tmp_path):
         f"#!{real_python}\n"
         "import os,signal,sys\n"
         "if 'commit' in sys.argv: os.kill(os.getppid(), signal.SIGKILL); os.kill(os.getpid(), signal.SIGKILL)\n"
-        "if any(value.endswith('delegation-canary.py') for value in sys.argv[1:]): raise SystemExit(0)\n"
         "os.execv(os.environ['REAL_PYTHON'], [os.environ['REAL_PYTHON'], *sys.argv[1:]])\n",
     )
     interrupted = _run({**env, "REAL_PYTHON": real_python})
@@ -936,5 +892,4 @@ def test_recovery_quiesces_new_service_before_restoring_filesystem(tmp_path):
     assert observed.read_bytes() == b"", (
         "rollback restored filesystem authority while the new service was still loaded"
     )
-    loaded = home / "launchctl.loaded"
-    assert not loaded.exists() or not loaded.read_text().splitlines()
+    assert not (home / "launchctl.loaded").read_text().splitlines()

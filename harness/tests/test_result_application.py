@@ -67,7 +67,6 @@ def terminal_ledger(
             "terminal_event_id": f"terminal-{execution_id}",
             "terminal_reason": "completed",
             "result_digest": digest,
-            "host_event_id": f"host:terminal:{execution_id}",
         },
         at("2026-08-09T20:05:00Z"),
     )

@@ -1,4 +1,3 @@
-# file-complexity-waiver: flat, cohesive contract test over generated host surfaces — many small independent assertions, no shared state, no nesting; splitting it would scatter one manifest->targets contract across files.
 import os
 import datetime as dt
 import importlib.util
@@ -22,21 +21,11 @@ EXPECTED_CODEX_GATE = {
     "matcher": "Bash",
     "dispatcher": "codex_pretool_dispatch.py",
     "gate": "claude/hooks/test_oracle_brief_gate.py",
-    # Derived by the renderer as sum(gate timeouts) + per-gate overhead, so it
-    # moves whenever a Codex Bash gate is added or retimed. 160 = the previous
-    # 14 gates totalling 125s, plus review_gate at 20s, plus 1s of overhead for
-    # each of the resulting 15. review_gate needs 20s rather than 15 because it
-    # shells out to `bd` and to git; at 15s its own subprocess budget equalled
-    # the whole gate budget, and a dispatcher timeout is converted to a warning
-    # rather than a deny — so the gate would have failed open exactly when Dolt
-    # was contended.
-    # shared_tmp_artifact_gate then joined at 5s: 16 gates totalling 150s
-    # plus 16s of overhead.
-    "timeout": 166,
+    # shared_tmp_artifact_gate joins the chain at 5s: 139 + 5 + 1s of
+    # per-gate dispatcher overhead.
+    "timeout": 145,
 }
-CODEX_PLUGIN_FINAL_RESPONSE_GAP_FRAGMENT = (
-    'python3 -B "${PLUGIN_ROOT}/claude/hooks/codex_final_response_gap.py"'
-)
+CODEX_PLUGIN_FINAL_RESPONSE_GAP_FRAGMENT = 'python3 -B "${PLUGIN_ROOT}/claude/hooks/codex_final_response_gap.py"'
 CODEX_PLUGIN_CONTEXT_FRAGMENT = (
     'python3 -B "${PLUGIN_ROOT}/claude/hooks/escapement_session_context.py"'
 )
@@ -46,9 +35,7 @@ CLAUDE_PLUGIN_CONTEXT_COMMAND = (
 CLAUDE_PLUGIN_ROOT_CHECKOUT_GUARD_COMMAND = (
     'python3 -B "${CLAUDE_PLUGIN_ROOT}/hooks/root_checkout_guard.py"'
 )
-CODEX_PLUGIN_ROOT_CHECKOUT_GUARD_FRAGMENT = (
-    'python3 -B "${PLUGIN_ROOT}/claude/hooks/root_checkout_guard.py"'
-)
+CODEX_PLUGIN_ROOT_CHECKOUT_GUARD_FRAGMENT = 'python3 -B "${PLUGIN_ROOT}/claude/hooks/root_checkout_guard.py"'
 MINIMUM_VERIFIED_DELIVERY_FRAGMENTS = (
     "Escapement optimizes for minimum verified delivery",
     "YAGNI forbids speculative",
@@ -110,9 +97,7 @@ def test_generated_docs_make_escapement_the_workflow_policy_authority():
     for path in paths:
         text = " ".join(path.read_text(encoding="utf-8").split())
         assert "bd prime" not in text, path
-        assert (
-            "Beads is the task-state system, not the workflow-policy authority." in text
-        )
+        assert "Beads is the task-state system, not the workflow-policy authority." in text
         assert (
             "Git, pull-request, merge, deployment, completion, memory, and "
             "agent-behavior policy come from Escapement"
@@ -137,11 +122,7 @@ def test_active_distributions_do_not_depend_on_beads_policy_injection():
 
 def test_minimum_verified_delivery_guidance_without_oracle_guardrail_fails(tmp_path):
     temp_root = copy_repo(tmp_path)
-    for rel_path in (
-        "agent-surfaces/onboarding/outcome-oracle.md",
-        "AGENTS.md",
-        "CLAUDE.md",
-    ):
+    for rel_path in ("agent-surfaces/onboarding/outcome-oracle.md", "AGENTS.md", "CLAUDE.md"):
         path = temp_root / rel_path
         path.write_text(
             replace_normalized_phrase(
@@ -158,14 +139,10 @@ def test_minimum_verified_delivery_guidance_without_oracle_guardrail_fails(tmp_p
 
 def test_codex_repo_marketplace_points_to_installable_wrapper():
     marketplace_path = ROOT / ".agents" / "plugins" / "marketplace.json"
-    assert marketplace_path.exists(), (
-        "repo marketplace must expose the Escapement Codex wrapper"
-    )
+    assert marketplace_path.exists(), "repo marketplace must expose the Escapement Codex wrapper"
 
     marketplace = json.loads(marketplace_path.read_text())
-    entries = [
-        entry for entry in marketplace["plugins"] if entry["name"] == "escapement"
-    ]
+    entries = [entry for entry in marketplace["plugins"] if entry["name"] == "escapement"]
 
     assert marketplace["name"] == "escapement"
     assert entries == [
@@ -180,14 +157,10 @@ def test_codex_repo_marketplace_points_to_installable_wrapper():
 
 def test_codex_plugin_wrapper_manifest_uses_current_ingestion_contract():
     legacy_manifest = ROOT / ".codex-plugin" / "plugin.json"
-    assert not legacy_manifest.exists(), (
-        "legacy root Codex manifest is invalid and must not be installable"
-    )
+    assert not legacy_manifest.exists(), "legacy root Codex manifest is invalid and must not be installable"
 
     manifest_path = CODEX_WRAPPER / ".codex-plugin" / "plugin.json"
-    assert manifest_path.exists(), (
-        "Codex wrapper must include .codex-plugin/plugin.json"
-    )
+    assert manifest_path.exists(), "Codex wrapper must include .codex-plugin/plugin.json"
 
     manifest = json.loads(manifest_path.read_text())
 
@@ -222,9 +195,7 @@ def test_claude_plugin_manifest_has_no_version_so_auto_update_works():
     which is the whole point, since it silently disables auto-update.
     """
     manifest = json.loads(
-        (
-            ROOT / "plugins" / "escapement-claude" / ".claude-plugin" / "plugin.json"
-        ).read_text()
+        (ROOT / "plugins" / "escapement-claude" / ".claude-plugin" / "plugin.json").read_text()
     )
     assert manifest["name"] == "escapement"
     assert "version" not in manifest, (
@@ -361,7 +332,9 @@ def test_both_rendered_gates_load_their_real_analyzers(plugin_hooks):
         "oracle_reason_validation.py",
     )
     for dependency in dependencies:
-        canonical = (ROOT / "claude" / "hooks" / dependency).read_text(encoding="utf-8")
+        canonical = (ROOT / "claude" / "hooks" / dependency).read_text(
+            encoding="utf-8"
+        )
         target = plugin_hooks / dependency
         assert targets.get(target) == canonical, (
             "renderer omits or stales an implementation-echo dependency and "
@@ -475,14 +448,11 @@ def _manifest_codex_registrations():
             if command.startswith(
                 ("python3 -B claude/hooks/", "python3 -B harness/bin/")
             ):
-                command = (
-                    command.replace(
-                        "python3 -B ",
-                        'python3 -B "${PLUGIN_ROOT}/',
-                        1,
-                    )
-                    + '"'
-                )
+                command = command.replace(
+                    "python3 -B ",
+                    'python3 -B "${PLUGIN_ROOT}/',
+                    1,
+                ) + '"'
             registrations.append(
                 (
                     event["event"],
@@ -543,9 +513,9 @@ def _manifest_codex_bash_gate_timeouts():
 def test_codex_plugin_is_the_sole_hook_owner():
     """A repo plus the installed plugin must not execute every Codex hook twice."""
     repo_hooks = json.loads((ROOT / ".codex" / "hooks.json").read_text())["hooks"]
-    plugin_hooks = json.loads((CODEX_WRAPPER / "hooks" / "hooks.json").read_text())[
-        "hooks"
-    ]
+    plugin_hooks = json.loads(
+        (CODEX_WRAPPER / "hooks" / "hooks.json").read_text()
+    )["hooks"]
 
     assert repo_hooks == {}, (
         "repo-local Codex hooks duplicate the installed plugin; keep .codex/hooks.json "
@@ -570,10 +540,7 @@ def test_codex_plugin_is_the_sole_hook_owner():
     )
     [bash_hook] = bash_hooks
     assert "codex_pretool_dispatch.py" in bash_hook["command"]
-    assert (
-        _dispatcher_gate_paths(bash_hook["command"])
-        == _manifest_codex_bash_gate_paths()
-    )
+    assert _dispatcher_gate_paths(bash_hook["command"]) == _manifest_codex_bash_gate_paths()
     gate_timeouts = _dispatcher_gate_timeouts(bash_hook["command"])
     assert gate_timeouts == _manifest_codex_bash_gate_timeouts()
     assert bash_hook["timeout"] >= sum(gate_timeouts) + len(gate_timeouts)
@@ -641,18 +608,10 @@ def test_codex_guidance_routes_informational_beads_questions_directly():
 
 def test_codex_plugin_wrapper_hooks_are_self_contained_and_codex_shaped():
     hooks_path = CODEX_WRAPPER / "hooks" / "hooks.json"
-    assert hooks_path.exists(), (
-        "Codex wrapper must package hooks/hooks.json for plugin discovery"
-    )
+    assert hooks_path.exists(), "Codex wrapper must package hooks/hooks.json for plugin discovery"
 
     hooks_text = hooks_path.read_text()
-    for forbidden in (
-        "${CLAUDE_PLUGIN_ROOT}",
-        "~/.claude",
-        "CLAUDE_CODE_SESSION_ID",
-        "ScheduleWakeup",
-        "TeamCreate",
-    ):
+    for forbidden in ("${CLAUDE_PLUGIN_ROOT}", "~/.claude", "CLAUDE_CODE_SESSION_ID", "ScheduleWakeup", "TeamCreate"):
         assert forbidden not in hooks_text
 
     hooks = json.loads(hooks_text)["hooks"]
@@ -673,9 +632,7 @@ def test_codex_plugin_wrapper_hooks_are_self_contained_and_codex_shaped():
         if "${PLUGIN_ROOT}/" not in command:
             continue
         rel = command.split("${PLUGIN_ROOT}/", 1)[1].split('"', 1)[0]
-        assert (CODEX_WRAPPER / rel).is_file(), (
-            f"hook command references missing wrapper file: {rel}"
-        )
+        assert (CODEX_WRAPPER / rel).is_file(), f"hook command references missing wrapper file: {rel}"
 
     manifest = json.loads(MANIFEST.read_text())
     ready_hook_sources = {
@@ -790,7 +747,9 @@ def test_vendored_escapement_context_executes_with_packaged_resolver(
     result = subprocess.run(
         [sys.executable, str(hook_path)],
         cwd=nested,
-        input=json.dumps({"hook_event_name": "SessionStart", "cwd": str(nested)}),
+        input=json.dumps(
+            {"hook_event_name": "SessionStart", "cwd": str(nested)}
+        ),
         capture_output=True,
         text=True,
         check=False,
@@ -807,9 +766,7 @@ def test_vendored_escapement_context_executes_with_packaged_resolver(
 
 def test_codex_plugin_python_hooks_disable_bytecode():
     """The sole Codex hook owner must not leave bytecode in its install cache."""
-    plugin_hooks = json.loads((CODEX_WRAPPER / "hooks" / "hooks.json").read_text())[
-        "hooks"
-    ]
+    plugin_hooks = json.loads((CODEX_WRAPPER / "hooks" / "hooks.json").read_text())["hooks"]
     plugin_commands = [
         hook["command"]
         for event_items in plugin_hooks.values()
@@ -847,9 +804,7 @@ def test_claude_python_hooks_disable_bytecode():
         "Dual registration double-fires every gate (escapement-ptzz)."
     )
 
-    plugin_hooks = json.loads(
-        (ROOT / "plugins" / "escapement-claude" / "hooks" / "hooks.json").read_text()
-    )["hooks"]
+    plugin_hooks = json.loads((ROOT / "plugins" / "escapement-claude" / "hooks" / "hooks.json").read_text())["hooks"]
     plugin_commands = [
         hook["command"]
         for event_items in plugin_hooks.values()
@@ -865,8 +820,7 @@ def test_claude_python_hooks_disable_bytecode():
     # Positive control (migrated from the template): proves the -B check above is
     # scanning a non-empty set of real python hook commands.
     assert any(
-        command.startswith('python3 -B "${CLAUDE_PLUGIN_ROOT}/')
-        for command in plugin_commands
+        command.startswith('python3 -B "${CLAUDE_PLUGIN_ROOT}/') for command in plugin_commands
     ), "no bytecode-disabled python hook found in the plugin — the -B check is vacuous"
 
 
@@ -891,14 +845,10 @@ def test_codex_plugin_hooks_include_final_response_gap_warning():
         for command in session_start_commands
         if CODEX_PLUGIN_FINAL_RESPONSE_GAP_FRAGMENT in command
     ]
-    assert matches, (
-        "Codex plugin SessionStart must warn about the final-response Stop gap"
-    )
+    assert matches, "Codex plugin SessionStart must warn about the final-response Stop gap"
 
     rel = "claude/hooks/codex_final_response_gap.py"
-    assert (CODEX_WRAPPER / rel).is_file(), (
-        f"plugin command references missing file: {rel}"
-    )
+    assert (CODEX_WRAPPER / rel).is_file(), f"plugin command references missing file: {rel}"
 
 
 def test_codex_behavioral_gate_has_exact_event_shape():
@@ -913,17 +863,13 @@ def test_codex_behavioral_gate_has_exact_event_shape():
         and EXPECTED_CODEX_GATE["gate"] in _dispatcher_gate_paths(hook["command"])
         and hook.get("timeout") == EXPECTED_CODEX_GATE["timeout"]
     ]
-    assert len(matches) == 1, (
-        "Codex Test Oracle Brief gate must run through one Bash dispatcher"
-    )
+    assert len(matches) == 1, "Codex Test Oracle Brief gate must run through one Bash dispatcher"
 
 
 def test_root_checkout_guard_is_enabled_only_where_command_cwd_is_verified():
     """Codex cannot block when its hook payload omits exec-command workdir."""
     manifest = json.loads(MANIFEST.read_text())
-    entries = [
-        hook for hook in manifest["hooks"] if hook["id"] == "root_checkout_guard"
-    ]
+    entries = [hook for hook in manifest["hooks"] if hook["id"] == "root_checkout_guard"]
     assert len(entries) == 1, "root_checkout_guard must have exactly one manifest entry"
     entry = entries[0]
     assert entry["source"] == "claude/hooks/root_checkout_guard.py"
@@ -974,9 +920,7 @@ def test_root_checkout_guard_is_enabled_only_where_command_cwd_is_verified():
         "MultiEdit",
     }
 
-    plugin_hooks = json.loads((CODEX_WRAPPER / "hooks" / "hooks.json").read_text())[
-        "hooks"
-    ]
+    plugin_hooks = json.loads((CODEX_WRAPPER / "hooks" / "hooks.json").read_text())["hooks"]
     plugin_commands = [
         hook["command"]
         for item in plugin_hooks.get("PreToolUse", [])
@@ -997,7 +941,9 @@ def test_claude_path_classifying_gates_exclude_serena_without_project_root():
         "tdd-gate",
     }
     entries = {
-        hook["id"]: hook for hook in manifest["hooks"] if hook["id"] in path_classifiers
+        hook["id"]: hook
+        for hook in manifest["hooks"]
+        if hook["id"] in path_classifiers
     }
     assert set(entries) == path_classifiers
     for hook_id, entry in entries.items():
@@ -1016,10 +962,7 @@ def test_codex_generated_surfaces_do_not_use_claude_user_paths():
     text = (
         (ROOT / "AGENTS.md").read_text()
         + (ROOT / ".codex" / "hooks.json").read_text()
-        + "\n".join(
-            skill.read_text()
-            for skill in sorted((ROOT / ".agents" / "skills").glob("*/SKILL.md"))
-        )
+        + "\n".join(skill.read_text() for skill in sorted((ROOT / ".agents" / "skills").glob("*/SKILL.md")))
     )
     for needle in forbidden:
         assert needle not in text
@@ -1131,9 +1074,7 @@ def test_codex_behavioral_gate_wrong_event_fails_plugin_drift_check(tmp_path):
     result = run_renderer("--check", root=temp_root)
 
     assert result.returncode != 0
-    assert (
-        "generated target drift: plugins/escapement/hooks/hooks.json" in result.stderr
-    )
+    assert "generated target drift: plugins/escapement/hooks/hooks.json" in result.stderr
 
 
 @pytest.mark.parametrize("target", ["AGENTS.md", "CLAUDE.md", ".codex/hooks.json"])
@@ -1192,16 +1133,10 @@ def test_codex_skill_with_claude_only_token_fails(tmp_path):
 
 
 def assert_minimum_verified_delivery_guidance(root):
-    for rel_path in (
-        "agent-surfaces/onboarding/outcome-oracle.md",
-        "AGENTS.md",
-        "CLAUDE.md",
-    ):
+    for rel_path in ("agent-surfaces/onboarding/outcome-oracle.md", "AGENTS.md", "CLAUDE.md"):
         text = " ".join((root / rel_path).read_text().split())
         for fragment in MINIMUM_VERIFIED_DELIVERY_FRAGMENTS:
-            assert fragment in text, (
-                f"{rel_path} missing minimum verified delivery fragment: {fragment}"
-            )
+            assert fragment in text, f"{rel_path} missing minimum verified delivery fragment: {fragment}"
 
 
 def replace_normalized_phrase(text, required, replacement, rel_path):
@@ -1225,9 +1160,7 @@ def test_claude_marketplace_tracks_main_for_autoupdate():
     src = entry["source"]
     assert src["source"] == "git-subdir"
     assert src["path"] == "plugins/escapement-claude"
-    assert src["ref"] == "main", (
-        "marketplace must track main for continuous auto-update"
-    )
+    assert src["ref"] == "main", "marketplace must track main for continuous auto-update"
 
 
 def test_claude_plugin_hooks_include_sessionstart_rules_injection():
@@ -1240,9 +1173,7 @@ def test_claude_plugin_hooks_include_sessionstart_rules_injection():
     hooks = json.loads((CLAUDE_PLUGIN / "hooks" / "hooks.json").read_text())["hooks"]
     session_start = hooks.get("SessionStart", [])
     commands = [h["command"] for item in session_start for h in item["hooks"]]
-    assert any("inject-rules.sh" in c for c in commands), (
-        "SessionStart must inject the rules"
-    )
+    assert any("inject-rules.sh" in c for c in commands), "SessionStart must inject the rules"
 
 
 def test_claude_plugin_hooks_do_not_depend_on_user_local_claude_paths():
@@ -1301,9 +1232,7 @@ def test_claude_plugin_bundles_all_rules():
     """Every claude/rules/*.md is bundled into the plugin so injection is complete."""
     source_rules = {p.name for p in (ROOT / "claude" / "rules").glob("*.md")}
     bundled = {p.name for p in (CLAUDE_PLUGIN / "rules").glob("*.md")}
-    assert bundled == source_rules and source_rules, (
-        "all rules must be bundled, none dropped"
-    )
+    assert bundled == source_rules and source_rules, "all rules must be bundled, none dropped"
 
 
 def _manifest_hook(hook_id):
@@ -1321,24 +1250,7 @@ def _generated_hook_commands(plugin_root, event):
 
 
 def test_manifest_registers_only_nonblocking_managed_dispatch_observation():
-    """Dispatch AND completion observation are ready; reconciliation stays disabled.
-
-    This assertion used to enumerate PreToolUse alone. That was containment, not
-    the invariant: the completion events were unregistered because no installed
-    payload capture proved the host emitted a native child identity or a verdict
-    (escapement-g27c). The capture now exists
-    (`harness/tests/fixtures/agent_dispatch_hook_payloads.json`), so the
-    enumeration is widened to the four events the adapter actually consumes.
-
-    The invariant that has NOT moved, and must not: every registered delegation
-    event is observation only. PreToolUse may answer a permission question but
-    only ever with an allow, and the completion events return no decision at all
-    — asserted behaviorally in
-    `harness/tests/test_delegation_completion.py::test_the_real_entry_point_stays_silent_on_completion_events`.
-    Registering a decision-bearing hook on any of these would take native Agent
-    capacity away from the user, which is the failure this contract exists to
-    prevent.
-    """
+    """PreTool observation is ready; incomplete reconciliation stays disabled."""
     hook = _manifest_hook("delegation_hook")
     claude = hook["hosts"]["claude"]
     codex = hook["hosts"]["codex"]
@@ -1347,20 +1259,16 @@ def test_manifest_registers_only_nonblocking_managed_dispatch_observation():
     assert "automatic" in hook["description"]
     assert "non-blocking" in hook["description"]
     assert claude["status"] == "ready"
-    command = "python3 -B ~/.claude/harness/bin/delegation_hook.py"
     assert claude["events"] == [
-        {"event": "PreToolUse", "matcher": "Agent", "command": command},
-        {"event": "PostToolUse", "matcher": "Agent", "command": command},
-        {"event": "PostToolUseFailure", "matcher": "Agent", "command": command},
-        {"event": "SubagentStop", "command": command},
+        {
+            "event": "PreToolUse",
+            "matcher": "Agent",
+            "command": "python3 -B ~/.claude/harness/bin/delegation_hook.py",
+        }
     ]
     assert (
         "harness/tests/test_delegation_hook.py::"
         "test_managed_first_attempt_registers_without_prepare_or_child_bead"
-    ) in claude["fixtures"]
-    assert (
-        "harness/tests/test_delegation_completion.py::"
-        "test_captured_dispatch_reaches_terminal_carrying_the_childs_own_verdict"
     ) in claude["fixtures"]
     assert codex["status"] == "unsupported"
     assert "Agent" in codex["unsupported_reason"]
@@ -1383,16 +1291,12 @@ def test_renderer_rewrites_harness_commands_to_each_installed_plugin_root():
     renderer = importlib.util.module_from_spec(renderer_spec)
     renderer_spec.loader.exec_module(renderer)
 
-    assert (
-        renderer._codex_plugin_command("python3 -B harness/bin/execution_reconcile.py")
-        == 'python3 -B "${PLUGIN_ROOT}/harness/bin/execution_reconcile.py"'
-    )
-    assert (
-        renderer._claude_plugin_command(
-            "python3 -B ~/.claude/harness/bin/execution_reconcile.py"
-        )
-        == 'python3 -B "${CLAUDE_PLUGIN_ROOT}/harness/bin/execution_reconcile.py"'
-    )
+    assert renderer._codex_plugin_command(
+        "python3 -B harness/bin/execution_reconcile.py"
+    ) == 'python3 -B "${PLUGIN_ROOT}/harness/bin/execution_reconcile.py"'
+    assert renderer._claude_plugin_command(
+        "python3 -B ~/.claude/harness/bin/execution_reconcile.py"
+    ) == 'python3 -B "${CLAUDE_PLUGIN_ROOT}/harness/bin/execution_reconcile.py"'
 
 
 def _all_generated_hook_commands(plugin_root):
@@ -1409,34 +1313,20 @@ def test_generated_plugins_only_register_safe_delegation_observation():
     codex_commands = _all_generated_hook_commands(CODEX_WRAPPER)
     claude_commands = _all_generated_hook_commands(CLAUDE_PLUGIN)
 
-    assert all(
-        "execution_reconcile.py" not in command for _, _, command in codex_commands
-    )
-    assert all(
-        "execution_reconcile.py" not in command for _, _, command in claude_commands
-    )
-    delegation_command = (
-        'python3 -B "${CLAUDE_PLUGIN_ROOT}/harness/bin/delegation_hook.py"'
-    )
-    delegation_commands = {
-        (event, matcher)
+    assert all("execution_reconcile.py" not in command for _, _, command in codex_commands)
+    assert all("execution_reconcile.py" not in command for _, _, command in claude_commands)
+    delegation_commands = [
+        (event, matcher, command)
         for event, matcher, command in claude_commands
         if "delegation_hook.py" in command
-    }
-    # Exactly the four observation points the captured host payloads support —
-    # no more (a fifth would be unproven) and no fewer (a missing completion
-    # event strands the execution its PreToolUse registered).
-    assert delegation_commands == {
-        ("PreToolUse", "Agent"),
-        ("PostToolUse", "Agent"),
-        ("PostToolUseFailure", "Agent"),
-        ("SubagentStop", ""),
-    }
-    assert all(
-        command == delegation_command
-        for _, _, command in claude_commands
-        if "delegation_hook.py" in command
-    )
+    ]
+    assert delegation_commands == [
+        (
+            "PreToolUse",
+            "Agent",
+            'python3 -B "${CLAUDE_PLUGIN_ROOT}/harness/bin/delegation_hook.py"',
+        )
+    ]
     assert all("delegation_hook.py" not in command for _, _, command in codex_commands)
 
     for _event, _matcher, command in codex_commands + claude_commands:
@@ -1461,10 +1351,7 @@ def test_task_mode_entry_runs_only_after_successful_claude_bash_calls():
 def test_codex_plugin_bundles_reconciliation_import_closure():
     required = (
         "execution_reconcile.py",
-        "claude_agent_lifecycle.py",
         "execution_ledger.py",
-        "execution_event_identity.py",
-        "execution_parent.py",
         "execution_store.py",
         "execution_validation.py",
         "thread_identity.py",
@@ -1472,9 +1359,7 @@ def test_codex_plugin_bundles_reconciliation_import_closure():
     )
     for name in required:
         path = CODEX_WRAPPER / "harness" / "bin" / name
-        assert path.is_file(), (
-            f"Codex SessionStart bundle omits runtime dependency: {name}"
-        )
+        assert path.is_file(), f"Codex SessionStart bundle omits runtime dependency: {name}"
 
 
 def test_containment_sources_are_byte_identical_to_installed_package_copies():
@@ -1490,30 +1375,6 @@ def test_containment_sources_are_byte_identical_to_installed_package_copies():
         (
             ROOT / "harness" / "bin" / "execution_reconcile.py",
             CLAUDE_PLUGIN / "harness" / "bin" / "execution_reconcile.py",
-        ),
-        (
-            ROOT / "harness" / "bin" / "claude_agent_lifecycle.py",
-            CODEX_WRAPPER / "harness" / "bin" / "claude_agent_lifecycle.py",
-        ),
-        (
-            ROOT / "harness" / "bin" / "claude_agent_lifecycle.py",
-            CLAUDE_PLUGIN / "harness" / "bin" / "claude_agent_lifecycle.py",
-        ),
-        (
-            ROOT / "harness" / "bin" / "execution_event_identity.py",
-            CODEX_WRAPPER / "harness" / "bin" / "execution_event_identity.py",
-        ),
-        (
-            ROOT / "harness" / "bin" / "execution_event_identity.py",
-            CLAUDE_PLUGIN / "harness" / "bin" / "execution_event_identity.py",
-        ),
-        (
-            ROOT / "harness" / "bin" / "execution_parent.py",
-            CODEX_WRAPPER / "harness" / "bin" / "execution_parent.py",
-        ),
-        (
-            ROOT / "harness" / "bin" / "execution_parent.py",
-            CLAUDE_PLUGIN / "harness" / "bin" / "execution_parent.py",
         ),
         (
             ROOT / "claude" / "hooks" / "root_checkout_guard.py",
@@ -1775,9 +1636,7 @@ def test_claude_plugin_injects_rules_with_imperative_framing(tmp_path):
     payload = json.loads(result.stdout)
     ctx = payload["hookSpecificOutput"]["additionalContext"]
     assert payload["hookSpecificOutput"]["hookEventName"] == "SessionStart"
-    assert "OVERRIDE default behavior" in ctx, (
-        "injected rules must carry imperative framing"
-    )
+    assert "OVERRIDE default behavior" in ctx, "injected rules must carry imperative framing"
     assert len(ctx) > 5000, "rules bundle should be substantial, not a stub"
 
 
