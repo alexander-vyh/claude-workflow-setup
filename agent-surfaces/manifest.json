@@ -219,7 +219,7 @@
     },
     {
       "id": "delegation_hook",
-      "description": "Use automatic, non-blocking observation for managed Claude Agent dispatch without removing native Agent capacity.",
+      "description": "Use automatic, non-blocking observation for managed Claude Agent dispatch and completion without removing native Agent capacity.",
       "source": "harness/bin/delegation_hook.py",
       "hosts": {
         "codex": {
@@ -233,10 +233,26 @@
               "event": "PreToolUse",
               "matcher": "Agent",
               "command": "python3 -B ~/.claude/harness/bin/delegation_hook.py"
+            },
+            {
+              "event": "PostToolUse",
+              "matcher": "Agent",
+              "command": "python3 -B ~/.claude/harness/bin/delegation_hook.py"
+            },
+            {
+              "event": "PostToolUseFailure",
+              "matcher": "Agent",
+              "command": "python3 -B ~/.claude/harness/bin/delegation_hook.py"
+            },
+            {
+              "event": "SubagentStop",
+              "command": "python3 -B ~/.claude/harness/bin/delegation_hook.py"
             }
           ],
           "fixtures": [
-            "harness/tests/test_delegation_hook.py::test_managed_first_attempt_registers_without_prepare_or_child_bead"
+            "harness/tests/test_delegation_hook.py::test_managed_first_attempt_registers_without_prepare_or_child_bead",
+            "harness/tests/test_delegation_completion.py::test_captured_dispatch_reaches_terminal_carrying_the_childs_own_verdict",
+            "harness/tests/test_delegation_completion.py::test_host_rejected_dispatch_is_released_immediately"
           ]
         }
       }

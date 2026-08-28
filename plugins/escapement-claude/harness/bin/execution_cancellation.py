@@ -185,3 +185,55 @@ def cancel_unreported(
     )
     ledger["updated_at"] = timestamp
     return ledger
+
+
+def cancel_failed_dispatch(
+    ledger: dict,
+    execution_id: str,
+    now: dt.datetime,
+    *,
+    error: str,
+) -> dict:
+    """Release an execution whose dispatch the host itself rejected.
+
+    Distinct from `cancel_unreported` on purpose. There the evidence is
+    negative — silence — so a deadline must pass and a human-authored rationale
+    is required. Here the host reported, in its own PostToolUseFailure payload,
+    that no child was created at all. Waiting out a two-hour hard deadline
+    would be waiting for something that cannot happen, and demanding an
+    operator rationale would be asking a person to restate what the host
+    already said.
+
+    It is still a cancellation, never a result: `result_digest` stays null.
+    """
+    timestamp = _iso(now)
+    item = find_execution(ledger, execution_id)
+    terminal_event_id = (
+        f"dispatch-failed:{execution_id}:{item['attempt']}:{item['generation']}"
+    )
+    if item["state"] == "cancelled" and item["terminal_event_id"] == terminal_event_id:
+        return ledger
+    if item["state"] in {"terminal", "cancelled"}:
+        raise ValueError("execution already has different terminal evidence")
+    state_before = item["state"]
+    item["state"] = "cancelled"
+    item["terminal_at"] = timestamp
+    item["terminal_reason"] = "dispatch_failed"
+    item["terminal_event_id"] = terminal_event_id
+    item["result_digest"] = None
+    item["last_activity_at"] = timestamp
+    item["last_activity_kind"] = "terminal_event"
+    item["reconcile_due"] = None
+    ledger.setdefault("incidents", []).append(
+        {
+            "type": "dispatch_failed",
+            "execution_id": execution_id,
+            "attempt": item["attempt"],
+            "generation": item["generation"],
+            "host_error": error if isinstance(error, str) else "",
+            "state_before": state_before,
+            "recorded_at": timestamp,
+        }
+    )
+    ledger["updated_at"] = timestamp
+    return ledger

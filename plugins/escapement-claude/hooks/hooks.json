@@ -13,6 +13,15 @@
       {
         "hooks": [
           {
+            "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/harness/bin/delegation_hook.py\"",
+            "type": "command"
+          }
+        ],
+        "matcher": "Agent"
+      },
+      {
+        "hooks": [
+          {
             "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/hooks/design_doc_location_guard.py\"",
             "type": "command"
           }
@@ -63,6 +72,17 @@
           }
         ],
         "matcher": "Bash"
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [
+          {
+            "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/harness/bin/delegation_hook.py\"",
+            "type": "command"
+          }
+        ],
+        "matcher": "Agent"
       }
     ],
     "PreCompact": [
@@ -563,6 +583,17 @@
         "hooks": [
           {
             "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/hooks/validate_no_shirking.py\"",
+            "type": "command"
+          }
+        ],
+        "matcher": ""
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/harness/bin/delegation_hook.py\"",
             "type": "command"
           }
         ],
