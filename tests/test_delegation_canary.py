@@ -527,14 +527,11 @@ def test_canary_accepts_acknowledged_child_to_child_dependency(tmp_path) -> None
     assert output["managed"]["peer_dependency_proven"] is True
 
 
-def test_canary_accepts_delayed_hook_response_bound_to_earlier_dispatch(tmp_path) -> None:
+def test_canary_rejects_hook_response_delayed_past_next_dispatch(tmp_path) -> None:
     result, output = run_canary(tmp_path, delay_managed_hook_response=True)
 
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert output["managed"]["completion_decision"] == [
-        "allow",
-        "delegated_outcome_complete",
-    ]
+    assert result.returncode != 0
+    assert output == {"status": "fail", "reason": "managed_completion_unresolved"}
 
 
 def test_result_release_rejects_cross_swapped_terminal_evidence(tmp_path) -> None:

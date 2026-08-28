@@ -119,6 +119,40 @@ def _assert_audit(path: Path) -> int:
     return int(any(record[key] is not True for record in records for key in AUDIT_CHECKS))
 
 
+def _is_host_invocation(args: list[str]) -> bool:
+    return (
+        len(args) == 22
+        and args[:13]
+        == [
+            "--print",
+            "--verbose",
+            "--output-format",
+            "stream-json",
+            "--forward-subagent-text",
+            "--include-hook-events",
+            "--no-session-persistence",
+            "--permission-mode",
+            "bypassPermissions",
+            "--dangerously-skip-permissions",
+            "--setting-sources",
+            "",
+            "--settings",
+        ]
+        and bool(args[13])
+        and args[14:18]
+        == [
+            "--strict-mcp-config",
+            "--mcp-config",
+            '{"mcpServers":{}}',
+            "--plugin-dir",
+        ]
+        and bool(args[18])
+        and args[19] == "--session-id"
+        and bool(args[20])
+        and bool(args[21])
+    )
+
+
 def _host_stream(args: list[str]) -> int:
     candidate = Path(args[args.index("--plugin-dir") + 1]).resolve()
     session_id = args[args.index("--session-id") + 1]
@@ -183,16 +217,16 @@ def _host_stream(args: list[str]) -> int:
 
 def main() -> int:
     args = sys.argv[1:]
-    if len(args) == 2 and args[0] == "--assert-audit":
+    if len(args) == 2 and args[0] == "--assert-audit" and args[1]:
         return _assert_audit(Path(args[1]))
     if args == ["--version"]:
         print(f"{VERSION} (Claude Code)")
         return 0
     if args and args[0] == "plugin":
         return _plugin_command(args)
-    if "--plugin-dir" in args and "--session-id" in args:
+    if _is_host_invocation(args):
         return _host_stream(args)
-    return 0
+    return 2
 
 
 if __name__ == "__main__":
