@@ -125,6 +125,28 @@ _VALUE_FLAGS = {
 #: Flags meaning "do not actually close anything".
 _NON_CLOSING_FLAGS = {"-h", "--help", "--dry-run"}
 
+# Redirection operators. `bd close X >/dev/null` used to put `/dev/null` in the
+# positional slot, fail the bead-id shape check, and get refused as "a bead the
+# gate cannot identify" — while the denial's first remedy was "name the bead
+# explicitly", which is what the agent had already done (escapement-c94e).
+#
+# THE SPLIT BELOW IS LOAD-BEARING, and it is the difference between a friction
+# fix and a new bypass. A BARE operator takes the NEXT token as its target;
+# an operator with its target ATTACHED (`>/dev/null`, `2>&1`) takes nothing.
+# Consuming the next token unconditionally — the obvious version of this rule —
+# swallows a following bead in a multi-bead close, so `bd close A 2>&1 B` would
+# check only A and let B close UNREVIEWED. That is a silent allow, the one
+# direction this module must never move in; over-refusal is survivable, this is
+# not.
+#
+# One regex, split on whether anything FOLLOWS the operator inside the token.
+# That, not the operator's spelling, is what decides. `2>` is bare and takes the
+# next token; `2>&1` is the same operator family with its target attached and
+# takes nothing. A set of literal spellings got this wrong for `2>` and `&>`.
+_REDIRECT_RE = re.compile(
+    r"^(?P<op>&>>|&>|\d*(?:>>|>&|>|<<<|<<|<&|<))(?P<rest>.*)$"
+)
+
 
 def segments(command: str) -> list[str]:
     """Split a command line into independently-executed segments.
@@ -274,7 +296,7 @@ def _skip_global_flags(tokens: list[str]) -> list[str]:
 
 
 def _positionals(tokens: list[str]) -> list[str]:
-    """Every bare word that is not a flag or a flag's value."""
+    """Every bare word that is not a flag, a flag's value, or a redirection."""
     out: list[str] = []
     skip_next = False
     for token in tokens:
@@ -284,6 +306,14 @@ def _positionals(tokens: list[str]) -> list[str]:
         if token.startswith("-"):
             if "=" not in token and token.split("=", 1)[0] in _VALUE_FLAGS:
                 skip_next = True
+            continue
+        redirect = _REDIRECT_RE.match(token)
+        if redirect:
+            # Bare (`>`, `2>`, `&>`): the target is the NEXT token, consume it.
+            # Attached (`>/dev/null`, `2>&1`): the target rides along, consume
+            # only this token — see the note above on why the difference is a
+            # bypass rather than a nicety.
+            skip_next = not redirect.group("rest")
             continue
         cleaned = _clean(token)
         if cleaned:
