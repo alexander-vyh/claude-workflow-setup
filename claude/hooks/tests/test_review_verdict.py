@@ -532,3 +532,78 @@ class TestQuotedMaterialStrippedBeforeBothPaths:
     def test_an_unclosed_fence_does_not_swallow_the_declared_verdict(self):
         text = "### BLOCK\n- Tenant scope missing.\n\n```\ntruncated paste\n"
         assert rv.classify_blocking(text) is True
+
+
+class TestFalseNegativesUnderALabelOrAContradictingPass:
+    """escapement-o84f — the direction escapement-1nzm under-weighted.
+
+    1nzm arrived as a false-POSITIVE report (a clean PASS read as blocking), so
+    the fix, its corpus, and its mutations were all aimed that way. Two false
+    NEGATIVES survived, and those are the worse direction: a false positive
+    denies an honest close and is loudly visible, while a false negative lets
+    unreviewed work through and is silent.
+    """
+
+    def test_a_labelled_blocker_mid_sentence_blocks(self):
+        """`_is_label` required the marker to OPEN a clause, so a marker
+        introduced by ordinary sentence structure never registered — even with
+        an explicit colon making it unambiguously a label."""
+        assert rv.classify_blocking(
+            "This is a BLOCKER: the migration drops the column."
+        ) is True
+
+    def test_findings_under_a_declared_pass_block(self):
+        """A review that lists blockers and then declares PASS contradicts
+        itself. The safe reading of a contradiction is the blocking one."""
+        assert rv.classify_blocking(
+            "### BLOCK\n- tenant scope missing.\n\n### Verdict\nPASS\n"
+        ) is True
+
+    def test_the_quoted_repair_case_still_passes(self):
+        """THE interaction that can go wrong, pinned rather than assumed.
+
+        A second review quoting round one's blockers to say they were addressed
+        must still pass, or the repair loop cannot terminate and the waiver
+        becomes the only exit. Findings-override-PASS must not reach into
+        quoted material; `_strip_quoted` is what keeps it out, and this asserts
+        the two rules compose rather than trusting that they do.
+        """
+        assert rv.classify_blocking(
+            "## Adversarial Review: round 2\n\n"
+            "### BLOCK\nNone.\n\n"
+            "### NOTE\n"
+            "Round 1 said:\n\n"
+            "```\n"
+            "### BLOCK\n"
+            "- BLOCKER: the tiebreak is unconstrained.\n"
+            "```\n\n"
+            "Fixed at `_review_ledger.py:271`.\n\n"
+            "### Verdict\nPASS\n"
+        ) is False
+
+    def test_an_empty_block_section_under_a_pass_still_passes(self):
+        """The 1nzm control, restated here so a findings-override rule that
+        ignored the section body would fail loudly rather than silently."""
+        assert rv.classify_blocking(
+            "### BLOCK\nNone.\n\n### Verdict\nPASS\n"
+        ) is False
+
+    def test_a_declared_reject_still_blocks(self):
+        assert rv.classify_blocking("### Verdict\nREJECT\n") is True
+
+    @pytest.mark.parametrize("text", [
+        "### No blockers\nThe fingerprint comparison is correct.\n\n### Verdict\nPASS\n",
+        "### Blocking behaviour\nThe queue blocks by design, and it is documented.\n\n### Verdict\nPASS\n",
+        "### No blockers\nThe fingerprint comparison is correct.\n",
+    ])
+    def test_a_heading_that_negates_or_adjectivises_its_marker_is_not_findings(self, text):
+        """The findings-override must apply the same label and negation
+        discipline the prose scan does.
+
+        Mutation testing found this: dropping the guard inside the section scan
+        changed nothing, because the corpus had no heading that *negates* its
+        own marker. "### No blockers" over a real body is an ordinary way to
+        write a clean review, and without the guard all three of these override
+        a declared PASS and deny the close.
+        """
+        assert rv.classify_blocking(text) is False, text
