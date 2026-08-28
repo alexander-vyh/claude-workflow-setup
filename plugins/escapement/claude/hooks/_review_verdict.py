@@ -58,21 +58,24 @@ import re
 #: trivially triggered by an attacker, because *no captured verdicts* is the
 #: default state of a fresh ledger. An honest constant that a human must flip is
 #: safer than a detector that the adversary controls the input to.
-VERDICT_CAPTURE_SUPPORTED = False
+VERDICT_CAPTURE_SUPPORTED = True
 
 #: The evidence behind the constant above. Required to be non-empty by
 #: test_review_verdict.py so that flipping the flag is a documented claim rather
 #: than a silent tightening or a silent surrender.
 CAPTURE_EVIDENCE = (
-    "CAPABILITY PROVEN, FEATURE STILL GATED. escapement-g27c (PR #183) "
-    "established by observation, not inference, that a reviewer subagent's "
-    "final text is SubagentStop.last_assistant_message, joined to its dispatch "
-    "by tool_response.agentId == SubagentStop.agent_id; review_gate reads "
-    "exactly those fields. This flag is False because of escapement-1nzm, not "
-    "because of the host: classify_blocking returns blocking for a clean PASS "
-    "on the format adversarial-reviewer.md mandates, so enabling capture would "
-    "deny honest closes with a denial whose own remedy cannot clear it. Flip "
-    "to True when 1nzm lands and the classifier separates its two classes."
+    "ENABLED 2026-08-28. Two independent conditions had to hold, and both now "
+    "do. CAPABILITY: escapement-g27c (PR #183) established by observation, not "
+    "inference, that a reviewer subagent's final text is "
+    "SubagentStop.last_assistant_message, joined to its dispatch by "
+    "tool_response.agentId == SubagentStop.agent_id; the fixture is committed "
+    "at harness/tests/fixtures/agent_dispatch_hook_payloads.json and asserted "
+    "by harness/tests/test_agent_dispatch_capability.py. CORRECTNESS: "
+    "escapement-1nzm (PR #184) fixed a classifier that returned blocking for a "
+    "clean PASS on the format adversarial-reviewer.md mandates — enabling "
+    "capture on top of it would have denied honest closes with a denial whose "
+    "own remedy could not clear it. Turning this on before BOTH held would "
+    "have been worse than leaving it off."
 )
 
 #: Beads metadata is not a document store, so a long verdict is stored clipped.

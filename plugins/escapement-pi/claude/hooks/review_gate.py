@@ -59,42 +59,36 @@ described as mechanically enforced when it is not:
     this bead, at the current work fingerprint, corroborated by an observed
     isolated dispatch) are unchanged.
 
-  NOT ENFORCED YET — THE WHOLE VERDICT-CAPTURE FEATURE. Both the traceability
-    rule (the recorded findings must BE the reviewer's returned text) and the
-    blocking rule (a verdict naming unresolved blockers refuses the close until
-    the work changes and is re-reviewed) are gated behind the single flag
-    `_review_verdict.VERDICT_CAPTURE_SUPPORTED`, and switch on together.
+  ENFORCED AS OF 2026-08-28 — THE VERDICT-CAPTURE FEATURE IS ON. The recorded
+    findings must BE the reviewer's returned text, and a verdict naming
+    unresolved blocking findings refuses the close until the work changes and
+    is re-reviewed. Both were dark behind
+    `_review_verdict.VERDICT_CAPTURE_SUPPORTED` until two independent
+    conditions held:
 
-    The CAPABILITY is now proven, so the flag no longer means "we do not know".
-    escapement-g27c established by observation that the reviewer's final text
-    is `SubagentStop.last_assistant_message`, joined to its dispatch by
-    `tool_response.agentId`, and the wiring below reads exactly those fields.
-    The flag stays False for a different and specific reason: escapement-1nzm
-    showed the blocking classifier returns "blocking" for a clean PASS on the
-    format `adversarial-reviewer.md` mandates. Enabling capture on top of that
-    classifier would deny honest closes with a denial its own remedy cannot
-    clear. The flag flips when 1nzm lands, not before.
+      CAPABILITY (escapement-g27c). A hook can observe a subagent's final text
+        at `SubagentStop.last_assistant_message`, joined to its dispatch by
+        `tool_response.agentId`. Established from a captured payload, not from
+        inference — the earlier binary-strings reading pointed at
+        `PostToolUse.tool_response`, which for a background dispatch (how every
+        subagent now runs) carries no reply at all.
 
-    An earlier version of this docstring claimed the rule would "switch on the
-    moment escapement-g27c produces a real captured payload". It produced one,
-    and flipping the flag would NOT have worked, because capture was wired to
-    `PostToolUse.tool_response` — which for a background dispatch carries no
-    reply at all. Recording that here because a capability claim that quietly
-    stops being true is the failure this whole gate is built against.
+      CORRECTNESS (escapement-1nzm). The blocking classifier returned
+        "blocking" for a clean PASS on the format `adversarial-reviewer.md`
+        mandates. Enabling capture on top of that would have refused honest
+        closes with a denial its own remedy could not clear — "fix what the
+        reviewer flagged" when nothing was flagged, at an unchanged fingerprint
+        that re-recording cannot move — leaving REVIEW_WAIVER as the only exit.
+        Waiver rot arriving by the honest path.
 
-    The blocking deny was NOT originally gated, and that was a live defect
-    rather than a tidiness issue: `record_verdict` runs at `Agent` PostToolUse
-    unconditionally, so on any host where capture happens to work, a verdict
-    would be classified and the blocking deny would fire with the flag still
-    False — using a classifier that escapement-1nzm showed returns "blocking"
-    for a clean PASS. That denial's own remedy cannot clear it: it says "fix
-    what the reviewer flagged" when nothing was flagged, at an unchanged
-    fingerprint that re-recording cannot move, leaving REVIEW_WAIVER as the
-    only exit. Capture, classification, and the blocking deny are one feature
-    and are gated as one.
+    Shipping the capability before BOTH held would have been worse than
+    shipping it disabled, which is why it stayed off through four merges that
+    each made it more tempting to flip.
 
-    Until the flag flips, an implementer who dispatches a reviewer and ignores
-    it can still close the bead. This docstring must keep saying so.
+    What this does NOT reach: Codex exposes no `Agent` event, so no verdict can
+    be captured there and the corroboration is skipped rather than failed. On
+    Codex the load-bearing rules remain "a substantive review of this bead at
+    this fingerprint is on record".
 
 GATE-DESIGN COMPLIANCE (claude/rules/gate-design.md)
 ----------------------------------------------------
