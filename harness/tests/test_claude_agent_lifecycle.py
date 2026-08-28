@@ -15,14 +15,19 @@ import importlib.util
 import json
 import pathlib
 import re
+import subprocess
 import sys
 
 import pytest
 
 BIN = pathlib.Path(__file__).resolve().parent.parent / "bin"
+ROOT = BIN.parents[1]
 FIXTURES = pathlib.Path(__file__).resolve().parent / "fixtures"
 FIXTURE_PATH = FIXTURES / "claude-agent-lifecycle-2.1.247.jsonl"
 PROVENANCE_PATH = FIXTURES / "claude-agent-lifecycle-2.1.247.provenance.json"
+ABORT_FIXTURE_PATH = FIXTURES / "claude-agent-abort-2.1.248.jsonl"
+ABORT_PROVENANCE_PATH = FIXTURES / "claude-agent-abort-2.1.248.provenance.json"
+ABORT_RAW_PATH = FIXTURES / "captures" / "claude-agent-abort-2.1.248.raw.jsonl"
 sys.path.insert(0, str(BIN))
 
 import execution_ledger as ledger_api  # noqa: E402
@@ -184,6 +189,11 @@ def fixtures() -> dict[str, dict]:
     return {item["fixture_id"]: item["record"] for item in records}
 
 
+def abort_fixtures() -> dict[str, dict]:
+    records = [json.loads(line) for line in ABORT_FIXTURE_PATH.read_text().splitlines()]
+    return {item["fixture_id"]: item["record"] for item in records}
+
+
 def load_adapter():
     path = BIN / "claude_agent_lifecycle.py"
     assert path.is_file(), "Claude lifecycle adapter is not implemented"
@@ -251,6 +261,29 @@ def interactive_ledger() -> dict:
             "generation": 1,
         },
         at("2026-08-27T18:00:22Z"),
+    )
+    return ledger
+
+
+def abort_ledger(captured: dict[str, dict]) -> dict:
+    dispatch_record = captured["abort_agent_tool_use"]
+    dispatch = tool_use(dispatch_record)
+    ledger = ledger_api.new_ledger(dispatch_record["session_id"])
+    ledger_api.register_execution(
+        ledger,
+        {
+            "kind": "dispatch_registered",
+            "parent_session_id": dispatch_record["session_id"],
+            "bead_id": "escapement-xncx",
+            "execution_id": "fixture-current-abort-execution",
+            "host": "claude",
+            "agent_name": dispatch["input"]["name"],
+            "dispatch_tool_use_id": dispatch["id"],
+            "watchdog_id": "watch-fixture-current-abort",
+            "attempt": 1,
+            "generation": 1,
+        },
+        at("2026-08-28T01:28:28Z"),
     )
     return ledger
 
@@ -523,6 +556,99 @@ def test_proven_no_spawn_aborts_without_fabricating_child_identity(tmp_path) -> 
     assert item(ledger)["state"] == "aborted"
     assert item(ledger)["native_child_id"] is None
     assert completion(ledger) == ("allow", "delegated_outcome_complete")
+
+
+def test_current_additive_abort_content_preserves_structured_abort(tmp_path) -> None:
+    adapter = load_adapter()
+    captured = abort_fixtures()
+    ledger = abort_ledger(captured)
+    transcript = write_transcript(
+        tmp_path / "current-no-spawn.jsonl",
+        captured["abort_agent_tool_use"],
+        captured["abort_error_result"],
+    )
+
+    events = adapter.observe_transcript(transcript, ledger)
+
+    assert [event["kind"] for event in events] == ["dispatch_aborted"]
+    apply_events(ledger, events, "2026-08-28T01:28:29Z")
+    assert item(ledger)["state"] == "aborted"
+    assert item(ledger)["native_child_id"] is None
+
+
+@pytest.mark.parametrize(
+    ("mutation", "value"),
+    [
+        ("type", "text"),
+        ("is_error", False),
+        ("tool_use_id", "foreign-tool-use"),
+        ("content", {"agentId": "invented-child"}),
+        ("agentId", "invented-child"),
+    ],
+)
+def test_current_abort_rejects_mutated_fields_or_child_identity(
+    tmp_path, mutation, value
+) -> None:
+    adapter = load_adapter()
+    captured = abort_fixtures()
+    error = copy.deepcopy(captured["abort_error_result"])
+    tool_result(error)[mutation] = value
+    ledger = abort_ledger(captured)
+    before = copy.deepcopy(ledger)
+    transcript = write_transcript(
+        tmp_path / f"current-no-spawn-{mutation}.jsonl",
+        captured["abort_agent_tool_use"],
+        error,
+    )
+
+    assert adapter.observe_transcript(transcript, ledger) == []
+    assert ledger == before
+
+
+def test_current_abort_fixture_has_inspectable_raw_provenance() -> None:
+    provenance = json.loads(ABORT_PROVENANCE_PATH.read_text())
+
+    assert provenance["host"] == {"product": "Claude Code", "version": "2.1.248"}
+    assert provenance["sanitizer"]["version"] == "1"
+    assert provenance["sanitizer"]["name"] == "sanitize_claude_lifecycle_fixtures.py"
+    assert {
+        record["fixture_id"]: (
+            record["raw_record_sha256"],
+            record["retained_json_pointers"],
+        )
+        for record in provenance["records"]
+    } == {
+        "abort_agent_tool_use": (
+            "708f2a6fc56d3f62bc6608616383d23cf03c7c6c7769d79431e52e2f49b1a687",
+            list(PROVENANCE_CONTRACT["no_spawn_agent_tool_use"][1]),
+        ),
+        "abort_error_result": (
+            "80f19cb70b13d60419f6920c65a2455f30ef180672d066d80526b74555b7efdb",
+            [*PROVENANCE_CONTRACT["no_spawn_error_result"][1], "/message/content/0/content"],
+        ),
+    }
+
+
+def test_current_abort_fixture_regenerates_exactly_from_raw_capture() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "tools" / "sanitize_claude_lifecycle_fixtures.py"),
+            "--abort-stream",
+            str(ABORT_RAW_PATH),
+            "--abort-fixture",
+            str(ABORT_FIXTURE_PATH),
+            "--abort-provenance",
+            str(ABORT_PROVENANCE_PATH),
+            "--check",
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_historical_interactive_spawn_requires_exact_structured_identity(

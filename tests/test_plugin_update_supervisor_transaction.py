@@ -98,6 +98,13 @@ def _cutover_fixture(tmp_path: Path) -> tuple[Path, Path, Path, Path, dict[str, 
     fake_bin.mkdir()
     _write_executable(fake_bin / "uname", "#!/bin/sh\nprintf 'Darwin\\n'\n")
     _write_executable(
+        fake_bin / "python3",
+        f"#!{sys.executable}\n"
+        "import os,sys\n"
+        "if any(value.endswith('delegation-canary.py') for value in sys.argv[1:]): raise SystemExit(0)\n"
+        "os.execv(os.environ['REAL_PYTHON'], [os.environ['REAL_PYTHON'], *sys.argv[1:]])\n",
+    )
+    _write_executable(
         fake_bin / "claude",
         f"#!{sys.executable}\n"
         + r"""
@@ -140,6 +147,7 @@ raise SystemExit(0)
         "HOME": str(home),
         "PATH": f"{fake_bin}:/usr/bin:/bin",
         "NEW_PLUGIN_CACHE": str(new_cache),
+        "REAL_PYTHON": sys.executable,
         "BASH_FUNC_launchctl%%": _shell_launchctl(),
         "PYTHONDONTWRITEBYTECODE": "1",
     }
@@ -185,16 +193,16 @@ def _shell_launchctl() -> str:
     return r"""() {
   state="$HOME/launchctl.loaded"
   label="com.escapement.continuation-supervisor"
-  touch "$state"
   printf '%s\n' "$*" >> "$HOME/launchctl.log"
   if [[ "${1:-}" == print ]]; then
-    grep -Fxq "$label" "$state" && return 0
+    [[ -f "$state" ]] && grep -Fxq "$label" "$state" && return 0
     return 113
   fi
   if [[ "${1:-}" == bootout ]]; then
-    grep -Fxq "$label" "$state" || return 3
+    [[ -f "$state" ]] && grep -Fxq "$label" "$state" || return 3
     grep -Fvx "$label" "$state" > "$state.next" || true
     mv -f "$state.next" "$state"
+    [[ -s "$state" ]] || rm -f "$state"
     return 0
   fi
   if [[ "${1:-}" == bootstrap ]]; then
@@ -203,7 +211,7 @@ def _shell_launchctl() -> str:
       return 75
     fi
     [[ "${LAUNCHCTL_BOOTSTRAP_FAIL:-0}" != 1 ]] || return 75
-    grep -Fxq "$label" "$state" && return 72
+    [[ -f "$state" ]] && grep -Fxq "$label" "$state" && return 72
     printf '%s\n' "$label" >> "$state"
   fi
   return 0
@@ -600,6 +608,8 @@ import sys
 if any(value.endswith("plugin-update-transaction.py") for value in sys.argv[1:]) and "commit" in sys.argv[1:]:
     os.kill(os.getppid(), signal.SIGKILL)
     os.kill(os.getpid(), signal.SIGKILL)
+if any(value.endswith("delegation-canary.py") for value in sys.argv[1:]):
+    raise SystemExit(0)
 os.execv(os.environ["REAL_PYTHON"], [os.environ["REAL_PYTHON"], *sys.argv[1:]])
 """,
     )
@@ -858,6 +868,7 @@ def test_recovery_quiesces_new_service_before_restoring_filesystem(tmp_path):
         f"#!{real_python}\n"
         "import os,signal,sys\n"
         "if 'commit' in sys.argv: os.kill(os.getppid(), signal.SIGKILL); os.kill(os.getpid(), signal.SIGKILL)\n"
+        "if any(value.endswith('delegation-canary.py') for value in sys.argv[1:]): raise SystemExit(0)\n"
         "os.execv(os.environ['REAL_PYTHON'], [os.environ['REAL_PYTHON'], *sys.argv[1:]])\n",
     )
     interrupted = _run({**env, "REAL_PYTHON": real_python})
@@ -892,4 +903,5 @@ def test_recovery_quiesces_new_service_before_restoring_filesystem(tmp_path):
     assert observed.read_bytes() == b"", (
         "rollback restored filesystem authority while the new service was still loaded"
     )
-    assert not (home / "launchctl.loaded").read_text().splitlines()
+    loaded = home / "launchctl.loaded"
+    assert not loaded.exists() or not loaded.read_text().splitlines()

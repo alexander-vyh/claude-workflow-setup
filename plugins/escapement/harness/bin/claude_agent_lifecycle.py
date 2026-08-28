@@ -257,11 +257,20 @@ def _abort_events(records: list[dict], ledger: dict) -> list[dict]:
             content = _tool_content(item)
             if _session(item) != session_id or content is None:
                 continue
-            if content == {
+            required = {
                 "type": "tool_result",
                 "is_error": True,
                 "tool_use_id": dispatch_id,
-            }:
+            }
+            allowed_keys = {frozenset(required), frozenset((*required, "content"))}
+            if (
+                all(content.get(key) == value for key, value in required.items())
+                and frozenset(content) in allowed_keys
+                and (
+                    "content" not in content
+                    or isinstance(content["content"], str) and bool(content["content"])
+                )
+            ):
                 matches.append(item)
         if len(matches) == 1:
             event = _event_base(ledger, execution, "dispatch_aborted", matches[0])

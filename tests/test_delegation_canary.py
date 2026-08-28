@@ -123,6 +123,64 @@ def _agent_records(index: int) -> tuple[list[dict], dict]:
     return records, terminal
 
 
+def _live_peer_records(launches: list[list[dict]], scenario: str) -> list[dict]:
+    send_id = "toolu_peer_send"
+    sender_index = 2 if scenario == "live-wrong-sender" else 0
+    recipient_index = 2 if scenario == "live-wrong-recipient-name" else 1
+    pin_index = 2 if scenario == "live-wrong-recipient-id" else recipient_index
+    token = "DEPENDENCY-WRONG" if scenario == "live-wrong-nonce" else "DEPENDENCY-42"
+    request = {
+        "type": "assistant",
+        "session_id": "canary-managed-session",
+        "parent_tool_use_id": launches[sender_index][0]["message"]["content"][0]["id"],
+        "message": {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": send_id,
+                    "name": "SendMessage",
+                    "input": {
+                        "recipient": f"canary-child-{recipient_index + 1}",
+                        "message": token,
+                    },
+                }
+            ],
+        },
+    }
+    if scenario == "live-peer-unacknowledged":
+        return [request]
+    response = {
+        "type": "user",
+        "session_id": "canary-managed-session",
+        "parent_tool_use_id": request["parent_tool_use_id"],
+        "message": {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": send_id,
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                {
+                                    "success": True,
+                                    "pin": {
+                                        "id": launches[pin_index][1]["task_id"],
+                                        "name": f"canary-child-{pin_index + 1}",
+                                    },
+                                }
+                            ),
+                        }
+                    ],
+                }
+            ],
+        },
+    }
+    return [request, response]
+
+
 def managed_stream(scenario: str = "ok") -> list[dict]:
     launches: list[list[dict]] = []
     terminals: list[dict] = []
@@ -134,19 +192,6 @@ def managed_stream(scenario: str = "ok") -> list[dict]:
         launches[1][1]["task_id"] = launches[0][1]["task_id"]
         launches[1][2]["tool_use_result"]["agentId"] = launches[0][1]["task_id"]
         terminals[1]["task_id"] = launches[0][1]["task_id"]
-    peer = {
-        "type": "result",
-        "subtype": "success",
-        "session_id": "canary-managed-session",
-        "uuid": "peer-dependency",
-        "origin": {
-            "kind": "peer",
-            "from": "canary-child-1",
-            "name": "canary-child-1",
-            "senderTaskId": launches[0][1]["task_id"],
-            "body": "DEPENDENCY-42",
-        },
-    }
     if scenario == "sequential":
         launch_and_terminal = []
         for launch, terminal in zip(launches, terminals, strict=True):
@@ -155,8 +200,10 @@ def managed_stream(scenario: str = "ok") -> list[dict]:
         launch_and_terminal = [record for launch in launches for record in launch]
     if scenario == "missing-peer":
         peer_records = []
+    elif scenario.startswith("live-"):
+        peer_records = _live_peer_records(launches, scenario)
     else:
-        peer_records = [peer]
+        peer_records = _live_peer_records(launches, "live-peer")
     if scenario == "unresolved-terminal":
         terminals = [record for record in terminals if record.get("uuid") != "terminal-3"]
     no_spawn = captured()
@@ -191,6 +238,9 @@ def fake_claude(path: Path) -> Path:
         "import os, pathlib, sys\n"
         "if '--version' in sys.argv[1:]:\n"
         " print('2.1.247 (Claude Code)'); raise SystemExit(0)\n"
+        "audit=pathlib.Path(os.environ['FAKE_CLAUDE_AUDIT'])\n"
+        "with audit.open('a') as handle:\n"
+        " import json; handle.write(json.dumps({'config_dir':os.environ.get('CLAUDE_CONFIG_DIR'),'args':sys.argv[1:]})+'\\n')\n"
         "counter=pathlib.Path(os.environ['FAKE_CLAUDE_COUNTER'])\n"
         "count=int(counter.read_text()) if counter.exists() else 0\n"
         "counter.write_text(str(count+1))\n"
@@ -235,6 +285,7 @@ def run_canary(tmp_path: Path, scenario: str = "ok", *, drift: bool = False):
         env={
             **os.environ,
             "FAKE_CLAUDE_COUNTER": str(counter),
+            "FAKE_CLAUDE_AUDIT": str(tmp_path / "claude-audit.jsonl"),
             "FAKE_UNMANAGED_STREAM": str(unmanaged),
             "FAKE_MANAGED_STREAM": str(managed),
         },
@@ -271,12 +322,24 @@ def test_isolated_canary_proves_unmanaged_and_managed_public_outcomes(tmp_path) 
     ]
 
 
+def test_canary_accepts_acknowledged_child_to_child_dependency(tmp_path) -> None:
+    result, output = run_canary(tmp_path, "live-peer")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert output["managed"]["peer_dependency_proven"] is True
+
+
 @pytest.mark.parametrize(
     ("scenario", "reason"),
     [
         ("sequential", "children_do_not_overlap"),
         ("duplicate-ids", "native_child_identity_unresolved"),
         ("missing-peer", "peer_dependency_unproven"),
+        ("live-wrong-sender", "peer_dependency_unproven"),
+        ("live-wrong-recipient-name", "peer_dependency_unproven"),
+        ("live-wrong-recipient-id", "peer_dependency_unproven"),
+        ("live-wrong-nonce", "peer_dependency_unproven"),
+        ("live-peer-unacknowledged", "peer_dependency_unproven"),
         ("unresolved-terminal", "managed_completion_unresolved"),
     ],
 )
@@ -292,3 +355,24 @@ def test_canary_rejects_candidate_source_or_hook_drift(tmp_path) -> None:
 
     assert result.returncode != 0
     assert output == {"status": "fail", "reason": "installed_surface_drift"}
+
+
+def test_canary_isolates_settings_without_hiding_host_authentication(tmp_path) -> None:
+    result, _output = run_canary(tmp_path)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    calls = [
+        json.loads(line)
+        for line in (tmp_path / "claude-audit.jsonl").read_text().splitlines()
+    ]
+    assert len(calls) == 2
+    for call in calls:
+        assert call["config_dir"] is None
+        assert "--no-session-persistence" in call["args"]
+        assert "--tools" not in call["args"]
+        setting_sources = call["args"][call["args"].index("--setting-sources") + 1]
+        assert setting_sources == ""
+        settings = call["args"][call["args"].index("--settings") + 1]
+        assert Path(settings).is_relative_to(tmp_path / "scratch" / "config")
+        mcp = call["args"][call["args"].index("--mcp-config") + 1]
+        assert json.loads(mcp) == {"mcpServers": {}}
