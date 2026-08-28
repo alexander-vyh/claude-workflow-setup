@@ -144,6 +144,7 @@ from _review_command import (  # noqa: E402
     writes_reserved_metadata,
 )
 from _review_ledger import (  # noqa: E402
+    find_dispatch,
     record_agent_id,
     record_dispatch,
     record_subagent_verdict,
@@ -302,7 +303,7 @@ def _deny_reserved_metadata() -> str:
 # ---------------------------------------------------------------------------
 
 def evaluate_close(command: str, bead_id: str, cwd: str | None,
-                   claude_shape: bool) -> str:
+                   claude_shape: bool, session_id: str | None = None) -> str:
     """Decide one bead's close, emitting the decision and signal."""
     waiver = parse_waiver(command)
     if waiver is not None:
@@ -409,7 +410,29 @@ def evaluate_close(command: str, bead_id: str, cwd: str | None,
     # addressed. The complementary case (the code DID change) is already
     # refused above as stale. Between the two, a blocking verdict requires both
     # a repair and a fresh review, and neither alone will do.
-    if VERDICT_CAPTURE_SUPPORTED and record.get("blocking") is True:
+    # The record's `blocking` is a SNAPSHOT, frozen when the implementer chose
+    # to run the recording CLI. The ledger keeps accumulating after that, and
+    # with verdict capture a backgrounded reviewer's text arrives at
+    # SubagentStop asynchronously — nothing orders that against the record. So
+    # the ledger is re-read here and the two are OR'd: a blocker that landed
+    # after the record was sealed must not be invisible merely because it was
+    # late. Without this, the original defect ("the ledger is written before the
+    # reviewer speaks") simply moves to "the record is sealed before the
+    # reviewer speaks" (escapement-a7is).
+    #
+    # `current` scopes it to this state of the work, so a blocker retired by an
+    # actual repair does not deny forever — the repair loop still terminates.
+    # One gate, deliberately. An earlier shape computed `late_blocking` under
+    # its own `if VERDICT_CAPTURE_SUPPORTED` and then re-tested the flag; a
+    # mutation that removed the inner guard survived, because the deny was
+    # already gated by the outer one. Rather than assert a safety property the
+    # code did not rely on, the redundancy is gone.
+    blocked = record.get("blocking") is True
+    if VERDICT_CAPTURE_SUPPORTED and not blocked:
+        live = find_dispatch(bead_id, session_id, current)
+        blocked = bool(live and live.get("blocking"))
+
+    if VERDICT_CAPTURE_SUPPORTED and blocked:
         return _deny(
             f"The review on record for {bead_id} reported blocking findings, "
             "and the work has not changed since — so they are still open. Fix "
@@ -577,7 +600,8 @@ def main() -> int:
     # subsequent bead close unreviewed.
     for bead_id in targets:
         outcome = evaluate_close(
-            command, bead_id, cwd, claude_shape=bool(session_id)
+            command, bead_id, cwd, claude_shape=bool(session_id),
+            session_id=session_id,
         )
         if outcome is DENIED:
             return 0

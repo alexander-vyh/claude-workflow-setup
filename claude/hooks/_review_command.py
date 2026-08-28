@@ -73,6 +73,15 @@ _SEPARATORS = ("||", "&&", ";", "|", "\n")
 _SUBST_OPEN = "$("
 _SUBST_BACKTICK = "`"
 
+# Process substitution runs a command too, and `<(bd close X)` bypassed this
+# gate entirely until escapement-843m. It is listed separately from `$(` because
+# the QUOTING RULES DIFFER, and following the shell exactly is what keeps the
+# false-positive direction closed: the shell expands `$(...)` and backticks
+# inside double quotes, but does NOT perform process substitution there. So
+# `"<(bd close x)"` is literal text an agent may write in a bead description,
+# while `"$(bd close x)"` really runs.
+_PROC_SUBST_OPENERS = ("<(", ">(")
+
 _ENV_ASSIGN_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", re.DOTALL)
 _TOKEN_RE = re.compile(r"(?:'[^']*'|\"[^\"]*\"|\S)+")
 
@@ -169,6 +178,17 @@ def segments(command: str) -> list[str]:
             flush()
             depth -= 1
             index += 1
+            continue
+
+        # Process substitution, unlike `$(`, is NOT expanded inside double
+        # quotes — so this check sits after the quote branch would have claimed
+        # the character, and only runs when we are outside quotes entirely.
+        if quote is None and any(
+            text.startswith(opener, index) for opener in _PROC_SUBST_OPENERS
+        ):
+            flush()
+            depth += 1
+            index += 2
             continue
 
         if quote:
