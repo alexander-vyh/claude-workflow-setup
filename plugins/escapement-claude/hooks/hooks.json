@@ -84,7 +84,7 @@
             "type": "command"
           }
         ],
-        "matcher": "Agent|Bash(bd close:*)|Bash(bd update:*)"
+        "matcher": "Agent|Bash"
       },
       {
         "hooks": [

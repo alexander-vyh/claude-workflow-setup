@@ -1,146 +1,343 @@
 #!/usr/bin/env python3
-"""Claude Code hook: soft gate on bd close — warns if no review agent was dispatched.
+"""PreToolUse gate: an independent critical review must precede `bd close`.
 
-Dual-purpose PreToolUse hook:
-  - On Agent calls: checks if name/description contains "review" and records it
-    in a per-session state file under /tmp/
-  - On Bash calls: checks if the command is `bd close` or `bd update --status closed`
-    and warns if no review agent was recorded for this session
+WHAT CHANGED AND WHY
+--------------------
+The previous version recorded any `Agent` dispatch whose name/description/prompt
+matched the word "review", then emitted `ask` at `bd close`. Three holes, all
+observed in production:
 
-This is advisory (soft warning) — it never blocks, only nudges.
+  1. Gameable oracle — the check was "a string existed", and the implementer
+     authors the string. A self-written rubber stamp satisfied it.
+  2. No bead binding — a review of bead A satisfied closing bead B. Nothing
+     associated the recorded review with the bead being closed.
+  3. `ask` is inert. In the gate-signal corpus this gate logged 1270 nudges
+     against 324 allows; in one captured 329-line session an identical `ask`
+     from a sibling gate fired nine times with no agent reaction and no
+     course correction from the human clicking past it. An advisory verdict
+     only pays for itself when someone answers it, and in headless runs there
+     is no channel for the answer to land at all.
 
-Input (via stdin):
-  JSON with hook_event_name, tool_name, tool_input, session_id
-Exit codes:
-  0 — allow (with optional system message warning)
+So the verdict is now `deny`, and — more importantly — the oracle changed from
+"an Agent call mentioning review existed" to "a substantive review of THIS bead
+at THIS state of the work is on record". Hardening a gameable check without
+fixing its oracle would only have made the rubber stamp mandatory.
+
+HOST NEUTRALITY
+---------------
+Codex exposes no `Agent` event; its reliable surface is `Bash` PreToolUse plus
+`SessionStart`. That is why the manifest previously marked this gate
+`codex: unsupported`. The load-bearing evidence therefore lives in Beads
+(`_review_record.py`) plus a git work fingerprint — both visible to either
+host through a plain `Bash` close command.
+
+The Claude `Agent` event still carries something Codex genuinely cannot
+provide: proof that a structurally isolated reviewer (no shared conversation
+history) was actually dispatched. That is kept as a *corroborating* check,
+stamped into the record when observable. Following the repo's convention (see
+test_codex_discovery_close_gate.py), an absent `session_id` identifies the
+Codex shape, where the corroboration is skipped rather than failed — a check
+we cannot run must not read as a check that failed.
+
+GATE-DESIGN COMPLIANCE (claude/rules/gate-design.md)
+----------------------------------------------------
+Rule 1 — escape path, named in the denial itself:
+
+    REVIEW_WAIVER="<>=20-char rationale>" bd close <bead>
+
+  An environment-variable prefix rather than the repo's usual
+  `--<gate-name>-waiver` flag, because that convention is mechanically broken
+  on `bd` commands: `bd` rejects unknown flags outright ("Error: unknown flag:
+  --epic-coverage-waiver"), so an agent following such a denial verbatim gets
+  a command that will not run. The corpus shows the cost — epic_coverage_gate
+  logged 199 denies against 1 accepted waiver. The skill sanctions this
+  carve-out ("If a gate cannot use the standard convention... document the
+  alternative escape"). Tracked for the flag-based gates separately.
+
+Rule 2 — persistent signal: every decision (deny, waiver-accepted, allow) goes
+  to `_gate_signal.record()`, so denial reasons accumulate as the labeled
+  corpus that half-life review reads.
+
+Rule 3 — value, not presence: a recorded review must clear a substance bar and
+  its fingerprint must match the current work tree. Presence-only would make
+  the record a checkbox, which is mock bureaucracy by construction.
+
+Exit code is always 0; the decision travels as a single `permissionDecision`
+JSON document on stdout (the canonical single-mechanism contract).
 """
+
+from __future__ import annotations
 
 import json
 import os
-import re
 import sys
 from pathlib import Path
 
-# Shared signal capture per claude/rules/gate-design.md Rule 2.
 sys.path.insert(0, str(Path(__file__).parent))
+
 try:
     from _gate_signal import record as _record_signal
-except ImportError:  # pragma: no cover
+except ImportError:  # pragma: no cover - signal is best-effort
     def _record_signal(*_args, **_kwargs) -> None:
         return None
 
-_STATE_DIR = Path("/tmp/claude-review-gate")
+from _review_command import (  # noqa: E402
+    close_targets,
+    waiver_reason,
+    writes_reserved_metadata,
+)
+from _review_ledger import record_dispatch  # noqa: E402
+from _review_record import (  # noqa: E402
+    INDEPENDENT_REVIEWER_TYPES,
+    METADATA_KEY,
+    UNAVAILABLE,
+    changed_paths_since,
+    extract_bead_ids,
+    read_record,
+    validate_findings,
+    validate_waiver_reason,
+    work_fingerprint,
+)
 
-# Agent types that structurally count as review agents. A dispatch with one
-# of these subagent_types satisfies the gate even when the prompt is blinded
-# (contains no "review" words) — which is the common case for disciplined
-# blinded-review workflows.
-_REVIEWER_SUBAGENT_TYPES = {
-    "adversarial-reviewer",
-    "code-reviewer",
-    "test-quality-reviewer",
-}
+_RECORD_CLI = str(Path(__file__).resolve().parent / "escapement_review.py")
 
-# Word-boundary pattern matching the review-word family (review, reviews,
-# reviewed, reviewer, reviewers, reviewing) but NOT false-positive substrings
-# like "reviewable", "preview", or "previewer".
-_REVIEW_WORD_RE = re.compile(r"\breview(?:s|ed|er|ers|ing)?\b", re.IGNORECASE)
-
-# Word-boundary anchored detection of `bd close`. The leading \b prevents
-# matching when "bd" is the tail of a longer token (e.g. "mybd close",
-# "subd close") — those are not the beads CLI. The boundary still matches
-# "bd close" at the start of a string or after a shell separator like ";".
-_BD_CLOSE_RE = re.compile(r"\bbd\s+close\b")
-_BD_UPDATE_CLOSED_RE = re.compile(r"\bbd\s+update\s+.*--status[=\s]+closed\b")
-
-
-def _state_file(session_id: str) -> Path:
-    """Return the state file path for a given session."""
-    return _STATE_DIR / f"{session_id}.json"
+# Name of the environment-variable escape. A flag (`--review-waiver`) cannot be
+# used here: `bd` rejects unknown flags outright, so a denial telling the agent
+# to add one would hand it a command that will not run (escapement-6ge8).
+WAIVER_VAR = "REVIEW_WAIVER"
 
 
-def _read_state(session_id: str) -> list:
-    """Read the list of review-agent names recorded for a session.
-
-    Returns a list of reviewer names (possibly empty). Defends against state
-    files that are valid JSON but not the expected shape: a dict missing the
-    "reviews" key, a null literal, or a top-level array all return []
-    rather than raising KeyError/TypeError.
-    """
-    sf = _state_file(session_id)
-    if not sf.exists():
-        return []
-    try:
-        parsed = json.loads(sf.read_text())
-    except (json.JSONDecodeError, OSError):
-        return []
-    if isinstance(parsed, dict):
-        reviews = parsed.get("reviews", [])
-        return reviews if isinstance(reviews, list) else []
-    return []
+#: Outcomes of a single bead's evaluation, so a multi-bead close can stop at
+#: the first refusal instead of emitting two decision documents.
+DENIED = "denied"
+ALLOWED = "allowed"
 
 
-def _write_state(session_id: str, reviews: list) -> None:
-    """Persist the list of review-agent names for a session."""
-    _STATE_DIR.mkdir(parents=True, exist_ok=True)
-    try:
-        _state_file(session_id).write_text(json.dumps({"reviews": reviews}))
-    except OSError:
-        pass
+def parse_waiver(command: str) -> str | None:
+    """Return the waiver reason set as an env prefix on the bd invocation."""
+    return waiver_reason(command, WAIVER_VAR)
 
 
-def _is_review_agent(tool_input: dict) -> bool:
-    """Return True if the agent dispatch counts as a code/design review.
+# ---------------------------------------------------------------------------
+# Claude-only corroboration ledger
+# ---------------------------------------------------------------------------
 
-    Two signals, either is sufficient:
-      1. subagent_type is in the explicit reviewer allowlist (primary —
-         catches blinded dispatches whose prompts contain no review words)
-      2. name/description/prompt contains a whole-word match for the
-         review-word family (backward compat for untyped dispatches)
+def is_independent_reviewer(tool_input: dict) -> bool:
+    """True when an Agent dispatch is a structurally isolated reviewer.
+
+    Only `subagent_type` counts. The old name/description/prompt word-match is
+    deliberately gone: it was the gameable half of the oracle, satisfiable by
+    naming any agent "review-helper".
     """
     subagent_type = (tool_input.get("subagent_type") or "").strip()
-    if subagent_type in _REVIEWER_SUBAGENT_TYPES:
-        return True
-
-    for field in ("name", "description", "prompt"):
-        value = tool_input.get(field) or ""
-        if _REVIEW_WORD_RE.search(value):
-            return True
-    return False
+    return subagent_type in INDEPENDENT_REVIEWER_TYPES
 
 
-def _is_close_command(command: str) -> bool:
-    """Return True if the bash command is a bd close or bd update --status closed."""
-    if _BD_CLOSE_RE.search(command):
-        return True
-    if _BD_UPDATE_CLOSED_RE.search(command):
-        return True
-    return False
+# ---------------------------------------------------------------------------
+# Decision output
+# ---------------------------------------------------------------------------
+
+def _escape_block(bead_id: str) -> str:
+    return (
+        "Ways forward:\n"
+        f"  1. Dispatch an isolated reviewer (subagent_type one of: "
+        f"{', '.join(sorted(INDEPENDENT_REVIEWER_TYPES))}) whose prompt names "
+        f"{bead_id}, then record its verdict:\n"
+        f"       python3 -B {_RECORD_CLI} record --bead {bead_id} "
+        f"--findings-file <path>\n"
+        f"  2. If review genuinely does not apply here, waive it with a reason "
+        f"that will be kept as signal:\n"
+        f"       REVIEW_WAIVER=\"<>=20-char rationale>\" bd close {bead_id}"
+    )
 
 
-_WARN_NO_REVIEW = (
-    "No review agent was dispatched before closing this task. "
-    "Review catches drift between spec and implementation, oracle "
-    "downgrades, and missed regressions — the kind of failures that "
-    "the implementer's own context makes invisible.\n\n"
-    "Consider dispatching a code-reviewer or adversarial-reviewer "
-    "agent first. The gate is satisfied by either:\n"
-    "  (1) subagent_type contains 'reviewer' (e.g. code-reviewer, "
-    "adversarial-reviewer, test-quality-reviewer), OR\n"
-    "  (2) the agent's name/description/prompt contains a review-word "
-    "(review, audit, critique, etc.).\n\n"
-    "If you've already reviewed manually or this work doesn't need "
-    "review, say 'proceed' to close anyway."
-)
+def _deny(reason: str, bead_id: str, signal_decision: str, **extras) -> str:
+    """Emit a deny decision with its escape path, and persist the signal."""
+    full = f"{reason}\n\n{_escape_block(bead_id)}"
+    _record_signal(
+        gate_name="review_gate",
+        decision=signal_decision,
+        reason=reason,
+        bead_id=bead_id,
+        **extras,
+    )
+    json.dump({
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": full,
+        },
+    }, sys.stdout)
+    return DENIED
 
-# Concise remedy surfaced as the ask-decision reason. Names the concrete
-# escape path (dispatch a reviewer subagent, or say 'proceed') so the gate
-# is actionable rather than a bare prohibition (gate-design.md Rule 1).
-_ASK_REASON = (
-    "No review agent was dispatched before this close. Dispatch a "
-    "code-reviewer or adversarial-reviewer subagent first, or say "
-    "'proceed' to close without review."
-)
+
+def _allow(reason: str, bead_id: str, **extras) -> str:
+    _record_signal(
+        gate_name="review_gate",
+        decision="allow",
+        reason=reason,
+        bead_id=bead_id,
+        **extras,
+    )
+    return ALLOWED
+
+
+def _emit_deny(reason: str, signal_decision: str, **extras) -> str:
+    """Deny without a bead id — the escape block needs a target, this does not."""
+    _record_signal(
+        gate_name="review_gate",
+        decision=signal_decision,
+        reason=reason,
+        **extras,
+    )
+    json.dump({
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": reason,
+        },
+    }, sys.stdout)
+    return DENIED
+
+
+def _deny_unidentified(command: str) -> str:
+    return _emit_deny(
+        "This closes a bead the gate cannot identify, so its review cannot be "
+        "checked. `bd close` with no id closes the last-touched issue, and an "
+        "unexpanded variable or a reason in the positional slot resolves to "
+        "nothing.\n\n"
+        "Ways forward:\n"
+        "  1. Name the bead explicitly: bd close <bead-id>\n"
+        "  2. Keep the reason attached to its flag: "
+        "bd close <bead-id> -r \"<reason>\"\n"
+        "  3. If review genuinely does not apply, waive it with a reason that "
+        "will be kept as signal:\n"
+        "       REVIEW_WAIVER=\"<>=20-char rationale>\" bd close <bead-id>",
+        "deny:unidentified-target",
+        command_excerpt=command[:200],
+    )
+
+
+def _deny_reserved_metadata() -> str:
+    return _emit_deny(
+        f"`{METADATA_KEY}` is the review gate's own record and cannot be "
+        "written by hand — doing so would let the author of the code mint its "
+        "own independence stamp with no reviewer involved.\n\n"
+        "Way forward: record the verdict through the CLI, which stamps "
+        "independence from an observed reviewer dispatch:\n"
+        f"       python3 -B {_RECORD_CLI} record --bead <bead-id> "
+        "--findings-file <path>",
+        "deny:reserved-metadata",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Close-path decision
+# ---------------------------------------------------------------------------
+
+def evaluate_close(command: str, bead_id: str, cwd: str | None,
+                   claude_shape: bool) -> str:
+    """Decide one bead's close, emitting the decision and signal."""
+    waiver = parse_waiver(command)
+    if waiver is not None:
+        ok, err = validate_waiver_reason(waiver, bead_id)
+        if ok:
+            return _allow("review waived with a recorded rationale", bead_id,
+                          waiver_reason=waiver)
+        # A rejected waiver is itself the thing to surface — do not fall
+        # through to the missing-review message, which would hide the real
+        # failure (the agent did try the escape path; it was not substantive).
+        return _deny(
+            f"REVIEW_WAIVER reason rejected: {err}",
+            bead_id,
+            "deny:invalid-waiver",
+        )
+
+    record = read_record(bead_id, cwd=cwd)
+    if record is UNAVAILABLE:
+        # The task store did not answer. That is our failure, not a missed
+        # review, and denying on it would stop every close in the repository
+        # until `bd` recovers. Allow, but leave the gap in the signal corpus.
+        return _allow(
+            "review status unknown: the task store could not be consulted",
+            bead_id,
+            store_unavailable=True,
+        )
+
+    if record is None:
+        return _deny(
+            f"No independent review is on record for {bead_id}. Closing it "
+            "would land work that only its own author has read.",
+            bead_id,
+            "deny:no-review",
+        )
+
+    if record.get("bead") != bead_id:
+        return _deny(
+            f"The review on record covers {record.get('bead')!r}, not "
+            f"{bead_id}. A review of a different bead is not a review of this "
+            "one.",
+            bead_id,
+            "deny:wrong-bead",
+            record_bead=record.get("bead"),
+        )
+
+    ok, err = validate_findings(record.get("findings"), bead_id)
+    if not ok:
+        return _deny(
+            f"The review on record for {bead_id} does not carry a usable "
+            f"verdict: {err}",
+            bead_id,
+            "deny:insubstantial",
+        )
+
+    current = work_fingerprint(cwd)
+    recorded = record.get("fingerprint")
+
+    if current and not recorded:
+        # The record was made somewhere the work could not be fingerprinted —
+        # `--cwd /tmp` does this, and it is documented in `--help`. Accepting it
+        # here would switch staleness off for that bead permanently, which is a
+        # far more attractive door than the waiver because it never has to be
+        # justified again.
+        return _deny(
+            f"The review on record for {bead_id} carries no work fingerprint, "
+            "so it cannot be tied to any particular state of the code. Re-record "
+            "it from the work tree being closed.",
+            bead_id,
+            "deny:unfingerprinted",
+        )
+
+    if current and recorded and current != recorded:
+        changed = changed_paths_since(cwd)
+        listing = ", ".join(changed[:5]) or "uncommitted changes"
+        more = f" (+{len(changed) - 5} more)" if len(changed) > 5 else ""
+        return _deny(
+            f"The review on record for {bead_id} predates the current work: "
+            f"the tree changed after it was recorded — {listing}{more}. A "
+            "review of an earlier state cannot vouch for what is being closed.",
+            bead_id,
+            "deny:stale",
+            changed_count=len(changed),
+        )
+
+    # Corroboration: only meaningful where Agent dispatches are observable.
+    if claude_shape and record.get("independent") is not True:
+        return _deny(
+            f"The review on record for {bead_id} was not corroborated by an "
+            "isolated reviewer dispatch. A verdict written by the same agent "
+            "that wrote the code is self-assessment, not independent review.",
+            bead_id,
+            "deny:uncorroborated",
+            record_independent=record.get("independent"),
+        )
+
+    return _allow(
+        "independent review on record, bound to this bead and current work",
+        bead_id,
+        reviewer=record.get("reviewer"),
+        independent=record.get("independent"),
+    )
 
 
 def main() -> int:
@@ -151,64 +348,62 @@ def main() -> int:
 
     tool_name = data.get("tool_name", "")
     tool_input = data.get("tool_input", {})
-    session_id = data.get("session_id", "") or os.environ.get("CLAUDE_SESSION_ID", "default")
-
     if not isinstance(tool_input, dict):
         return 0
 
-    # --- Agent tracking path ---
+    cwd = data.get("cwd") or None
+    # Absent session_id is the Codex payload shape (see module docstring).
+    session_id = data.get("session_id") or os.environ.get("CLAUDE_SESSION_ID")
+
     if tool_name == "Agent":
-        if _is_review_agent(tool_input):
-            reviews = _read_state(session_id)
-            agent_name = tool_input.get("name", "unknown")
-            reviews.append(agent_name)
-            _write_state(session_id, reviews)
-        return 0
-
-    # --- Bash gating path ---
-    if tool_name == "Bash":
-        command = tool_input.get("command", "")
-        if not _is_close_command(command):
-            return 0
-
-        reviews = _read_state(session_id)
-        if reviews:
-            # Review agent was dispatched — allow silently
-            _record_signal(
-                gate_name="review_gate",
-                decision="allow",
-                reason=f"{len(reviews)} review agent(s) dispatched this session",
-                reviewers=reviews[:5],
+        if session_id and is_independent_reviewer(tool_input):
+            beads = extract_bead_ids(
+                tool_input.get("name"),
+                tool_input.get("description"),
+                tool_input.get("prompt"),
             )
-            return 0
-
-        # No review agent — ask the user to confirm before closing. This is a
-        # soft gate: it never denies, only surfaces the missed review so the
-        # user can dispatch a reviewer or knowingly proceed.
-        #
-        # CANONICAL DECISION CONTRACT: the decision is signaled with a single
-        # mechanism — one permissionDecision JSON document on stdout, exit 0.
-        # Exit 2 is the mutually-exclusive legacy stderr-feedback path; emitting
-        # both the JSON decision *and* a non-zero exit is a contradictory
-        # double-signal. This advisory gate uses the same single-mechanism
-        # JSON-on-stdout-plus-exit-0 contract as the hard-deny gates.
-        _record_signal(
-            gate_name="review_gate",
-            decision="nudge",
-            reason="no review agent dispatched this session before bd close",
-        )
-        result = {
-            "systemMessage": _WARN_NO_REVIEW,
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "ask",
-                "permissionDecisionReason": _ASK_REASON,
-                "additionalContext": _WARN_NO_REVIEW,
-            },
-        }
-        json.dump(result, sys.stdout)
+            if beads:
+                record_dispatch(
+                    session_id,
+                    beads,
+                    (tool_input.get("subagent_type") or "").strip(),
+                    work_fingerprint(cwd),
+                )
         return 0
 
+    if tool_name != "Bash":
+        return 0
+
+    command = tool_input.get("command", "")
+
+    # Writing the review record by hand would let an implementer mint
+    # `independent: true` for itself with no reviewer involved. Recording must
+    # go through the CLI, which is what reads the observed dispatch.
+    if writes_reserved_metadata(command, METADATA_KEY):
+        _deny_reserved_metadata()
+        return 0
+
+    targets = close_targets(command)
+    if targets is None:
+        return 0  # not a close
+
+    if not targets:
+        # A close whose target cannot be identified: a bare `bd close` (which
+        # closes the last-touched issue), an unexpanded `$ID`, or prose sitting
+        # in the positional slot. Treating this as "not a close" was a bypass —
+        # `bd close -r "finished the work"` sailed straight through it. We
+        # cannot check a review for a bead we cannot name, so we refuse.
+        _deny_unidentified(command)
+        return 0
+
+    # `bd close` accepts several ids. Checking only the first let every
+    # subsequent bead close unreviewed.
+    for bead_id in targets:
+        outcome = evaluate_close(
+            command, bead_id, cwd, claude_shape=bool(session_id)
+        )
+        if outcome is DENIED:
+            return 0
     return 0
 
 

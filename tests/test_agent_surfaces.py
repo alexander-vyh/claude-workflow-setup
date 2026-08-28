@@ -1,3 +1,4 @@
+# file-complexity-waiver: flat, cohesive contract test over generated host surfaces — many small independent assertions, no shared state, no nesting; splitting it would scatter one manifest->targets contract across files.
 import os
 import datetime as dt
 import importlib.util
@@ -21,7 +22,15 @@ EXPECTED_CODEX_GATE = {
     "matcher": "Bash",
     "dispatcher": "codex_pretool_dispatch.py",
     "gate": "claude/hooks/test_oracle_brief_gate.py",
-    "timeout": 139,
+    # Derived by the renderer as sum(gate timeouts) + per-gate overhead, so it
+    # moves whenever a Codex Bash gate is added or retimed. 160 = the previous
+    # 14 gates totalling 125s, plus review_gate at 20s, plus 1s of overhead for
+    # each of the resulting 15. review_gate needs 20s rather than 15 because it
+    # shells out to `bd` and to git; at 15s its own subprocess budget equalled
+    # the whole gate budget, and a dispatcher timeout is converted to a warning
+    # rather than a deny — so the gate would have failed open exactly when Dolt
+    # was contended.
+    "timeout": 160,
 }
 CODEX_PLUGIN_FINAL_RESPONSE_GAP_FRAGMENT = 'python3 -B "${PLUGIN_ROOT}/claude/hooks/codex_final_response_gap.py"'
 CODEX_PLUGIN_CONTEXT_FRAGMENT = (
