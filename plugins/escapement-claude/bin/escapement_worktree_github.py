@@ -218,21 +218,60 @@ def _reachable(expected: str, merge_sha: str, default_sha: str) -> bool:
     base = value.get("base_commit")
     if not isinstance(base, dict) or base.get("sha") != merge_sha:
         raise WorktreeError("GitHub compare response did not bind the merge result")
-    if value.get("status") == "identical":
-        merge_base = value.get("merge_base_commit")
-        if not isinstance(merge_base, dict) or merge_base.get("sha") != merge_sha:
-            raise WorktreeError("GitHub identical response did not bind the merge base")
-        if "head_commit" in value:
-            raise WorktreeError("GitHub identical response has an unexpected head")
-        for field in ("ahead_by", "behind_by"):
-            counter = value.get(field)
-            if type(counter) is not int or counter != 0:
-                raise WorktreeError(f"GitHub identical response has invalid {field}")
-        return merge_sha == default_sha
-    head = value.get("head_commit")
-    if not isinstance(head, dict) or head.get("sha") != default_sha:
+    status = value.get("status")
+    if status not in {"ahead", "identical"}:
+        return False
+
+    merge_base = value.get("merge_base_commit")
+    if not isinstance(merge_base, dict) or merge_base.get("sha") != merge_sha:
+        raise WorktreeError("GitHub compare response did not bind the merge base")
+    if "head_commit" in value:
+        raise WorktreeError("GitHub compare response has an unexpected head")
+
+    commits = value.get("commits")
+    if not isinstance(commits, list):
         raise WorktreeError("GitHub compare response did not bind the default head")
-    return value.get("status") == "ahead"
+    if any(
+        not isinstance(commit, dict)
+        or not isinstance(commit.get("sha"), str)
+        or not OBJECT_ID_RE.fullmatch(commit["sha"])
+        for commit in commits
+    ):
+        raise WorktreeError("GitHub compare response contained a malformed commit")
+
+    ahead_by = value.get("ahead_by")
+    behind_by = value.get("behind_by")
+    total_commits = value.get("total_commits")
+    if status == "identical":
+        if (
+            merge_sha != default_sha
+            or commits
+            or type(ahead_by) is not int
+            or ahead_by != 0
+            or type(behind_by) is not int
+            or behind_by != 0
+            or type(total_commits) is not int
+            or total_commits != 0
+        ):
+            raise WorktreeError("GitHub compare response did not bind the default head")
+        return True
+
+    if merge_sha == default_sha:
+        raise WorktreeError("GitHub compare response contradicted identical endpoints")
+    if (
+        type(ahead_by) is not int
+        or ahead_by <= 0
+        or type(behind_by) is not int
+        or behind_by != 0
+        or type(total_commits) is not int
+        or total_commits != ahead_by
+        or len(commits) != min(total_commits, 250)
+    ):
+        raise WorktreeError("GitHub ahead response has inconsistent counters")
+    head = commits[-1] if commits else None
+    if not isinstance(head, dict) or head["sha"] != default_sha:
+        raise WorktreeError("GitHub compare response did not bind the default head")
+    return True
 
 
 def fetch_live_default(ctx: RepositoryContext, branch: str, expected_sha: str) -> bool:
