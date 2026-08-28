@@ -141,6 +141,16 @@ def cancel_unreported(
     asserts the child's work succeeded: `result_digest` stays null, so
     `claim_result_application` still refuses this execution and the
     terminal-versus-applied distinction survives intact.
+
+    A crossed deadline is necessary but NOT sufficient.  Once the host has
+    bound a child and reported it running, a crossed start or idle deadline is
+    not evidence of death: nothing emits `activity_completed` for a subagent,
+    so the idle deadline measures elapsed time rather than silence, and every
+    child that works longer than IDLE_SECONDS crosses it while healthy.
+    Cancelling there would write "no result will arrive" about a child that is
+    still writing.  For a bound running child only the hard deadline supports
+    that claim; before it, the execution terminalizes itself when the child
+    reports.
     """
     timestamp = _iso(now)
     substantive = _substantive_reason(reason)
@@ -159,6 +169,18 @@ def cancel_unreported(
         raise ValueError(
             "execution has not crossed its start, idle, or hard deadline; it is "
             "still within its own budget and cannot be cancelled as unreported"
+        )
+    # `running` already implies a bound child: execution_validation refuses a
+    # running execution whose native_child_id is null, so testing both would be
+    # testing the same fact twice.
+    if item["state"] == "running" and basis != "hard":
+        raise ValueError(
+            "this execution's child is bound and running: the host reported it "
+            "started and has not reported it stopped, so 'no result will arrive' "
+            "is not supportable. Nothing renews the idle deadline for a child, so "
+            "crossing it means the child is SLOW, not dead. It terminalizes itself "
+            "when the child reports. Keep working, or cancel it after its hard "
+            "deadline if it never does"
         )
     state_before = item["state"]
     item["state"] = "cancelled"
