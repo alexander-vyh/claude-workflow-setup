@@ -608,7 +608,8 @@ class TestVerdictBinding:
         change) is already refused by the staleness rule, so between the two a
         blocking verdict forces both a repair and a fresh review.
         """
-        _, decision, _ = _close(record=_record(blocking=True))
+        with patch.object(review_gate, "VERDICT_CAPTURE_SUPPORTED", True):
+            _, decision, _ = _close(record=_record(blocking=True))
         assert decision is not None, "unaddressed blockers must not close"
         assert decision["permissionDecision"] == "deny"
         assert "blocking" in decision["permissionDecisionReason"].lower()
@@ -774,7 +775,8 @@ class TestVerdictChainEndToEnd:
         assert record["blocking"] is True, (
             "the reviewer's own text must drive the classification"
         )
-        _, decision, _ = _close(record=record)
+        with patch.object(review_gate, "VERDICT_CAPTURE_SUPPORTED", True):
+            _, decision, _ = _close(record=record)
         assert decision is not None
         assert decision["permissionDecision"] == "deny"
         assert "blocking" in decision["permissionDecisionReason"].lower()
@@ -814,14 +816,16 @@ class TestVerdictChainEndToEnd:
         """
         blocked = self._run_chain(self.BLOCKING_VERDICT)
         assert blocked["blocking"] is True
-        _, decision, _ = _close(record=blocked)
+        with patch.object(review_gate, "VERDICT_CAPTURE_SUPPORTED", True):
+            _, decision, _ = _close(record=blocked)
         assert decision["permissionDecision"] == "deny"
 
         repaired_fp = "b" * 64
         after = self._run_chain(self.CLEAN_VERDICT, fingerprint=repaired_fp)
         assert after["findings"] == self.CLEAN_VERDICT
         assert after["blocking"] is False
-        _, decision, _ = _close(record=after, fingerprint=repaired_fp)
+        with patch.object(review_gate, "VERDICT_CAPTURE_SUPPORTED", True):
+            _, decision, _ = _close(record=after, fingerprint=repaired_fp)
         assert decision is None, (
             "a gate that cannot be satisfied after the work is fixed is a dead "
             "end, not a gate"
@@ -839,7 +843,8 @@ class TestVerdictChainEndToEnd:
         assert second["blocking"] is True, (
             "a second opinion at the same tree state does not overrule a BLOCK"
         )
-        _, decision, _ = _close(record=second)
+        with patch.object(review_gate, "VERDICT_CAPTURE_SUPPORTED", True):
+            _, decision, _ = _close(record=second)
         assert decision["permissionDecision"] == "deny"
 
     def test_the_record_written_is_readable_by_the_gate(self):
@@ -854,3 +859,56 @@ class TestVerdictChainEndToEnd:
         record = self._run_chain(self.CLEAN_VERDICT)
         assert record["v"] == _review_record.RECORD_VERSION
         assert record["v"] in _review_record.READABLE_RECORD_VERSIONS
+
+
+class TestTheCaptureFeatureIsGatedAsOneUnit:
+    """A known-broken classifier must not be able to deny anything.
+
+    `VERDICT_CAPTURE_SUPPORTED` gates the traceability rule, and the gate's
+    docstring says the verdict-capture feature is off pending escapement-g27c.
+    But the BLOCKING deny was not gated by it, while `record_verdict` runs at
+    `Agent` PostToolUse unconditionally. So half the feature shipped live:
+
+      capture works -> record_verdict runs -> classify_blocking sets blocking
+      -> evaluate_close denies, with the flag still False
+
+    That is not hypothetical. escapement-1nzm establishes that the classifier
+    returns True for a clean PASS on the format `adversarial-reviewer.md`
+    mandates, so the first path this reached would have denied an honest close
+    with a denial its own remedy cannot clear ("fix what the reviewer flagged"
+    when nothing was flagged, at an unchanged fingerprint that re-recording
+    cannot move). REVIEW_WAIVER as the only exit, by the honest path.
+
+    Capture, classification, and the blocking deny are one feature and are now
+    gated as one. Flipping the flag turns them all on together, which is also
+    what makes the flag's documented meaning true.
+    """
+
+    def test_a_blocking_verdict_does_not_deny_while_capture_is_off(self):
+        with patch.object(review_gate, "VERDICT_CAPTURE_SUPPORTED", False):
+            _, decision, _ = _close(record=_record(blocking=True))
+        assert decision is None, (
+            "an ungated blocking deny lets an unproven classifier refuse work"
+        )
+
+    def test_a_blocking_verdict_denies_once_capture_is_on(self):
+        """The control: gating must not become quiet deletion."""
+        with patch.object(review_gate, "VERDICT_CAPTURE_SUPPORTED", True):
+            _, decision, _ = _close(record=_record(blocking=True))
+        assert decision["permissionDecision"] == "deny"
+        assert "blocking" in decision["permissionDecisionReason"].lower()
+
+    def test_the_gate_docstring_matches_what_is_actually_enforced(self):
+        """Capability honesty, asserted rather than promised.
+
+        The docstring is the thing an agent reads to learn what this gate
+        does. If it says the capture feature is off, no part of that feature
+        may deny.
+        """
+        doc = review_gate.__doc__ or ""
+        assert "NOT ENFORCED YET" in doc
+        gated_section = doc.split("NOT ENFORCED YET")[1].split("A COROLLARY")[0]
+        assert "blocking" in gated_section.lower(), (
+            "the blocking rule is gated off; the docstring must not list it "
+            "under ENFORCED NOW"
+        )

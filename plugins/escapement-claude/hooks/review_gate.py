@@ -51,27 +51,36 @@ Three things changed, and they are enforced to different degrees. Saying so
 precisely is the point — this repo's standing rule is that nothing may be
 described as mechanically enforced when it is not:
 
-  ENFORCED NOW. A verdict that names unresolved blocking findings refuses the
-    close while the tree is unchanged, which together with the pre-existing
-    staleness rule means a blocker requires both a repair and a fresh review.
-    `--reviewer` must name a real dispatchable reviewer, and when a dispatch was
-    observed the reviewer identity is taken from the ledger rather than from the
-    flag. Records written under schema v1 — whose oracle never looked at the
-    reviewer's output — are refused, and refused with an accurate reason.
+  ENFORCED NOW. `--reviewer` must name a real dispatchable reviewer, and when a
+    dispatch was observed the reviewer identity is taken from the ledger rather
+    than from the flag. Records written under schema v1 — whose oracle never
+    looked at the reviewer's output — are refused, and refused with an accurate
+    reason. The pre-existing rules (a substantive review on record, bound to
+    this bead, at the current work fingerprint, corroborated by an observed
+    isolated dispatch) are unchanged.
 
-  NOT ENFORCED YET. Requiring the recorded findings to BE the reviewer's own
-    returned text depends on a hook being able to observe a subagent's final
-    output, which `_review_verdict.VERDICT_CAPTURE_SUPPORTED` currently reports
-    as unavailable. The capture path below is written and tested, and the deny
-    branch is conditional on that flag, so the rule switches on the moment
-    escapement-g27c produces a real captured payload. Until then an implementer
-    who dispatches a reviewer and ignores it can still close the bead, and this
-    docstring must keep saying so.
+  NOT ENFORCED YET — THE WHOLE VERDICT-CAPTURE FEATURE. Both the traceability
+    rule (the recorded findings must BE the reviewer's returned text) and the
+    blocking rule (a verdict naming unresolved blockers refuses the close until
+    the work changes and is re-reviewed) depend on a hook being able to observe
+    a subagent's final output, which
+    `_review_verdict.VERDICT_CAPTURE_SUPPORTED` reports as unavailable pending
+    escapement-g27c. Both deny branches are conditional on that one flag and
+    switch on together.
 
-  A COROLLARY. While capture is unavailable, `blocking` is derived from
-    implementer-authored text. It catches an agent that records the reviewer's
-    findings faithfully and then closes anyway; it does not catch one that
-    simply omits them. That is a real reduction in scope, not a hedge.
+    The blocking deny was NOT originally gated, and that was a live defect
+    rather than a tidiness issue: `record_verdict` runs at `Agent` PostToolUse
+    unconditionally, so on any host where capture happens to work, a verdict
+    would be classified and the blocking deny would fire with the flag still
+    False — using a classifier that escapement-1nzm showed returns "blocking"
+    for a clean PASS. That denial's own remedy cannot clear it: it says "fix
+    what the reviewer flagged" when nothing was flagged, at an unchanged
+    fingerprint that re-recording cannot move, leaving REVIEW_WAIVER as the
+    only exit. Capture, classification, and the blocking deny are one feature
+    and are gated as one.
+
+    Until the flag flips, an implementer who dispatches a reviewer and ignores
+    it can still close the bead. This docstring must keep saying so.
 
 GATE-DESIGN COMPLIANCE (claude/rules/gate-design.md)
 ----------------------------------------------------
@@ -382,7 +391,7 @@ def evaluate_close(command: str, bead_id: str, cwd: str | None,
     # addressed. The complementary case (the code DID change) is already
     # refused above as stale. Between the two, a blocking verdict requires both
     # a repair and a fresh review, and neither alone will do.
-    if record.get("blocking") is True:
+    if VERDICT_CAPTURE_SUPPORTED and record.get("blocking") is True:
         return _deny(
             f"The review on record for {bead_id} reported blocking findings, "
             "and the work has not changed since — so they are still open. Fix "
