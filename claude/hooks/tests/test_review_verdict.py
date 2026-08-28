@@ -226,3 +226,241 @@ class TestTheDispatcherSPromptIsNotTheReviewersVerdict:
 
     def test_the_agent_id_field_is_never_mistaken_for_prose(self):
         assert rv.extract_verdict({"agentId": "agent-abc123"}) is None
+# ---------------------------------------------------------------------------
+# The corpus that actually matters: what reviewers really emit (escapement-1nzm)
+# ---------------------------------------------------------------------------
+
+_REPO_ROOT = _HOOKS_DIR.parents[1]
+_REVIEWER_AGENT = _REPO_ROOT / "claude" / "agents" / "adversarial-reviewer.md"
+
+# A clean review, written in the exact format `adversarial-reviewer` mandates.
+# Its BLOCK section is present and empty-by-negation, because the format
+# requires the heading unconditionally so a reviewer must say "no blockers"
+# out loud rather than silently omit the section.
+CLEAN_REVIEW = """## Adversarial Review: _review_ledger.py
+
+### Outcome under review
+- **Intended outcome:** a dispatched reviewer's findings bind the close.
+- **Would that proof fail if the outcome were NOT delivered?** YES.
+
+### BLOCK
+None. The fingerprint binding is correct and the tiebreak is sound.
+
+### CONCERN
+- `MAX_DISPATCH_AGE_SECONDS` is generous for a long session.
+
+### NOTE
+- Naming nit in `_candidate_paths`.
+
+### Verdict
+PASS
+
+### What I'd break first
+I would race two reviewers and hope the ledger picked the friendlier one.
+"""
+
+# The same format, same headings, but the reviewer actually found something.
+BLOCKING_REVIEW = """## Adversarial Review: _review_ledger.py
+
+### BLOCK
+- `record_verdict` binds by recency (`_review_ledger.py:271`) -> two parallel
+  reviewers cross-attach verdicts, so the stored bytes name the wrong dispatch.
+
+### CONCERN
+- `MAX_DISPATCH_AGE_SECONDS` is generous for a long session.
+
+### Verdict
+REJECT
+
+### What I'd break first
+The tiebreak, by dispatching twice.
+"""
+
+
+class TestMandatedReviewFormat:
+    """The format the repo's own reviewer emits is the highest-probability input.
+
+    escapement-1nzm: the classifier returned True for BOTH of these, because
+    `### BLOCK` is an unconditional heading and the negation that answers it
+    ("None.") sits on the next line. A classifier that cannot separate its two
+    classes carries no information, and the denial it produces on a PASS is
+    unrepairable by its own remedy -- the work fingerprint is unchanged, so
+    re-recording cannot clear it and the only exit is the waiver.
+    """
+
+    def test_clean_review_in_the_mandated_format_is_not_blocking(self):
+        assert rv.classify_blocking(CLEAN_REVIEW) is False
+
+    def test_blocking_review_in_the_mandated_format_is_blocking(self):
+        assert rv.classify_blocking(BLOCKING_REVIEW) is True
+
+    def test_the_two_classes_are_actually_separated(self):
+        """The property escapement-1nzm violated. Guards against a constant."""
+        assert rv.classify_blocking(BLOCKING_REVIEW) != rv.classify_blocking(CLEAN_REVIEW)
+
+    def test_declared_verdict_outranks_prose_markers(self):
+        """A stated verdict is authoritative; do not re-infer it from prose.
+
+        This review's prose is full of the word BLOCK -- it is *discussing* the
+        gate -- while the reviewer stated PASS outright.
+        """
+        text = (
+            "## Adversarial Review: review_gate.py\n\n"
+            "### BLOCK\n"
+            "None found.\n\n"
+            "### NOTE\n"
+            "- The BLOCK path in `evaluate_close` reads well.\n"
+            "- `deny:blocking-findings` names its escape path.\n\n"
+            "### Verdict\nPASS\n"
+        )
+        assert rv.classify_blocking(text) is False
+
+    def test_unfilled_template_verdict_line_is_not_a_declaration(self):
+        """`PASS / PASS WITH CONCERNS / REJECT` names every class at once.
+
+        Reading it as a verdict would let an unfilled template decide the gate.
+        It must fall through to prose rather than resolve to either class.
+        """
+        text = "### BLOCK\n- The ledger is world-writable.\n\n### Verdict\nPASS / PASS WITH CONCERNS / REJECT\n"
+        assert rv.classify_blocking(text) is True
+
+    def test_agent_definition_still_declares_the_sections_the_parser_reads(self):
+        """The coupling, made mechanical rather than documented.
+
+        `classify_blocking` treats the `### Verdict` section as authoritative
+        and reads `### BLOCK` as a finding section. If the agent's Output
+        Format stops emitting either, the classifier silently degrades to
+        prose-scanning. This test is what makes that a failure instead.
+        """
+        spec = _REVIEWER_AGENT.read_text(encoding="utf-8")
+        assert "### Verdict" in spec, "reviewer no longer declares a verdict section"
+        assert "### BLOCK" in spec, "reviewer no longer emits a BLOCK section"
+
+
+class TestNegationIsBoundedByClause:
+    """A negation in an *earlier clause* must not cancel a later finding.
+
+    The old window was five word-tokens with no clause boundary, so ordinary
+    emphatic phrasing -- which the reviewer prompt explicitly trains -- silently
+    downgraded real blockers to a clean pass.
+    """
+
+    @pytest.mark.parametrize("text", [
+        "There is no way around this: BLOCKER - the migration drops the column.",
+        "This is not a style nit - BLOCKER: tenant scope is missing.",
+        "CVSS 9.0 - BLOCKER: unauthenticated RCE in the upload handler.",
+        "I found nothing else. BLOCKER: the retry loop double-charges.",
+        "Never mind the naming. BLOCKER: idempotency key is absent.",
+    ])
+    def test_negation_in_a_previous_clause_does_not_cancel(self, text):
+        assert rv.classify_blocking(text) is True, text
+
+    @pytest.mark.parametrize("text", [
+        "No blockers found.",
+        "None of these are blocking - all four are follow-ups.",
+        "Nothing here is a blocker; the oracle rejects the bad cases.",
+    ])
+    def test_negation_in_the_same_clause_still_cancels(self, text):
+        assert rv.classify_blocking(text) is False, text
+
+
+class TestMarkerMustBeUsedAsALabel:
+    """A marker word inside ordinary prose is not a verdict.
+
+    `_LINE_START` matched case-insensitively at the head of any line, so a
+    sentence merely *beginning* with "Critical" flagged the whole review.
+    """
+
+    @pytest.mark.parametrize("text", [
+        "Critical sections are correctly guarded by the mutex.",
+        "Blocking I/O here is intentional and fine.",
+        "Critical to note: the tenant scope IS present.",
+        "Summary: 2 concerns, one critical-path improvement, no blockers.",
+        "The blocking behaviour of the queue is documented.",
+    ])
+    def test_marker_as_an_adjective_is_not_a_verdict(self, text):
+        assert rv.classify_blocking(text) is False, text
+
+    @pytest.mark.parametrize("text", [
+        "BLOCKER: tenant scope missing on the billing query.",
+        "**BLOCKER** - the ledger lives in world-writable /tmp.",
+        "[BLOCKER] subagent_type is not re-validated on read.",
+        "### BLOCK\n- The close path trusts implementer-authored text.\n",
+    ])
+    def test_marker_as_a_label_is_a_verdict(self, text):
+        assert rv.classify_blocking(text) is True, text
+
+
+class TestFindingSectionBody:
+    """A finding heading answered with "None." is not a finding."""
+
+    @pytest.mark.parametrize("text", [
+        "### BLOCK\nNone.\n",
+        "**BLOCKERS**\n\nNone identified.\n",
+        "BLOCKERS: none\n",
+        "## CRITICAL\n\nn/a\n",
+        "### BLOCK\n\n_No blocking findings._\n",
+    ])
+    def test_heading_with_a_negating_body_is_not_blocking(self, text):
+        assert rv.classify_blocking(text) is False, text
+
+    @pytest.mark.parametrize("text", [
+        "### BLOCK\n- Tenant scope is missing on the billing query.\n",
+        "## CRITICAL\nThe corroboration is worth nothing.\n",
+    ])
+    def test_heading_with_a_real_body_is_blocking(self, text):
+        assert rv.classify_blocking(text) is True, text
+
+
+class TestDeclarationBeatsProse:
+    """The cases where the two paths DISAGREE — the only ones that prove item 1.
+
+    A corpus where prose-scanning happens to reach the same answer as the
+    declared verdict cannot show the declaration is authoritative: deleting the
+    declaration path entirely leaves it green. These three make them conflict.
+    """
+
+    def test_declared_reject_wins_over_an_empty_block_section(self):
+        """Findings in CONCERN, verdict REJECT, BLOCK section empty.
+
+        Prose-scanning alone reads this as clean. The reviewer said REJECT.
+        """
+        text = (
+            "## Adversarial Review: escapement_review.py\n\n"
+            "### BLOCK\nNone.\n\n"
+            "### CONCERN\n"
+            "- The recording CLI trusts `--host` without validating it.\n"
+            "- Two of these together defeat the corroboration.\n\n"
+            "### Verdict\nREJECT\n"
+        )
+        assert rv.classify_blocking(text) is True
+
+    def test_declared_pass_wins_over_a_quoted_blocker(self):
+        """A reviewer quoting the PREVIOUS round's blocker to say it is fixed.
+
+        Prose-scanning reads the quoted label as a live finding. The reviewer
+        declared PASS, and the reviewer is the authority on its own verdict.
+        """
+        text = (
+            "## Adversarial Review: _review_ledger.py\n\n"
+            "### BLOCK\nNone.\n\n"
+            "### NOTE\n"
+            "- Last round I wrote: BLOCKER: the tiebreak is unconstrained.\n"
+            "  That is now fixed by the `bool(blocking)` sort key.\n\n"
+            "### Verdict\nPASS\n"
+        )
+        assert rv.classify_blocking(text) is False
+
+    def test_unfilled_template_falls_through_to_clean_prose(self):
+        """The template names every class, so prose decides — and prose is clean.
+
+        Paired with `test_unfilled_template_verdict_line_is_not_a_declaration`,
+        which uses the same template line over BLOCKING prose. Together they pin
+        that an ambiguous declaration resolves to *neither* class rather than
+        defaulting to one.
+        """
+        text = (
+            "### BLOCK\nNone.\n\n"
+            "### Verdict\nPASS / PASS WITH CONCERNS / REJECT\n"
+        )
+        assert rv.classify_blocking(text) is False

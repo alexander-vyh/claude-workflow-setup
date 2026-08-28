@@ -165,83 +165,201 @@ def clip_verdict(text: str) -> str:
 # Blocking classification
 # ---------------------------------------------------------------------------
 
+# WHY A DECLARED VERDICT IS READ FIRST (escapement-1nzm)
+# ------------------------------------------------------
+# The previous classifier inferred the reviewer's conclusion by scanning prose
+# for marker words. On the format `adversarial-reviewer` is actually mandated to
+# emit it returned True for a clean PASS *and* for a genuine REJECT — because
+# `### BLOCK` is an unconditional heading and the "None." that answers it sits on
+# the next line. A classifier that cannot separate its two classes carries no
+# information, and the denial it produced on a PASS was unrepairable by its own
+# remedy: the work fingerprint is unchanged by definition, so re-recording could
+# not clear it and the only exit was the waiver. Waiver rot arriving by the
+# honest path.
+#
+# The fix is not a wider heuristic. The reviewer already STATES its verdict in a
+# `### Verdict` section, so that statement is authoritative and prose scanning is
+# only the fallback for output that declared nothing. Inferring an intent the
+# author wrote down is the error; a look-ahead would have patched this one shape
+# and left the same fragility one shape further out.
+#
+# COUPLING, DECLARED: this reads a section heading owned by
+# `claude/agents/adversarial-reviewer.md` § "Output Format". If that format stops
+# emitting `### Verdict` or `### BLOCK`, this degrades silently — so
+# test_review_verdict.py asserts the agent definition still declares both. Change
+# one, run that test.
+
+#: Verdict words, by class. A value naming BOTH classes (the unfilled template
+#: line `PASS / PASS WITH CONCERNS / REJECT`) resolves to neither: letting a
+#: template decide the gate is how an unwritten review passes for a written one.
+_BLOCKING_VERDICTS = (
+    "REJECT", "REJECTED", "BLOCKED", "BLOCKING", "BLOCK",
+    "FAIL", "FAILED", "NEEDS WORK", "CHANGES REQUESTED",
+)
+_PASSING_VERDICTS = ("PASS WITH CONCERNS", "PASS", "APPROVED", "APPROVE", "LGTM")
+
+_VERDICT_HEADING = re.compile(r"^[#\s*_]*(?:VERDICT|STATUS|RESULT)\s*:?\s*\**\s*$", re.IGNORECASE)
+_VERDICT_INLINE = re.compile(r"^[#\s*_\->]*(?:VERDICT|STATUS|RESULT)\s*[:\-]\s*(.+)$", re.IGNORECASE)
+_HEADING_LINE = re.compile(r"^\s*(?:#{1,6}\s|\*\*[^*]+\*\*\s*$)")
+
 # Markers that name a blocking finding. `BLOCKER`/`BLOCKING`/`CRITICAL` are the
 # vocabulary the repo's own reviewer agents use; `MUST FIX` and `P0` cover the
 # other two conventions seen in this corpus.
 _MARKER = r"(?:BLOCKERS?|BLOCKING|BLOCK|CRITICAL|MUST[ \-]?FIX|P0)"
+_MARKER_RE = re.compile(_MARKER, re.IGNORECASE)
 
-# A marker only counts in a *verdict position*. Bare mid-sentence "block" is
-# ordinary review prose — "this would block every close in the repo" is a
-# sentence a reviewer writes while explaining why something is fine — and
-# treating it as a verdict would deny clean reviews, teaching agents that the
-# waiver is the normal path. Three positions qualify:
-#
-#   (a) line-start, allowing markdown decoration (`- `, `**`, `## `, `[`)
-#   (b) after an explicit verdict label (`VERDICT: BLOCK`)
-#   (c) after a count ("3 blockers", "one blocker")
-#   (d) opening a clause, after a colon or dash ("Section 2: BLOCKER — ...")
-_LINE_START = re.compile(rf"^[\s\-*•#>\[\]_]*(?:\*\*)?{_MARKER}\b", re.IGNORECASE)
-_LABELLED = re.compile(rf"\b(?:VERDICT|STATUS|RESULT)\s*[:\-]\s*\**\s*{_MARKER}\b", re.IGNORECASE)
-_COUNTED = re.compile(
-    rf"\b(?:\d+|one|two|three|four|five|several|multiple)\s+{_MARKER}\b",
-    re.IGNORECASE,
-)
-# Position (d). Reviewers label findings inline as often as they head a line
-# with them, and requiring a line start would miss "Section 2: BLOCKER". The
-# negation layer is what keeps this from firing on "Non-blocking observation",
-# where the separator is the hyphen inside the word itself.
-_CLAUSE_OPENER = re.compile(r"[:\-–—]\s*\**\s*$")
+# A clause boundary. The old negation scan walked back five word-tokens with no
+# boundary at all, so "This is not a style nit - BLOCKER: tenant scope is
+# missing" read as negated and a real blocker was silently downgraded. Emphatic,
+# contrastive phrasing is exactly what the reviewer prompt trains, so the miss
+# landed on the reviewers following their instructions. Note the dash must be
+# SPACED: an unspaced hyphen is inside a word, and "Non-blocking" must keep its
+# negation attached.
+_CLAUSE_BOUNDARY = re.compile(r"(?:[.:;!?]|\s[-–—]\s)")
 
-# Words that flip a marker's meaning when they sit just before it. "No blockers
-# found" and "none of these are blocking" are the single most common way a clean
-# review is phrased, so missing this would make the classifier fire on precisely
-# the reviews that should sail through. `zero` and `0` live here, not in the
-# count set above, for the same reason.
+# Decoration a marker may sit behind and still open a clause: list bullets,
+# emphasis, blockquote arrows, heading hashes, a bracket.
+_DECORATION = " \t-*\u2022#>[_"
+
+#: Words that flip a marker's meaning when they sit in the SAME clause before it.
 _NEGATIONS = {"no", "not", "non", "none", "nothing", "never", "zero", "0", "without"}
 
-# How far back to look for a negation. Wide enough for "none of these are
-# blocking", narrow enough that a negation in an unrelated earlier clause does
-# not silently cancel a real finding.
-_NEGATION_WINDOW_WORDS = 5
+#: Openers that make a finding-section body an explicit "nothing here".
+_EMPTY_BODY = _NEGATIONS | {"n/a", "na", "nil", "clean"}
+
+#: Count words that make "3 blockers" a claim even mid-sentence.
+_COUNTED_RE = re.compile(
+    rf"(?:\b\d+|\bone|\btwo|\bthree|\bfour|\bfive|\bseveral|\bmultiple)\s+{_MARKER}\b(?!-\w)",
+    re.IGNORECASE,
+)
+
+
+def declared_verdict(text: str) -> bool | None:
+    """The reviewer's own stated verdict: True blocking, False clean, None absent.
+
+    None means "not stated unambiguously" — including the unfilled template,
+    which names every class at once — and sends the caller to prose scanning.
+    """
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        value = None
+        inline = _VERDICT_INLINE.match(line)
+        if inline:
+            value = inline.group(1)
+        elif _VERDICT_HEADING.match(line):
+            value = next(
+                (nxt for nxt in lines[index + 1:index + 4] if nxt.strip()), None
+            )
+        if not value:
+            continue
+        resolved = _resolve_verdict_value(value)
+        if resolved is not None:
+            return resolved
+    return None
+
+
+def _resolve_verdict_value(value: str) -> bool | None:
+    upper = value.upper()
+    blocking = any(word in upper for word in _BLOCKING_VERDICTS)
+    passing = any(word in upper for word in _PASSING_VERDICTS)
+    if blocking == passing:
+        return None  # both (a template) or neither (prose): not a declaration
+    return blocking
 
 
 def classify_blocking(text: str | None) -> bool:
     """True when the reviewer's own text asserts an unresolved blocking finding.
 
-    A conservative text classifier, and named as one: it reads the reviewer's
-    vocabulary, not its meaning. It will miss a blocker described in plain prose
-    with no marker, and the escape path exists for the cases it gets wrong in
-    the other direction. What makes it worth having anyway is whose text it
-    reads — the implementer does not author it, so unlike a `--blocking` flag it
-    cannot simply be set to `false`.
+    Reads what the reviewer declared; falls back to marker scanning only when it
+    declared nothing. Still a text classifier, and still named as one — it reads
+    the reviewer's vocabulary, not its meaning, and the waiver exists for what it
+    gets wrong. What makes it worth having is whose text it reads: the
+    implementer does not author it, so unlike a `--blocking` flag it cannot
+    simply be set to false.
     """
     if not text:
         return False
-    for line in text.splitlines():
-        if not line.strip():
-            continue
-        for match in re.finditer(_MARKER, line, re.IGNORECASE):
+    declared = declared_verdict(text)
+    if declared is not None:
+        return declared
+    return _prose_asserts_blocker(text)
+
+
+def _prose_asserts_blocker(text: str) -> bool:
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        for match in _MARKER_RE.finditer(line):
             if _negated(line, match.start()):
                 continue
-            if _in_verdict_position(line, match):
+            if not _is_label(line, match) and not _is_counted(line, match):
+                continue
+            body = line[match.end():].strip(" \t*:>-\u2013\u2014]")
+            if not body:
+                body = _section_body(lines, index)
+            if not _body_is_empty(body):
                 return True
     return False
 
 
-def _in_verdict_position(line: str, match: re.Match) -> bool:
-    if match.start() == 0 or _LINE_START.match(line):
-        # Only credit the line-start rule to the marker that is actually there.
-        head = _LINE_START.match(line)
-        if head and head.end() >= match.end():
-            return True
-    if _LABELLED.search(line):
+def _is_label(line: str, match: re.Match) -> bool:
+    """True when the marker is used to LABEL a finding, not as an adjective.
+
+    Two halves, both required. It must OPEN a clause — otherwise "This will
+    block - every close" reads as a verdict — and it must be TERMINATED like a
+    label (`:`, `]`, a spaced dash, or end of line) rather than continuing into
+    a sentence, which is what "Critical sections are correctly guarded" does.
+    """
+    before = line[:match.start()]
+    if before.strip(_DECORATION):
+        if not _CLAUSE_BOUNDARY.search(before) or before.rstrip()[-1:].isalnum():
+            return False
+    after = line[match.end():].lstrip("*_")
+    return not after.strip() or after[:1] in ":]).," or after[:2] in (" -", " \u2013", " \u2014")
+
+
+def _is_counted(line: str, match: re.Match) -> bool:
+    """"3 blockers" is a claim even mid-sentence; "one critical-path" is not."""
+    return any(
+        m.end() == match.end() for m in _COUNTED_RE.finditer(line)
+    )
+
+
+def _section_body(lines: list[str], heading_index: int) -> str:
+    """The lines a finding heading introduces, up to the next heading."""
+    body: list[str] = []
+    for line in lines[heading_index + 1:]:
+        if _HEADING_LINE.match(line):
+            break
+        if line.strip():
+            body.append(line.strip())
+    return "\n".join(body)
+
+
+def _body_is_empty(body: str) -> bool:
+    """True when a finding section says, in words, that it found nothing."""
+    content = [ln for ln in body.splitlines() if ln.strip()]
+    if not content:
         return True
-    if _CLAUSE_OPENER.search(line[:match.start()]):
-        return True
-    return bool(_COUNTED.search(line))
+    for line in content:
+        if not _words(line) or _words(line)[0] not in _EMPTY_BODY:
+            return False
+    return True
 
 
 def _negated(line: str, marker_start: int) -> bool:
-    """True when a negation sits within the preceding few words."""
-    preceding = re.findall(r"[\w']+", line[:marker_start])
-    return any(w.lower() in _NEGATIONS for w in preceding[-_NEGATION_WINDOW_WORDS:])
+    """True when a negation sits in the same clause, before the marker."""
+    before = line[:marker_start]
+    boundaries = list(_CLAUSE_BOUNDARY.finditer(before))
+    if boundaries:
+        before = before[boundaries[-1].end():]
+    return any(word in _NEGATIONS for word in _words(before))
+
+
+def _words(text: str) -> list[str]:
+    """Lowercase word tokens, treating markdown emphasis as a separator.
+
+    `\\w` includes the underscore, so a `_No blocking findings._` body tokenised
+    as `_no` and read as a real finding — the emphasis markup silently defeated
+    the negation check.
+    """
+    return re.findall(r"[a-z0-9/']+", text.lower())
