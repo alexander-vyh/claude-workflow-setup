@@ -490,6 +490,14 @@ probably still guilty — you just haven't found the evidence yet.
 ### Verdict
 PASS / PASS WITH CONCERNS / REJECT
 
+<!-- COUPLING: claude/hooks/_review_verdict.py parses this output. The `### Verdict`
+     section is read as the authoritative verdict, and the `### BLOCK` section's
+     BODY (not its heading) decides whether blocking findings exist. Keep both
+     headings unconditional — emitting them always is what forces a reviewer to
+     write "None." rather than silently omit a section. If you rename or restructure
+     either heading, update the classifier and its corpus in
+     claude/hooks/tests/test_review_verdict.py in the same change. -->
+
 ### What I'd break first
 [One paragraph: if I were a malicious user, a flaky network, or Murphy's Law
 incarnate, here's exactly how I'd make this fail — and which outcome stops

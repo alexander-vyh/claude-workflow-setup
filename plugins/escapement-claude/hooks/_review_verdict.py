@@ -192,6 +192,12 @@ _COUNTED = re.compile(
 # where the separator is the hyphen inside the word itself.
 _CLAUSE_OPENER = re.compile(r"[:\-–—]\s*\**\s*$")
 
+# Position (e). "This is a BLOCKER: the migration drops the column" is how
+# reviewers label a finding mid-sentence, and the prose fallback used to miss it
+# entirely — a false NEGATIVE on a genuine blocker, which is the direction that
+# actually lets bad work through.
+_MARKER_LABELS = re.compile(rf"{_MARKER}\s*\**\s*[:\-–—]", re.IGNORECASE)
+
 # Words that flip a marker's meaning when they sit just before it. "No blockers
 # found" and "none of these are blocking" are the single most common way a clean
 # review is phrased, so missing this would make the classifier fire on precisely
@@ -205,18 +211,154 @@ _NEGATIONS = {"no", "not", "non", "none", "nothing", "never", "zero", "0", "with
 _NEGATION_WINDOW_WORDS = 5
 
 
-def classify_blocking(text: str | None) -> bool:
-    """True when the reviewer's own text asserts an unresolved blocking finding.
+# ---------------------------------------------------------------------------
+# Structure: a section heading is not a verdict
+# ---------------------------------------------------------------------------
+#
+# THE DEFECT THIS EXISTS TO FIX (escapement-1nzm). `adversarial-reviewer.md`
+# mandates an output format that emits a `### BLOCK` heading UNCONDITIONALLY,
+# so a reviewer must write "None." rather than silently omit the section. That
+# is good format design. But a marker-scanning classifier read the heading
+# itself as a verdict position, and the negation sat on the next line where the
+# negation window never looked — so a clean PASS review classified as blocking.
+#
+# It was worse than a false positive: scanning returned True for a clean review
+# AND for a real one, so on the mandated format the classifier could not
+# separate its two classes at all. A classifier that cannot separate its classes
+# is not a weak oracle; it is not an oracle. It also missed real blockers phrased
+# as "This is a BLOCKER: ..." and a bare "### Verdict / REJECT".
+#
+# The fix is structural rather than another pattern: read what the reviewer
+# DECLARED, and read a section's BODY rather than its heading. Prose scanning
+# survives only as the fallback for reviews that use neither.
 
-    A conservative text classifier, and named as one: it reads the reviewer's
-    vocabulary, not its meaning. It will miss a blocker described in plain prose
-    with no marker, and the escape path exists for the cases it gets wrong in
-    the other direction. What makes it worth having anyway is whose text it
-    reads — the implementer does not author it, so unlike a `--blocking` flag it
-    cannot simply be set to `false`.
+# COUPLING: the headings parsed here are mandated by
+# `claude/agents/adversarial-reviewer.md`. That file emits `### BLOCK` and
+# `### Verdict` unconditionally; this module depends on both. Neither file used
+# to say so, which is how a format change and a parser silently disagreed until
+# a clean review was classified as blocking. Change one, change the other.
+_BLOCK_HEADING = re.compile(rf"^\s*#{{1,6}}\s*\**\s*{_MARKER}\b", re.IGNORECASE)
+_ANY_HEADING = re.compile(r"^\s*#{1,6}\s+")
+_VERDICT_HEADING = re.compile(r"^\s*#{1,6}\s*\**\s*VERDICT\b", re.IGNORECASE)
+_VERDICT_INLINE = re.compile(
+    r"\b(?:VERDICT|STATUS|RESULT)\s*[:\-]\s*\**\s*(.+)$", re.IGNORECASE
+)
+
+# Section bodies that mean "nothing here". A reviewer following the mandated
+# format writes one of these when it found no blockers.
+_EMPTY_BODY = {
+    "", "-", "--", "---", "—", "n/a", "na", "none", "nothing", "no findings",
+    "no blockers", "no blocking findings", "no blocking issues", "0", "zero",
+}
+
+_REJECT_WORDS = re.compile(
+    r"\b(?:REJECT(?:ED)?|BLOCKED|BLOCKING|FAIL(?:ED)?|NO[ \-]?GO)\b", re.IGNORECASE
+)
+_PASS_WORDS = re.compile(r"\b(?:PASS(?:ED)?|APPROVED?|LGTM)\b", re.IGNORECASE)
+
+
+def _normalise(line: str) -> str:
+    """Strip markdown decoration and punctuation for an emptiness comparison."""
+    return re.sub(r"^[\s\-*•+>\[\]_#]*|[\s.:;!*_\]]*$", "", line).strip().lower()
+
+
+def _section_body(text: str, heading: re.Pattern) -> list[str] | None:
+    """Return the lines under the first matching heading, or None if absent."""
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        if not heading.match(line):
+            continue
+        body = []
+        for following in lines[index + 1:]:
+            if _ANY_HEADING.match(following):
+                break
+            body.append(following)
+        return body
+    return None
+
+
+def declared_verdict(text: str | None) -> str | None:
+    """Return "reject", "pass", or None for the reviewer's stated verdict.
+
+    Authoritative when present, because the reviewer states it outright and the
+    implementer does not author it. Inferring a verdict by scanning prose when
+    one has been declared is guessing at an answer already given.
+
+    Returns None when the verdict is absent OR ambiguous — notably when the
+    mandated template line `PASS / PASS WITH CONCERNS / REJECT` is left unfilled,
+    which contains both vocabularies and states nothing.
+    """
+    if not text:
+        return None
+    body = _section_body(text, _VERDICT_HEADING)
+    if body is None:
+        for line in text.splitlines():
+            inline = _VERDICT_INLINE.search(line)
+            if inline:
+                body = [inline.group(1)]
+                break
+    if not body:
+        return None
+    blob = " ".join(body).strip()
+    if not blob:
+        return None
+    rejects, passes = bool(_REJECT_WORDS.search(blob)), bool(_PASS_WORDS.search(blob))
+    if rejects and not passes:
+        return "reject"
+    if passes and not rejects:
+        return "pass"
+    return None
+
+
+def block_section_has_findings(text: str | None) -> bool:
+    """True when a BLOCK-style section exists and its body lists something.
+
+    The heading is never itself the signal — it is emitted unconditionally by
+    design. Only the body counts, and a body of "None." counts as nothing.
     """
     if not text:
         return False
+    body = _section_body(text, _BLOCK_HEADING)
+    if body is None:
+        return False
+    for line in body:
+        normalised = _normalise(line)
+        if not normalised or normalised in _EMPTY_BODY:
+            continue
+        if any(normalised.startswith(word + " ") for word in _NEGATIONS):
+            continue
+        return True
+    return False
+
+
+def classify_blocking(text: str | None) -> bool:
+    """True when the reviewer's own text asserts an unresolved blocking finding.
+
+    Three layers, most reliable first:
+
+      1. the reviewer's DECLARED verdict, when it states one unambiguously;
+      2. the BODY of a BLOCK section, which overrides a declared "pass" — a
+         review that lists blockers and then says PASS is contradicting itself,
+         and the safe reading of a contradiction is the blocking one;
+      3. prose scanning, only for reviews that declare neither.
+
+    Layer 3 remains a conservative vocabulary matcher and is named as one: it
+    reads the reviewer's words, not its meaning, and will miss a blocker
+    described with no marker at all. What makes the whole thing worth having is
+    whose text it reads — the implementer does not author it, so unlike a
+    `--blocking` flag it cannot simply be set to `false`.
+    """
+    if not text:
+        return False
+
+    declared = declared_verdict(text)
+    if declared == "reject":
+        return True
+    if block_section_has_findings(text):
+        return True
+    if declared == "pass":
+        return False
+
     for line in text.splitlines():
         if not line.strip():
             continue
@@ -237,6 +379,8 @@ def _in_verdict_position(line: str, match: re.Match) -> bool:
     if _LABELLED.search(line):
         return True
     if _CLAUSE_OPENER.search(line[:match.start()]):
+        return True
+    if _MARKER_LABELS.match(line, match.start()):
         return True
     return bool(_COUNTED.search(line))
 

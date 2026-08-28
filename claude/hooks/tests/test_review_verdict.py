@@ -188,3 +188,114 @@ def test_capture_capability_is_declared_with_its_evidence():
         "the capability constant must state what evidence set it"
     )
     assert len(rv.CAPTURE_EVIDENCE) >= 80
+
+
+# ---------------------------------------------------------------------------
+# escapement-1nzm: a section heading is not a verdict
+# ---------------------------------------------------------------------------
+
+class TestRealisticReviewCorpus:
+    """The corpus that caught it. Nine of these fourteen were misclassified.
+
+    The defect was not a tuning problem. `adversarial-reviewer.md` mandates an
+    UNCONDITIONAL `### BLOCK` heading — good format design, because it forces a
+    reviewer to write "None." rather than silently omit the section — and the
+    marker scanner read the heading itself as a verdict, with the negation on
+    the next line where the window never looked. So it returned True for a
+    clean review AND for a real one: on the mandated format it could not
+    separate its two classes at all.
+
+    It failed in BOTH directions. It also missed "This is a BLOCKER: ..." and a
+    bare "### Verdict / REJECT" — false negatives, which is the direction that
+    actually lets bad work through.
+
+    These are the shapes real reviewers emit, not the shapes the parser's author
+    imagined. 251 tests were green while nine of these were wrong, which is the
+    whole argument for keeping them here.
+    """
+
+    CLEAN = [
+        ("mandated format", "## Review\n### BLOCK\nNone.\n### CONCERN\nNaming.\n### Verdict\nPASS\n"),
+        ("pass with concerns", "### BLOCK\nNone.\n### Verdict\nPASS WITH CONCERNS\n"),
+        ("empty block body", "### BLOCK\n\n### CONCERN\n- minor\n### Verdict\nPASS\n"),
+        ("dash placeholder", "### BLOCK\n-\n### Verdict\nPASS\n"),
+        ("no blocking findings", "### BLOCK\nNo blocking findings.\n### Verdict\nPASS\n"),
+        ("prose, no sections", "No blockers found. The change is sound.\n"),
+        ("harmless prose mention",
+         "Denying here would block every close in the repo, so the fail-open is right.\n"),
+        ("non-blocking observation", "Non-blocking observation: naming could be clearer.\n"),
+        ("block word inside a CONCERN body",
+         "### BLOCK\nNone.\n### CONCERN\n- This could block a close if bd is slow.\n### Verdict\nPASS\n"),
+        ("stray marker in a NOTE body",
+         "### BLOCK\nNone.\n### NOTE\n- P0 systems often use this pattern.\n### Verdict\nPASS\n"),
+    ]
+
+    BLOCKING = [
+        ("mandated format with a finding",
+         "### BLOCK\n- Tax on pre-discount subtotal (pricing.py:21) -> customers overcharged.\n### Verdict\nREJECT\n"),
+        ("declared REJECT only", "### Verdict\nREJECT\n"),
+        ("labelled mid-sentence",
+         "This is a BLOCKER: the migration drops the column before the backfill runs.\n"),
+        ("counted", "I found three blockers in the close path.\n"),
+    ]
+
+    @pytest.mark.parametrize("name,text", CLEAN, ids=[n for n, _ in CLEAN])
+    def test_a_clean_review_does_not_block_the_close(self, name, text):
+        assert rv.classify_blocking(text) is False
+
+    @pytest.mark.parametrize("name,text", BLOCKING, ids=[n for n, _ in BLOCKING])
+    def test_a_real_blocker_still_blocks(self, name, text):
+        assert rv.classify_blocking(text) is True
+
+    def test_the_classifier_separates_its_two_classes(self):
+        """The property that was actually violated, asserted directly.
+
+        Every other test here could pass while the classifier returned a
+        constant. This one cannot.
+        """
+        clean = {rv.classify_blocking(t) for _, t in self.CLEAN}
+        blocking = {rv.classify_blocking(t) for _, t in self.BLOCKING}
+        assert clean == {False}, "some clean reviews classify as blocking"
+        assert blocking == {True}, "some real blockers classify as clean"
+
+
+class TestDeclaredVerdictIsAuthoritative:
+    def test_declared_reject_is_read(self):
+        assert rv.declared_verdict("### Verdict\nREJECT\n") == "reject"
+
+    def test_declared_pass_is_read(self):
+        assert rv.declared_verdict("### Verdict\nPASS\n") == "pass"
+
+    def test_inline_label_is_read(self):
+        assert rv.declared_verdict("Verdict: REJECT — see below\n") == "reject"
+
+    def test_the_unfilled_template_line_states_nothing(self):
+        """`PASS / PASS WITH CONCERNS / REJECT` is the format's own placeholder.
+
+        It contains both vocabularies. Reading it either way would be inventing
+        a verdict the reviewer never gave, so it must fall through.
+        """
+        assert rv.declared_verdict("### Verdict\nPASS / PASS WITH CONCERNS / REJECT\n") is None
+
+    def test_absent_verdict_falls_through(self):
+        assert rv.declared_verdict("### BLOCK\nNone.\n") is None
+
+    def test_findings_override_a_contradicting_pass(self):
+        """A review listing blockers then saying PASS contradicts itself.
+
+        The safe reading of a contradiction is the blocking one.
+        """
+        text = "### BLOCK\n- The migration drops the column before the backfill.\n### Verdict\nPASS\n"
+        assert rv.classify_blocking(text) is True
+
+
+class TestBlockSectionBody:
+    @pytest.mark.parametrize("body", ["None.", "none", "-", "—", "n/a", "No blockers", "", "0"])
+    def test_an_empty_body_is_not_a_finding(self, body):
+        assert rv.block_section_has_findings(f"### BLOCK\n{body}\n### Verdict\nPASS\n") is False
+
+    def test_a_populated_body_is_a_finding(self):
+        assert rv.block_section_has_findings("### BLOCK\n- Real problem here.\n") is True
+
+    def test_no_block_section_at_all(self):
+        assert rv.block_section_has_findings("### CONCERN\n- minor\n") is False
