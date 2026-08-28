@@ -37,7 +37,6 @@ ACTIVITY_KINDS = {
     "terminal_event",
 }
 
-
 def _iso(now: dt.datetime) -> str:
     if (
         not isinstance(now, dt.datetime)
@@ -153,7 +152,8 @@ def register_execution(ledger: dict, event: dict, now: dt.datetime) -> dict:
     return ledger
 
 
-def _find(ledger: dict, execution_id: str) -> dict:
+def find_execution(ledger: dict, execution_id: str) -> dict:
+    """Return the single execution with this id, or raise if ambiguous."""
     matches = [
         item
         for item in ledger.get("executions", [])
@@ -207,7 +207,7 @@ def apply_event(ledger: dict, event: dict, now: dt.datetime) -> dict:
     kind = event.get("kind")
     if kind not in EVENT_KINDS:
         raise ValueError("unknown event kind")
-    item = _find(ledger, _required_text(event, "execution_id"))
+    item = find_execution(ledger, _required_text(event, "execution_id"))
     _attempt, generation = _validate_event_identity(ledger, event, item)
     if generation != item["generation"]:
         if generation < item["generation"] and kind in {
@@ -348,7 +348,7 @@ def claim_recovery(
         or ttl_seconds < 1
     ):
         raise ValueError("owner and positive ttl_seconds are required")
-    item = _find(ledger, execution_id)
+    item = find_execution(ledger, execution_id)
     if item["reconcile_due"] is None or item["state"] in {"terminal", "cancelled"}:
         return None
     existing = item["recovery_claim"]
@@ -404,7 +404,7 @@ def claim_result_application(
         or ttl_seconds < 1
     ):
         raise ValueError("owner and positive ttl_seconds are required")
-    item = _find(ledger, execution_id)
+    item = find_execution(ledger, execution_id)
     if attempt != item["attempt"]:
         raise ValueError("attempt does not match active execution")
     if generation != item["generation"]:

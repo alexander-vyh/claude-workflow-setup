@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
-"""SessionStart reconciliation for durable delegated execution attempts."""
+"""Reconciliation for durable delegated execution attempts.
+
+With no arguments this is the SessionStart hook.  With `list` or `cancel` it is
+the supported operator front door for an execution the host never reported on,
+so recovering a wedged session never means hand-editing `executions.json`.
+"""
 
 from __future__ import annotations
 
+import argparse
 import datetime as dt
 import json
 import os
@@ -10,8 +16,10 @@ import pathlib
 import subprocess
 import sys
 
+from execution_cancellation import cancel_unreported, overdue_reason
 from execution_ledger import apply_event, reconcile_deadlines
 from execution_store import load_trusted, mutate_atomic
+import gate_signal
 from thread_identity import InvalidActorIdentity, resolve_thread_dir
 
 
@@ -216,7 +224,175 @@ def _default_run_bd(cwd: str):
     return run_bd
 
 
-def main() -> int:
+def _resolve_ledger_path(args) -> pathlib.Path:
+    if args.ledger_path:
+        return pathlib.Path(args.ledger_path)
+    return _ledger_path(args.session)
+
+
+def _parse_now(value: str | None) -> dt.datetime:
+    if value is None:
+        return dt.datetime.now(dt.timezone.utc)
+    parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("--now must be timezone-aware")
+    return parsed.astimezone(dt.timezone.utc)
+
+
+def _list_command(args) -> int:
+    """Print every execution this session owns, with why it is still active."""
+    try:
+        path = _resolve_ledger_path(args)
+        now = _parse_now(args.now)
+    except (InvalidActorIdentity, ValueError) as exc:
+        print(f"execution_reconcile list: {exc}", file=sys.stderr)
+        return 2
+    ledger = load_trusted(path, args.session)
+    if ledger is None:
+        print(
+            f"execution_reconcile list: no trusted ledger for session "
+            f"{args.session} at {path}",
+            file=sys.stderr,
+        )
+        return 2
+    rows = [
+        {
+            "execution_id": item["execution_id"],
+            "bead_id": item["bead_id"],
+            "agent_name": item["agent_name"],
+            "attempt": item["attempt"],
+            "generation": item["generation"],
+            "state": item["state"],
+            "native_child_id": item["native_child_id"],
+            "result_application": item["result_application"]["state"],
+            "overdue": overdue_reason(item, now),
+        }
+        for item in ledger["executions"]
+    ]
+    print(
+        json.dumps(
+            {"parent_session_id": ledger["parent_session_id"], "executions": rows},
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+def _cancel_command(args) -> int:
+    """Terminalize one overdue execution whose child never reported a result."""
+    try:
+        path = _resolve_ledger_path(args)
+        now = _parse_now(args.now)
+    except (InvalidActorIdentity, ValueError) as exc:
+        print(f"execution_reconcile cancel: {exc}", file=sys.stderr)
+        return 2
+    actor = args.actor or f"session:{args.session}"
+    recorded: dict[str, dict] = {}
+
+    def cancel(current: dict) -> dict:
+        if current.get("parent_session_id") != args.session:
+            raise ValueError("parent session does not match ledger")
+        updated = cancel_unreported(
+            current, args.execution_id, now, reason=args.reason, actor=actor
+        )
+        item = next(
+            entry
+            for entry in updated["executions"]
+            if entry["execution_id"] == args.execution_id
+        )
+        recorded["item"] = {
+            "execution_id": item["execution_id"],
+            "bead_id": item["bead_id"],
+            "attempt": item["attempt"],
+            "generation": item["generation"],
+            "state": item["state"],
+            "terminal_reason": item["terminal_reason"],
+            "terminal_event_id": item["terminal_event_id"],
+            "result_application": item["result_application"]["state"],
+        }
+        return updated
+
+    try:
+        mutate_atomic(path, cancel)
+    except (OSError, ValueError) as exc:
+        gate_signal.record(
+            "waiver-rejected",
+            "delegated_execution_cancel_refused",
+            args.session,
+            execution_id=args.execution_id,
+            refusal=str(exc),
+        )
+        print(f"execution_reconcile cancel: {exc}", file=sys.stderr)
+        return 2
+    # Rule 2 of gate-design: the escape's reason is the labeled corpus for
+    # half-life review, and half-life review reads only .gate-signal.jsonl.
+    # The ledger incident is the per-thread audit record; this is the greppable
+    # cross-session one.
+    gate_signal.record(
+        "waiver-accepted",
+        "delegated_execution_cancelled_unreported",
+        args.session,
+        waiver_reason=args.reason.strip(),
+        execution_id=args.execution_id,
+        bead_id=recorded["item"]["bead_id"],
+        actor=actor,
+    )
+    print(json.dumps({"status": "cancelled", **recorded["item"]}, sort_keys=True))
+    return 0
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="execution_reconcile",
+        description=(
+            "Inspect and terminalize this session's delegated executions. Run with "
+            "no arguments to act as the SessionStart reconciliation hook."
+        ),
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    listing = subparsers.add_parser(
+        "list", help="show each execution's state, child binding, and overdue reason"
+    )
+    listing.add_argument("--session", required=True)
+    listing.add_argument("--ledger-path")
+    listing.add_argument("--now")
+    listing.set_defaults(handler=_list_command)
+
+    cancel = subparsers.add_parser(
+        "cancel",
+        help=(
+            "record that an overdue execution's child died without reporting; this "
+            "is a cancellation, never a claim that its work succeeded"
+        ),
+    )
+    cancel.add_argument("--session", required=True)
+    cancel.add_argument("--execution-id", required=True)
+    cancel.add_argument(
+        "--reason",
+        required=True,
+        help=(
+            "why no result will arrive; at least 20 characters and not a "
+            "placeholder, recorded durably in the ledger's incidents"
+        ),
+    )
+    cancel.add_argument("--actor", default=None)
+    cancel.add_argument("--ledger-path")
+    cancel.add_argument("--now")
+    cancel.set_defaults(handler=_cancel_command)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:]) if argv is None else list(argv)
+    if argv:
+        args = _build_parser().parse_args(argv)
+        return args.handler(args)
+    return _hook_main()
+
+
+def _hook_main() -> int:
     try:
         payload = json.load(sys.stdin)
     except (json.JSONDecodeError, ValueError):

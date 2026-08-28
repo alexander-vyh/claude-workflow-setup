@@ -129,6 +129,11 @@ CODEX_HOOK_SUPPORT = {
     "harness/bin/execution_ledger.py",
     "harness/bin/execution_store.py",
     "harness/bin/execution_validation.py",
+    # execution_reconcile's `cancel` escape and its gate-signal write; without
+    # these the bundled reconciler cannot import and the Stop denial names a
+    # command that is not installed.
+    "harness/bin/execution_cancellation.py",
+    "harness/bin/gate_signal.py",
     "harness/bin/execution_supervisor.py",
     "harness/bin/schedule_store.py",
     "harness/bin/supervisor_health.py",

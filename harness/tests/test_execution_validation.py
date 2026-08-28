@@ -547,6 +547,7 @@ def test_execution_modules_stay_below_repository_soft_line_limit() -> None:
         BIN / "execution_ledger.py",
         BIN / "execution_validation.py",
         BIN / "execution_store.py",
+        BIN / "execution_cancellation.py",
         BIN / "result_application.py",
     ]
     counts = {path.name: len(path.read_text().splitlines()) for path in paths}
