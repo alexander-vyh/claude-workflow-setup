@@ -76,6 +76,11 @@
       "id": "spec_id_enforcement",
       "source": "claude/hooks/spec_id_enforcement.py",
       "timeout_seconds": 10
+    },
+    {
+      "id": "shared_tmp_artifact_gate",
+      "source": "claude/hooks/shared_tmp_artifact_gate.py",
+      "timeout_seconds": 5
     }
   ]
 }

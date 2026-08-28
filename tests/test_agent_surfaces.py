@@ -30,7 +30,9 @@ EXPECTED_CODEX_GATE = {
     # the whole gate budget, and a dispatcher timeout is converted to a warning
     # rather than a deny — so the gate would have failed open exactly when Dolt
     # was contended.
-    "timeout": 160,
+    # shared_tmp_artifact_gate then joined at 5s: 16 gates totalling 150s
+    # plus 16s of overhead.
+    "timeout": 166,
 }
 CODEX_PLUGIN_FINAL_RESPONSE_GAP_FRAGMENT = 'python3 -B "${PLUGIN_ROOT}/claude/hooks/codex_final_response_gap.py"'
 CODEX_PLUGIN_CONTEXT_FRAGMENT = (
