@@ -105,7 +105,7 @@ def _close(command="bd close escapement-abc1", record=None,
     return code, decision, signal
 
 
-def _dispatch(tool_input, session_id="s1"):
+def _dispatch(tool_input, session_id="s1", fingerprint=FINGERPRINT):
     payload = {
         "hook_event_name": "PreToolUse",
         "tool_name": "Agent",
@@ -114,7 +114,7 @@ def _dispatch(tool_input, session_id="s1"):
     }
     if session_id is not None:
         payload["session_id"] = session_id
-    with patch.object(review_gate, "work_fingerprint", return_value=FINGERPRINT), \
+    with patch.object(review_gate, "work_fingerprint", return_value=fingerprint), \
          patch("sys.stdin", io.StringIO(json.dumps(payload))), \
          patch("sys.stdout", io.StringIO()):
         review_gate.main()
@@ -706,7 +706,8 @@ class TestVerdictChainEndToEnd:
         "comparison rejects a reviewer that read an earlier state."
     )
 
-    def _run_chain(self, verdict, *, capture=True, bead="escapement-abc1"):
+    def _run_chain(self, verdict, *, capture=True, bead="escapement-abc1",
+                   fingerprint=FINGERPRINT):
         """Dispatch a reviewer, optionally let it answer, then record.
 
         Returns the record the CLI actually wrote, or None if it wrote none.
@@ -718,7 +719,7 @@ class TestVerdictChainEndToEnd:
             "description": f"review {bead}",
             "prompt": f"Review the implementation of {bead}.",
         }
-        _dispatch(tool_input)
+        _dispatch(tool_input, fingerprint=fingerprint)
 
         if capture and verdict is not None:
             payload = {
@@ -736,7 +737,7 @@ class TestVerdictChainEndToEnd:
         written = []
         with patch.object(cli, "write_record",
                           side_effect=lambda b, r, cwd=None: written.append(r) or True), \
-             patch.object(cli, "work_fingerprint", return_value=FINGERPRINT), \
+             patch.object(cli, "work_fingerprint", return_value=fingerprint), \
              patch.dict("os.environ", {"CLAUDE_SESSION_ID": "s1"}):
             cli.main([
                 "record", "--bead", bead,
@@ -795,18 +796,51 @@ class TestVerdictChainEndToEnd:
         assert decision["permissionDecision"] == "deny"
         assert "never captured" in decision["permissionDecisionReason"]
 
-    def test_a_second_review_after_repair_does_not_reuse_the_first_verdict(self):
-        """Two reviews in one session must not collide.
+    def test_the_repair_loop_actually_terminates(self):
+        """Blocked -> repair -> re-review -> closes. The full cycle.
 
-        `record_verdict` binds to the newest dispatch entry that has no verdict
-        yet. If it bound to the first entry instead, a blocking first review
-        would keep vouching for the repaired work — or worse, the clean second
-        verdict would overwrite the blocking one on the same entry.
+        A repair is not just "a second review"; it MOVES THE FINGERPRINT,
+        because changing the code is what a repair is. That is what retires the
+        first reviewer's blocking entry — it no longer corroborates anything at
+        the new tree state — and it is why the blocking rule needs no expiry of
+        its own.
+
+        This test originally simulated the repair without moving the
+        fingerprint, and the concurrent-reviewer fix (blocking outranks clean)
+        correctly broke it: at one unchanged tree state, an earlier BLOCK is
+        not superseded by a later clean opinion. Two reviews at the same
+        fingerprint are second opinions; two reviews at different fingerprints
+        are a repair loop. Only the second one closes.
+        """
+        blocked = self._run_chain(self.BLOCKING_VERDICT)
+        assert blocked["blocking"] is True
+        _, decision, _ = _close(record=blocked)
+        assert decision["permissionDecision"] == "deny"
+
+        repaired_fp = "b" * 64
+        after = self._run_chain(self.CLEAN_VERDICT, fingerprint=repaired_fp)
+        assert after["findings"] == self.CLEAN_VERDICT
+        assert after["blocking"] is False
+        _, decision, _ = _close(record=after, fingerprint=repaired_fp)
+        assert decision is None, (
+            "a gate that cannot be satisfied after the work is fixed is a dead "
+            "end, not a gate"
+        )
+
+    def test_a_later_clean_opinion_does_not_retire_a_blocker(self):
+        """Same tree, two reviewers, one blocking — the blocker still stands.
+
+        The negative half of the test above. Without this, "run a second
+        reviewer until one of them likes it" replaces "fix what the first one
+        found", and no code has to change for the close to succeed.
         """
         self._run_chain(self.BLOCKING_VERDICT)
-        record = self._run_chain(self.CLEAN_VERDICT)
-        assert record["findings"] == self.CLEAN_VERDICT
-        assert record["blocking"] is False
+        second = self._run_chain(self.CLEAN_VERDICT)
+        assert second["blocking"] is True, (
+            "a second opinion at the same tree state does not overrule a BLOCK"
+        )
+        _, decision, _ = _close(record=second)
+        assert decision["permissionDecision"] == "deny"
 
     def test_the_record_written_is_readable_by_the_gate(self):
         """Guards the version bump against a one-sided edit.
