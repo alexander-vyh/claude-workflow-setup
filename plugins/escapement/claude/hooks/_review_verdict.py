@@ -200,7 +200,27 @@ _PASSING_VERDICTS = ("PASS WITH CONCERNS", "PASS", "APPROVED", "APPROVE", "LGTM"
 
 _VERDICT_HEADING = re.compile(r"^[#\s*_]*(?:VERDICT|STATUS|RESULT)\s*:?\s*\**\s*$", re.IGNORECASE)
 _VERDICT_INLINE = re.compile(r"^[#\s*_\->]*(?:VERDICT|STATUS|RESULT)\s*[:\-]\s*(.+)$", re.IGNORECASE)
+# Leading whitespace stays permissive: a deeply indented heading is stripped as
+# code before this is ever consulted, so tightening the indent here would be a
+# property the code does not rely on. Mutation testing confirmed it unreachable.
 _HEADING_LINE = re.compile(r"^\s*(?:#{1,6}\s|\*\*[^*]+\*\*\s*$)")
+
+# Quoted material. Reviewers paste diffs, logs, denial text, and the PREVIOUS
+# round's output constantly — and a second review quoting round one's findings
+# to say "this was addressed" is the single most common shape of the review that
+# has to PASS for a repair loop to terminate. Reading a quoted `### BLOCK` as a
+# live finding denies that close, and the fingerprint is unchanged, so nothing
+# repairs it. Found by verdict-binding against a corpus built from the agent
+# definitions rather than from imagination.
+#
+# Stripped before BOTH paths, not just prose: a quoted `### Verdict\nREJECT`
+# would otherwise be read as this reviewer's own declaration.
+#
+# Indented-code detection excludes list markers on purpose. A deeply nested
+# bullet (`    - BLOCKER: ...`) is a finding, not a code block, and skipping it
+# would trade this false positive for a false negative on real findings.
+_INDENTED_CODE = re.compile(r"^(?: {4,}|\t)(?![-*+]\s|\d+[.)]\s)")
+_FENCE = re.compile(r"^\s*(```|~~~)")
 
 # Markers that name a blocking finding. `BLOCKER`/`BLOCKING`/`CRITICAL` are the
 # vocabulary the repo's own reviewer agents use; `MUST FIX` and `P0` cover the
@@ -279,10 +299,29 @@ def classify_blocking(text: str | None) -> bool:
     """
     if not text:
         return False
-    declared = declared_verdict(text)
+    visible = _strip_quoted(text)
+    declared = declared_verdict(visible)
     if declared is not None:
         return declared
-    return _prose_asserts_blocker(text)
+    return _prose_asserts_blocker(visible)
+
+
+def _strip_quoted(text: str) -> str:
+    """Drop fenced and indented code blocks: quoted text is not an assertion."""
+    out: list[str] = []
+    fence: str | None = None
+    for line in text.splitlines():
+        opener = _FENCE.match(line)
+        if fence is None:
+            if opener:
+                fence = opener.group(1)
+                continue
+            if _INDENTED_CODE.match(line):
+                continue
+            out.append(line)
+        elif opener and opener.group(1) == fence:
+            fence = None
+    return "\n".join(out)
 
 
 def _prose_asserts_blocker(text: str) -> bool:

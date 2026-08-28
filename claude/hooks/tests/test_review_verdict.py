@@ -464,3 +464,71 @@ class TestDeclarationBeatsProse:
             "### Verdict\nPASS / PASS WITH CONCERNS / REJECT\n"
         )
         assert rv.classify_blocking(text) is False
+
+
+class TestQuotedMaterialStrippedBeforeBothPaths:
+    """Quoted text is not this reviewer's assertion — in EITHER path.
+
+    Found by verdict-binding against a corpus built from the agent definitions.
+    Their two reproducers live in test_review_verdict_corpus.py; these cover the
+    parts the fix has to get right that a prose-only fix would miss, plus the
+    false negative it could trade for.
+    """
+
+    def test_a_quoted_verdict_is_not_this_reviewers_declaration(self):
+        """The hole a prose-only fix leaves open.
+
+        Stripping quoted material from the prose scanner alone is not enough:
+        `declared_verdict` runs FIRST, so a quoted REJECT would be adopted as
+        this reviewer's own authoritative verdict.
+        """
+        text = (
+            "## Adversarial Review: round 2\n\n"
+            "Round 1 concluded:\n\n"
+            "```\n"
+            "### Verdict\n"
+            "REJECT\n"
+            "```\n\n"
+            "Both findings are fixed at `billing.py:41`.\n\n"
+            "### BLOCK\nNone.\n\n"
+            "### Verdict\nPASS\n"
+        )
+        assert rv.classify_blocking(text) is False
+
+    def test_a_quoted_clean_verdict_does_not_clear_a_real_blocker(self):
+        """The same rule in the direction that must not go soft."""
+        text = (
+            "## Adversarial Review: round 2\n\n"
+            "Round 1 concluded:\n\n"
+            "```\n"
+            "### Verdict\n"
+            "PASS\n"
+            "```\n\n"
+            "### BLOCK\n- The tenant scope is still missing.\n"
+        )
+        assert rv.classify_blocking(text) is True
+
+    def test_a_nested_list_item_is_still_a_finding(self):
+        """The false negative the indented-code rule could have traded for.
+
+        A four-space-indented sub-bullet is a nested finding, not a code block.
+
+        The nested line is the ONLY content under the heading on purpose. An
+        earlier version of this test put a parent bullet above it, which made it
+        pass whether or not the nested line survived stripping — the parent
+        alone was already a non-negating body. It asserted the right answer for
+        the wrong reason, which is the exact defect class this file exists for.
+        """
+        assert rv.classify_blocking(
+            "### BLOCK\n    - BLOCKER: tenant scope missing on the query.\n"
+        ) is True
+
+    def test_an_indented_line_that_is_not_a_list_item_is_code(self):
+        """The control for the line above: without the list marker it IS code."""
+        assert rv.classify_blocking(
+            "### BLOCK\n    BLOCKER: tenant scope missing on the query.\n"
+        ) is False
+
+    def test_an_unclosed_fence_does_not_swallow_the_declared_verdict(self):
+        text = "### BLOCK\n- Tenant scope missing.\n\n```\ntruncated paste\n"
+        assert rv.classify_blocking(text) is True
