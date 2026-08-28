@@ -144,21 +144,15 @@ def exact_host_args(candidate: Path, settings: Path, session_id: str) -> tuple[s
     )
 
 
-def test_fake_host_executes_the_supplied_candidate_hook(tmp_path) -> None:
+def live_candidate_fixture(
+    tmp_path: Path, expected_stdout: str
+) -> tuple[Path, Path, Path, Path]:
     candidate = tmp_path / "candidate"
     hook = candidate / "harness" / "bin" / "delegation_hook.py"
     schemas = candidate / "harness" / "schemas"
     hook.parent.mkdir(parents=True)
     schemas.mkdir(parents=True)
     sentinel = tmp_path / "candidate-hook.jsonl"
-    expected_hook_output = {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": "candidate-specific-denial",
-        }
-    }
-    expected_stdout = json.dumps(expected_hook_output) + "\n"
     hook.write_text(
         "import json, os, pathlib, sys\n"
         "payload=json.load(sys.stdin)\n"
@@ -198,6 +192,21 @@ def test_fake_host_executes_the_supplied_candidate_hook(tmp_path) -> None:
     )
     host_harness = tmp_path / "host-harness"
     host_harness.mkdir()
+    return candidate, settings, sentinel, host_harness
+
+
+def test_fake_host_executes_the_supplied_candidate_hook(tmp_path) -> None:
+    expected_hook_output = {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": "candidate-specific-denial",
+        }
+    }
+    expected_stdout = json.dumps(expected_hook_output) + "\n"
+    candidate, settings, sentinel, host_harness = live_candidate_fixture(
+        tmp_path, expected_stdout
+    )
     session_id = "sentinel-unmanaged-session"
 
     result = run_helper(
@@ -246,16 +255,33 @@ def test_fake_host_executes_the_supplied_candidate_hook(tmp_path) -> None:
 
 
 def test_fake_host_rejects_reordered_complete_host_invocation(tmp_path) -> None:
-    candidate = tmp_path / "candidate"
-    candidate.mkdir()
-    settings = settings_fixture(tmp_path)
+    expected_stdout = json.dumps(
+        {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow",
+                "permissionDecisionReason": "unmanaged_native_agent",
+            }
+        }
+    ) + "\n"
+    candidate, settings, sentinel, host_harness = live_candidate_fixture(
+        tmp_path, expected_stdout
+    )
     args = list(exact_host_args(candidate, settings, "reordered-session"))
     args[0], args[1] = args[1], args[0]
     before = settings.read_bytes()
 
-    result = run_helper(tmp_path, *args)
+    result = run_helper(
+        tmp_path,
+        *args,
+        extra_env={
+            "HARNESS_ROOT": str(host_harness),
+            "CANDIDATE_HOOK_SENTINEL": str(sentinel),
+        },
+    )
 
     assert result.returncode != 0
+    assert not sentinel.exists()
     assert settings.read_bytes() == before
 
 
