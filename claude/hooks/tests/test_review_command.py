@@ -341,15 +341,91 @@ class TestProcessSubstitutionIsAlsoNotAHidingPlace:
     def test_a_redirection_that_is_not_substitution_is_untouched(self):
         """`>` and `<` alone are redirection; only `>(`/`<(` open a command.
 
-        `bd close X > /dev/null` resolves to `[]` — refuse — because the
-        redirection target lands in the positional slot and is not a bead id.
-        That is pre-existing behaviour, it fails CLOSED, and an independent
-        reviewer called it the right answer, so this change does not touch it.
-        Pinned here so the process-substitution openers are not quietly
-        widened into general redirection handling, which could swallow a real
-        bead id and turn a refusal into a silent allow.
+        This assertion originally read `bd close X > /dev/null` -> `[]`, on the
+        reasoning that the refusal fails closed and an independent reviewer had
+        called it correct. escapement-c94e overturned that: fail-closed is not
+        sufficient when the denial's own first remedy is what the agent already
+        typed, and `>/dev/null` is ordinary shell rather than an edge case. The
+        redirection target is now consumed, so the bead is identified and the
+        real review check runs. Pinned here so the substitution openers are not
+        confused with redirection handling, which is a separate rule.
         """
-        assert rc.close_targets("bd close escapement-abc1 > /dev/null") == []
+        assert rc.close_targets("bd close escapement-abc1 > /dev/null") == [
+            "escapement-abc1"
+        ]
         assert rc.close_targets("bd ready < input.txt") is None
         # The opener is the two-character sequence, never a bare `<` or `>`.
         assert rc.close_targets("bd close escapement-abc1") == ["escapement-abc1"]
+
+
+class TestRedirectionDoesNotHideTheBead:
+    """escapement-c94e — `bd close X >/dev/null` was refused as unidentifiable.
+
+    The redirection target landed in the positional slot, failed the bead-id
+    shape check, and the whole close was refused with "this closes a bead the
+    gate cannot identify". Fail-closed, so not a bypass — but the denial's
+    FIRST listed remedy is "Name the bead explicitly: bd close <bead-id>",
+    which is precisely what the agent already typed. Following it reproduces
+    the identical denial, so the only real exit is REVIEW_WAIVER. A gate whose
+    stated repair cannot work teaches agents that the waiver is the normal
+    path, which is how the whole apparatus rots.
+
+    `>/dev/null`, `2>&1` and `> out.txt` are ordinary agent-written shell, not
+    exotic, so the frequency is what makes this worth fixing rather than
+    documenting.
+    """
+
+    @pytest.mark.parametrize("command", [
+        "bd close escapement-abc1 > /dev/null",
+        "bd close escapement-abc1 >/dev/null",
+        "bd close escapement-abc1 2> /dev/null",
+        "bd close escapement-abc1 > out.txt",
+        "bd close escapement-abc1 >> log.txt",
+        "bd close escapement-abc1 2>&1",
+        "bd close escapement-abc1 >/dev/null 2>&1",
+        "bd close escapement-abc1 &> /dev/null",
+    ])
+    def test_a_redirected_close_still_names_its_bead(self, command):
+        assert rc.close_targets(command) == ["escapement-abc1"], command
+
+    def test_redirecting_INTO_a_bead_named_file_is_still_refused(self):
+        """`bd close > escapement-abc1` writes a FILE of that name and closes
+        the last-touched bead. It does not close escapement-abc1, and treating
+        it as if it did would be a genuine bypass rather than a friction fix."""
+        assert rc.close_targets("bd close > escapement-abc1") == []
+
+    # -- the hole in the originally proposed rule -------------------------
+
+    @pytest.mark.parametrize("command", [
+        "bd close escapement-abc1 2>&1 escapement-zzz9",
+        "bd close escapement-abc1 >/dev/null escapement-zzz9",
+    ])
+    def test_a_self_contained_operator_does_not_swallow_the_next_bead(self, command):
+        """The refinement, and the reason this is not a two-token change.
+
+        The rule as first proposed — "a token matching `^\\d*[<>]` is a
+        redirection operator; skip it and its target" — swallows the FOLLOWING
+        token unconditionally. But `2>&1` and `>/dev/null` carry their target
+        attached, so the next token is not a target at all. In a multi-bead
+        close that next token is another bead, and dropping it means the gate
+        checks only the first one and the second closes UNREVIEWED.
+
+        That is a silent allow, not an over-refusal — the one direction this
+        module must never move in. So an operator consumes a following token
+        only when the operator IS the whole token.
+        """
+        assert rc.close_targets(command) == ["escapement-abc1", "escapement-zzz9"], (
+            command
+        )
+
+    def test_a_bare_operator_does_consume_its_separate_target(self):
+        assert rc.close_targets("bd close escapement-abc1 > escapement-zzz9") == [
+            "escapement-abc1"
+        ], "the file named after a bare `>` is a target, not a second bead"
+
+    def test_redirection_does_not_leak_into_the_substitution_openers(self):
+        """`>` and `<` still only open a command as the two-char `>(`/`<(`."""
+        assert rc.close_targets("cat <(bd close escapement-abc1)") == [
+            "escapement-abc1"
+        ]
+        assert rc.close_targets("bd ready > out.txt") is None
