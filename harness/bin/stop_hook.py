@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# file-complexity-waiver: 1112 lines; delegated Stop policy is isolated in execution_stop_adapter.py and the .gate-signal.jsonl writer in gate_signal.py, leaving this legacy hook with thin imports and calls to both. Growth here is denial copy (the delegated escape paths), not logic. Broader split remains owned by bead e9v.7.
+# file-complexity-waiver: 1153 lines; delegated Stop policy is isolated in execution_stop_adapter.py and the .gate-signal.jsonl writer in gate_signal.py, leaving this legacy hook with thin imports and calls to both. Growth here is denial copy (the delegated escape paths), not logic. Broader split remains owned by bead e9v.7.
 """
 Claude Code Stop-hook adapter for continuation-harness.
 
@@ -161,6 +161,47 @@ _TASK_MODE_DISPLAY: dict[str, str] = {
         "--execution-id <id> --reason \"<why, >=20 chars>\"`; (4) if the ledger, "
         "expectation, or incident file under this thread is itself missing or untrusted, "
         "that is the defect to fix — file a bead and repair it, do not delete it."
+    ),
+    "managed_wake_unresolved": (
+        "continuation-harness [delegated]: managed_wake_unresolved. An agent this "
+        "session dispatched is still active and the supervisor has no future wake "
+        "registered for it, so this session cannot be parked — but nothing is broken "
+        "and there is nothing to repair. Do NOT hand-edit executions.json and do NOT "
+        "summarize and ask what to do next. The child is running and will report; when "
+        "it does, its execution terminalizes itself and this gate releases. So: KEEP "
+        "WORKING. Do the next in-scope thing, or work alongside the child. To see what "
+        "is outstanding — `python3 ~/.claude/harness/bin/execution_reconcile.py list "
+        "--session {session_id}`. If one of those children is one you no longer want, "
+        "cancel it by id with a real reason rather than waiting it out; `cancel` will "
+        "refuse a child that is merely slow, and tell you so."
+    ),
+    "parent_outcome_unresolved": (
+        "continuation-harness [delegated]: parent_outcome_unresolved. Every delegated "
+        "execution in this session is finished, but the parent bead this session is "
+        "scoped to is not closed — so the WORK landed and the OUTCOME is unrecorded. "
+        "That is the gap this gate exists for: a finished child is not a delivered "
+        "outcome. Do NOT hand-edit executions.json and do NOT summarize and ask what to "
+        "do next. Escape paths: (1) verify the parent's real user-facing outcome, then "
+        "close it — `bd show <parent>` then `bd close <parent>`; (2) if the outcome is "
+        "genuinely not delivered yet, it is not done — keep working it; (3) if the "
+        "parent bead cannot be resolved because its own state is wrong, repair the bead "
+        "and say so in its notes. Do not close it to clear the gate — that launders an "
+        "unfinished outcome into a delivered one."
+    ),
+    "supervisor_health_unresolved": (
+        "continuation-harness [delegated]: supervisor_health_unresolved. A bounded "
+        "pause needs the continuation supervisor to have completed a recent successful "
+        "reconcile, and it has not — so the machinery that would wake this session back "
+        "up cannot be trusted to do it. Parking now risks a session that never resumes. "
+        "Do NOT hand-edit executions.json and do NOT summarize and ask what to do next. "
+        "Escape paths: (1) the always-available one — KEEP WORKING; a dispatched child "
+        "terminalizes its own execution when it reports, and that releases this gate "
+        "without any supervisor involvement; (2) see what is outstanding — `python3 "
+        "~/.claude/harness/bin/execution_reconcile.py list --session {session_id}`; "
+        "(3) if the supervisor is genuinely down and you want pauses working again, "
+        "reinstall it with `bash scripts/continuation-supervisor-install.sh` from the "
+        "escapement repo, and file a bead for why it stopped — a silently dead "
+        "supervisor is a defect, not a condition to route around."
     ),
 }
 
