@@ -6,6 +6,22 @@
   "raw_digest_mode": "sha256 of exact UTF-8 JSONL record bytes including LF",
   "records": [
     {
+      "event_kind": "host_init",
+      "fixture_id": "host_init",
+      "raw_record_sha256": "6b76ec803250f97fd5bbcfbe075b2f085394076de6979f9a86ab23be57670d75",
+      "retained_json_pointers": [
+        "/type",
+        "/subtype",
+        "/session_id",
+        "/claude_code_version",
+        "/uuid"
+      ],
+      "source": {
+        "capture_id": "task3_live_canary_managed_stream",
+        "line": 25
+      }
+    },
+    {
       "event_kind": "dispatch",
       "fixture_id": "abort_agent_tool_use",
       "raw_record_sha256": "708f2a6fc56d3f62bc6608616383d23cf03c7c6c7769d79431e52e2f49b1a687",
@@ -51,7 +67,7 @@
     }
   ],
   "sanitizer": {
-    "command": "python3 tools/sanitize_claude_lifecycle_fixtures.py --abort-stream harness/tests/fixtures/captures/claude-agent-abort-2.1.248.raw.jsonl --abort-fixture harness/tests/fixtures/claude-agent-abort-2.1.248.jsonl --abort-provenance harness/tests/fixtures/claude-agent-abort-2.1.248.provenance.json",
+    "command": "python3 tools/sanitize_claude_lifecycle_fixtures.py --abort-stream harness/tests/fixtures/captures/claude-agent-abort-2.1.248.raw.jsonl --abort-init-stream harness/tests/fixtures/captures/claude-agent-init-2.1.248.raw.jsonl --abort-fixture harness/tests/fixtures/claude-agent-abort-2.1.248.jsonl --abort-provenance harness/tests/fixtures/claude-agent-abort-2.1.248.provenance.json",
     "name": "sanitize_claude_lifecycle_fixtures.py",
     "version": "1"
   },

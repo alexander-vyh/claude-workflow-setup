@@ -29,7 +29,6 @@ SUPERVISOR_LABEL="com.escapement.continuation-supervisor"
 SUPERVISOR_MARKER="$CLAUDE_DIR/harness/continuation-supervisor-installed.json"
 SUPERVISOR_PLIST="$HOME/Library/LaunchAgents/$SUPERVISOR_LABEL.plist"
 SUPERVISOR_DOMAIN="gui/$UID"
-DELEGATION_CANARY="$REPO_DIR/scripts/delegation-canary.py"
 supervisor_installer="$REPO_DIR/scripts/continuation-supervisor-install.sh"
 supervisor_state_helper="$REPO_DIR/scripts/continuation-supervisor-state.py"
 
@@ -58,11 +57,6 @@ done
   echo "FATAL: continuation supervisor state helper is missing: $supervisor_state_helper" >&2
   exit 1
 }
-[[ -x "$DELEGATION_CANARY" ]] || {
-  echo "FATAL: delegation canary is missing: $DELEGATION_CANARY" >&2
-  exit 1
-}
-
 # Resolve only the installed user-scope plugin. Historical cache siblings and
 # project-scope entries are not deployment authority.
 resolve_install_path() {
@@ -524,26 +518,8 @@ if [[ "$DRY_RUN" == true ]]; then
 elif ! "$supervisor_installer"; then
   fail_after_refresh "continuation supervisor installation failed"
 fi
-
-if [[ "$DRY_RUN" == true ]]; then
-  echo "    [dry-run] verify installed plugin parity and isolated delegation canary"
-else
-  if ! diff -qr "$REPO_DIR/plugins/escapement-claude" "$new_path" >/dev/null; then
-    fail_after_refresh "installed plugin differs from this checkout"
-  fi
-  echo "    installed plugin parity verified"
-  canary_scratch="$(mktemp -d "${TMPDIR:-/tmp}/escapement-delegation-canary.XXXXXX")"
-  if ! python3 -B "$DELEGATION_CANARY" \
-    --claude-bin "$(command -v claude)" \
-    --source-root "$REPO_DIR" \
-    --candidate-root "$new_path" \
-    --scratch-root "$canary_scratch"
-  then
-    rm -rf "$canary_scratch"
-    fail_after_refresh "isolated delegation canary failed"
-  fi
-  rm -rf "$canary_scratch"
-  echo "    isolated delegation canary passed"
+if ! "$REPO_DIR/scripts/plugin-update-canary-gate.sh" "$DRY_RUN" "$REPO_DIR" "$new_path" "$(command -v claude)"; then fail_after_refresh "isolated delegation canary failed"; fi
+if [[ "$DRY_RUN" != true ]]; then
   python3 -B "$TRANSACTION_HELPER" commit --journal "$TRANSACTION_JOURNAL"
   trap - ERR
   if ! python3 -B "$TRANSACTION_HELPER" recover \

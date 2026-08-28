@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import copy
+import importlib.util
 import json
 import os
 import shutil
@@ -34,6 +35,17 @@ def captured() -> dict[str, dict]:
 
 def write_jsonl(path: Path, records: list[dict]) -> None:
     path.write_text("".join(json.dumps(record) + "\n" for record in records))
+
+
+def load_lifecycle_module():
+    path = ROOT / "scripts" / "delegation_canary_lifecycle.py"
+    assert path.is_file(), "delegation canary lifecycle module is not implemented"
+    sys.path.insert(0, str(path.parent))
+    spec = importlib.util.spec_from_file_location("delegation_canary_lifecycle", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def unmanaged_stream() -> list[dict]:
@@ -192,10 +204,15 @@ def managed_stream(scenario: str = "ok") -> list[dict]:
         launches[1][1]["task_id"] = launches[0][1]["task_id"]
         launches[1][2]["tool_use_result"]["agentId"] = launches[0][1]["task_id"]
         terminals[1]["task_id"] = launches[0][1]["task_id"]
+    terminals_inline = scenario in {"sequential", "native-sequential"}
     if scenario == "sequential":
         launch_and_terminal = []
         for launch, terminal in zip(launches, terminals, strict=True):
             launch_and_terminal.extend([*launch, terminal])
+    elif scenario == "native-sequential":
+        launch_and_terminal = [launch[0] for launch in launches]
+        for launch, terminal in zip(launches, terminals, strict=True):
+            launch_and_terminal.extend([launch[1], launch[2], terminal])
     else:
         launch_and_terminal = [record for launch in launches for record in launch]
     if scenario == "missing-peer":
@@ -211,6 +228,18 @@ def managed_stream(scenario: str = "ok") -> list[dict]:
     no_spawn_result = copy.deepcopy(no_spawn["no_spawn_error_result"])
     no_spawn_dispatch["session_id"] = "canary-managed-session"
     no_spawn_result["session_id"] = "canary-managed-session"
+    terminal_records = [] if terminals_inline else terminals
+    if scenario == "live-peer-after-terminal":
+        managed_records = [*launch_and_terminal, *terminal_records, *peer_records]
+    elif scenario == "live-peer-ack-after-terminal":
+        managed_records = [
+            *launch_and_terminal,
+            peer_records[0],
+            *terminal_records,
+            peer_records[1],
+        ]
+    else:
+        managed_records = [*launch_and_terminal, *peer_records, *terminal_records]
     result = [
         {
             "type": "system",
@@ -218,9 +247,7 @@ def managed_stream(scenario: str = "ok") -> list[dict]:
             "claude_code_version": "2.1.247",
             "session_id": "canary-managed-session",
         },
-        *launch_and_terminal,
-        *peer_records,
-        *([] if scenario == "sequential" else terminals),
+        *managed_records,
         no_spawn_dispatch,
         no_spawn_result,
         {
@@ -329,10 +356,44 @@ def test_canary_accepts_acknowledged_child_to_child_dependency(tmp_path) -> None
     assert output["managed"]["peer_dependency_proven"] is True
 
 
+def test_result_release_rejects_cross_swapped_terminal_evidence(tmp_path) -> None:
+    lifecycle = load_lifecycle_module()
+    records = managed_stream()
+    session_id = "canary-managed-session"
+    scratch = tmp_path / "scratch"
+    thread = scratch / "harness" / "threads" / session_id
+    lifecycle.write_mode(thread, session_id, tmp_path)
+    ledger_path = thread / "executions.json"
+    api = lifecycle.load_api(PLUGIN)
+    lifecycle.register_dispatches(records, ledger_path, api["hook"])
+    transcript = scratch / "managed-stream.jsonl"
+    transcript.parent.mkdir(parents=True, exist_ok=True)
+    write_jsonl(transcript, records)
+    lifecycle.apply_transcript(transcript, ledger_path, session_id, api)
+
+    def cross_swap(ledger: dict) -> dict:
+        terminal_ids = [
+            item["terminal_event_id"]
+            for item in ledger["executions"]
+            if item["state"] == "terminal"
+        ]
+        for index, execution in enumerate(
+            item for item in ledger["executions"] if item["state"] == "terminal"
+        ):
+            execution["terminal_event_id"] = terminal_ids[(index + 1) % len(terminal_ids)]
+        return ledger
+
+    api["store"].mutate_atomic(ledger_path, cross_swap)
+
+    with pytest.raises(lifecycle.CanaryFailure, match="managed_completion_unresolved"):
+        lifecycle.apply_results(ledger_path, session_id, records, api)
+
+
 @pytest.mark.parametrize(
     ("scenario", "reason"),
     [
         ("sequential", "children_do_not_overlap"),
+        ("native-sequential", "children_do_not_overlap"),
         ("duplicate-ids", "native_child_identity_unresolved"),
         ("missing-peer", "peer_dependency_unproven"),
         ("live-wrong-sender", "peer_dependency_unproven"),
@@ -340,6 +401,8 @@ def test_canary_accepts_acknowledged_child_to_child_dependency(tmp_path) -> None
         ("live-wrong-recipient-id", "peer_dependency_unproven"),
         ("live-wrong-nonce", "peer_dependency_unproven"),
         ("live-peer-unacknowledged", "peer_dependency_unproven"),
+        ("live-peer-after-terminal", "peer_dependency_unproven"),
+        ("live-peer-ack-after-terminal", "peer_dependency_unproven"),
         ("unresolved-terminal", "managed_completion_unresolved"),
     ],
 )

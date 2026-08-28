@@ -139,6 +139,21 @@ elif args[:2] == ["plugin", "disable"]:
     data = json.loads(settings.read_text())
     data.setdefault("enabledPlugins", {})["escapement@escapement"] = False
     settings.write_text(json.dumps(data, indent=2) + "\n")
+elif "--print" in args:
+    data = json.loads(settings.read_text())
+    if data.get("enabledPlugins", {}).get("escapement@escapement") is not False:
+        raise SystemExit(91)
+    session = "post-rollback-native-session"
+    tool = "toolu_post_rollback_native"
+    task = "post-rollback-native-child"
+    records = [
+        {"type":"system","subtype":"init","session_id":session,"claude_code_version":"2.1.248"},
+        {"type":"assistant","session_id":session,"message":{"role":"assistant","content":[{"type":"tool_use","id":tool,"name":"Agent","input":{"name":"post-rollback-native","subagent_type":"general-purpose","run_in_background":True}}]}},
+        {"type":"system","subtype":"task_started","session_id":session,"tool_use_id":tool,"task_id":task,"is_backgrounded":True,"task_type":"local_agent"},
+        {"type":"system","subtype":"task_notification","session_id":session,"tool_use_id":tool,"task_id":task,"status":"completed","uuid":"post-rollback-terminal"},
+        {"type":"result","subtype":"success","session_id":session,"result":"NATIVE_AGENT_OK"},
+    ]
+    print("\n".join(json.dumps(record) for record in records))
 raise SystemExit(0)
 """,
     )
@@ -163,6 +178,24 @@ def _run(env: dict[str, str]) -> subprocess.CompletedProcess:
         text=True,
         timeout=40,
     )
+
+
+def _native_agent_probe(fake_bin: Path, env: dict[str, str]) -> list[dict]:
+    result = subprocess.run(
+        [
+            str(fake_bin / "claude"),
+            "--print",
+            "--output-format",
+            "stream-json",
+            "Use Agent once in the background and return NATIVE_AGENT_OK.",
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    return [json.loads(line) for line in result.stdout.splitlines()]
 
 
 def _link_target(path: Path) -> str | None:

@@ -12,6 +12,7 @@ from pathlib import Path
 from test_plugin_update_supervisor_transaction import (
     PLUGIN,
     _cutover_fixture,
+    _native_agent_probe,
     _run,
     _write_executable,
 )
@@ -121,6 +122,20 @@ def position(observed: list[list[str]], expected: list[str]) -> int:
     return observed.index(expected)
 
 
+def test_updater_delegates_candidate_verification_to_focused_helper():
+    updater = (PLUGIN.parents[1] / "scripts/plugin-update.sh").read_text()
+    helper = PLUGIN.parents[1] / "scripts/plugin-update-canary-gate.sh"
+
+    assert helper.is_file()
+    assert helper.stat().st_mode & 0o111
+    assert "plugin-update-canary-gate.sh" in updater
+    assert "delegation-canary.py" not in updater
+    assert "diff -qr" not in updater
+    helper_text = helper.read_text()
+    assert "delegation-canary.py" in helper_text
+    assert "diff -qr" in helper_text
+
+
 def test_single_transaction_commits_only_after_parity_and_live_canary(tmp_path):
     home, old_cache, new_cache, fake_bin, env = _cutover_fixture(tmp_path)
     audit, trace, snapshot_path = install_audit(tmp_path, fake_bin)
@@ -179,6 +194,16 @@ def test_canary_failure_uses_original_rollback_and_is_byte_exact(tmp_path):
     assert authority_snapshot(home, new_cache) == before
     assert not (home / ".claude/.plugin-update-transaction.json").exists()
     assert not list((home / ".claude").glob(".cutover-backup-*"))
+    native = _native_agent_probe(fake_bin, env)
+    dispatch = native[1]["message"]["content"][0]
+    started = native[2]
+    terminal = native[3]
+    assert dispatch["name"] == "Agent"
+    assert dispatch["input"]["run_in_background"] is True
+    assert dispatch["id"] == started["tool_use_id"] == terminal["tool_use_id"]
+    assert started["task_id"] == terminal["task_id"]
+    assert terminal["status"] == "completed"
+    assert native[4]["result"] == "NATIVE_AGENT_OK"
 
     retry = _run(
         {

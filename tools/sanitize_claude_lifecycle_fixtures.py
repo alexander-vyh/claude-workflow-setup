@@ -43,9 +43,18 @@ ABORT_COMMAND = (
     "python3 tools/sanitize_claude_lifecycle_fixtures.py "
     "--abort-stream "
     "harness/tests/fixtures/captures/claude-agent-abort-2.1.248.raw.jsonl "
+    "--abort-init-stream "
+    "harness/tests/fixtures/captures/claude-agent-init-2.1.248.raw.jsonl "
     "--abort-fixture harness/tests/fixtures/claude-agent-abort-2.1.248.jsonl "
     "--abort-provenance "
     "harness/tests/fixtures/claude-agent-abort-2.1.248.provenance.json"
+)
+INIT_POINTERS = (
+    "/type",
+    "/subtype",
+    "/session_id",
+    "/claude_code_version",
+    "/uuid",
 )
 
 
@@ -244,6 +253,14 @@ ABORT_WITNESSES = (
         ),
     ),
 )
+ABORT_INIT_WITNESS = Witness(
+    "host_init",
+    "host_init",
+    "task3_live_canary_managed_stream",
+    25,
+    "",
+    INIT_POINTERS,
+)
 
 
 def _decode_pointer(pointer: str) -> list[str]:
@@ -367,11 +384,31 @@ def build_post_tool(source_path: Path) -> tuple[dict, dict]:
     return retained, provenance
 
 
-def build_abort(source_path: Path) -> tuple[list[dict], dict]:
+def _provenance_record(witness: Witness, digest: str) -> dict:
+    source = {"capture_id": witness.source_name, "line": witness.line}
+    if witness.capture_timestamp:
+        source["capture_timestamp"] = witness.capture_timestamp
+    return {
+        "fixture_id": witness.fixture_id,
+        "event_kind": witness.event_kind,
+        "source": source,
+        "raw_record_sha256": digest,
+        "retained_json_pointers": list(witness.pointers),
+    }
+
+
+def build_abort(source_path: Path, init_source_path: Path) -> tuple[list[dict], dict]:
     """Sanitize the reviewed abort records from the Task 3 live canary."""
     lines = _read_lines(source_path)
-    fixtures = []
-    records = []
+    init_raw, init_digest = _record_and_digest(_read_lines(init_source_path), 1)
+    retained_init: dict[str, Any] = {}
+    for pointer in ABORT_INIT_WITNESS.pointers:
+        _assign(retained_init, pointer, _lookup(init_raw, pointer))
+    version = retained_init.get("claude_code_version")
+    if not isinstance(version, str) or not version:
+        raise ValueError("captured init record must contain claude_code_version")
+    fixtures = [{"fixture_id": ABORT_INIT_WITNESS.fixture_id, "record": retained_init}]
+    records = [_provenance_record(ABORT_INIT_WITNESS, init_digest)]
     if len(lines) == 2:
         source_lines = (1, 2)
     elif len(lines) >= max(witness.line for witness in ABORT_WITNESSES):
@@ -380,26 +417,16 @@ def build_abort(source_path: Path) -> tuple[list[dict], dict]:
         raise ValueError("abort capture must be the exact two records or full stream")
     for witness, source_line in zip(ABORT_WITNESSES, source_lines, strict=True):
         raw, digest = _record_and_digest(lines, source_line)
+        if raw.get("session_id") != retained_init.get("session_id"):
+            raise ValueError("abort and init captures must belong to the same session")
         retained: dict[str, Any] = {}
         for pointer in witness.pointers:
             _assign(retained, pointer, _lookup(raw, pointer))
         fixtures.append({"fixture_id": witness.fixture_id, "record": retained})
-        records.append(
-            {
-                "fixture_id": witness.fixture_id,
-                "event_kind": witness.event_kind,
-                "source": {
-                    "capture_id": witness.source_name,
-                    "line": witness.line,
-                    "capture_timestamp": witness.capture_timestamp,
-                },
-                "raw_record_sha256": digest,
-                "retained_json_pointers": list(witness.pointers),
-            }
-        )
+        records.append(_provenance_record(witness, digest))
     provenance = {
         "schema_version": 1,
-        "host": {"product": "Claude Code", "version": "2.1.248"},
+        "host": {"product": "Claude Code", "version": version},
         "raw_digest_mode": "sha256 of exact UTF-8 JSONL record bytes including LF",
         "sanitizer": {
             "name": Path(__file__).name,
@@ -451,6 +478,7 @@ def main() -> int:
     parser.add_argument("--post-tool-fixture", type=Path)
     parser.add_argument("--post-tool-provenance", type=Path)
     parser.add_argument("--abort-stream", type=Path)
+    parser.add_argument("--abort-init-stream", type=Path)
     parser.add_argument("--abort-fixture", type=Path)
     parser.add_argument("--abort-provenance", type=Path)
     parser.add_argument("--check", action="store_true")
@@ -494,11 +522,18 @@ def main() -> int:
             expected_post_fixture, expected_post_provenance,
             check=args.check, label="post-tool",
         )
-    abort_args = (args.abort_stream, args.abort_fixture, args.abort_provenance)
+    abort_args = (
+        args.abort_stream,
+        args.abort_init_stream,
+        args.abort_fixture,
+        args.abort_provenance,
+    )
     if any(abort_args) and not all(abort_args):
         raise SystemExit("abort stream, fixture, and provenance must be supplied together")
     if all(abort_args):
-        abort_fixtures, abort_provenance = build_abort(args.abort_stream)
+        abort_fixtures, abort_provenance = build_abort(
+            args.abort_stream, args.abort_init_stream
+        )
         expected_abort_fixture = _fixture_text(abort_fixtures)
         expected_abort_provenance = _provenance_text(abort_provenance)
         _emit_pair(

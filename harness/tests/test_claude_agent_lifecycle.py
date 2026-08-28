@@ -28,6 +28,7 @@ PROVENANCE_PATH = FIXTURES / "claude-agent-lifecycle-2.1.247.provenance.json"
 ABORT_FIXTURE_PATH = FIXTURES / "claude-agent-abort-2.1.248.jsonl"
 ABORT_PROVENANCE_PATH = FIXTURES / "claude-agent-abort-2.1.248.provenance.json"
 ABORT_RAW_PATH = FIXTURES / "captures" / "claude-agent-abort-2.1.248.raw.jsonl"
+INIT_RAW_PATH = FIXTURES / "captures" / "claude-agent-init-2.1.248.raw.jsonl"
 sys.path.insert(0, str(BIN))
 
 import execution_ledger as ledger_api  # noqa: E402
@@ -200,6 +201,16 @@ def load_adapter():
     spec = importlib.util.spec_from_file_location("claude_agent_lifecycle", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_sanitizer():
+    path = ROOT / "tools" / "sanitize_claude_lifecycle_fixtures.py"
+    spec = importlib.util.spec_from_file_location("sanitize_claude_lifecycle", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -618,6 +629,16 @@ def test_current_abort_fixture_has_inspectable_raw_provenance() -> None:
         )
         for record in provenance["records"]
     } == {
+        "host_init": (
+            "6b76ec803250f97fd5bbcfbe075b2f085394076de6979f9a86ab23be57670d75",
+            [
+                "/type",
+                "/subtype",
+                "/session_id",
+                "/claude_code_version",
+                "/uuid",
+            ],
+        ),
         "abort_agent_tool_use": (
             "708f2a6fc56d3f62bc6608616383d23cf03c7c6c7769d79431e52e2f49b1a687",
             list(PROVENANCE_CONTRACT["no_spawn_agent_tool_use"][1]),
@@ -636,6 +657,8 @@ def test_current_abort_fixture_regenerates_exactly_from_raw_capture() -> None:
             str(ROOT / "tools" / "sanitize_claude_lifecycle_fixtures.py"),
             "--abort-stream",
             str(ABORT_RAW_PATH),
+            "--abort-init-stream",
+            str(INIT_RAW_PATH),
             "--abort-fixture",
             str(ABORT_FIXTURE_PATH),
             "--abort-provenance",
@@ -649,6 +672,33 @@ def test_current_abort_fixture_regenerates_exactly_from_raw_capture() -> None:
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_abort_provenance_derives_host_version_from_captured_init(tmp_path) -> None:
+    changed_init = tmp_path / "init.jsonl"
+    changed_init.write_text(
+        INIT_RAW_PATH.read_text().replace('"2.1.248"', '"9.8.7"'),
+        encoding="utf-8",
+    )
+
+    fixtures, provenance = load_sanitizer().build_abort(ABORT_RAW_PATH, changed_init)
+
+    assert provenance["host"] == {"product": "Claude Code", "version": "9.8.7"}
+    assert fixtures[0]["record"]["claude_code_version"] == "9.8.7"
+
+
+def test_abort_provenance_rejects_init_from_another_session(tmp_path) -> None:
+    changed_init = tmp_path / "init.jsonl"
+    changed_init.write_text(
+        INIT_RAW_PATH.read_text().replace(
+            '"session_id":"01f5642c-4c6f-4da4-a383-05afc07113e0"',
+            '"session_id":"unrelated-session"',
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="same session"):
+        load_sanitizer().build_abort(ABORT_RAW_PATH, changed_init)
 
 
 def test_historical_interactive_spawn_requires_exact_structured_identity(
