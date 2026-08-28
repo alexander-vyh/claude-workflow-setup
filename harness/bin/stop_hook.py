@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# file-complexity-waiver: 1091 lines; delegated Stop policy is isolated in execution_stop_adapter.py, leaving this legacy hook with one adapter import and call. Broader split remains owned by bead e9v.7.
+# file-complexity-waiver: 1106 lines; delegated Stop policy is isolated in execution_stop_adapter.py and the .gate-signal.jsonl writer in gate_signal.py, leaving this legacy hook with thin imports and calls to both. Growth here is denial copy (the delegated escape paths), not logic. Broader split remains owned by bead e9v.7.
 """
 Claude Code Stop-hook adapter for continuation-harness.
 
