@@ -41,7 +41,7 @@ class TestRecognisingAClose:
         ("bd close escapement-858.4", "escapement-858.4"),
     ])
     def test_resolves_the_target(self, command, expected):
-        assert rc.close_target(command) == expected
+        assert rc.close_targets(command) == [expected]
 
     @pytest.mark.parametrize("command", [
         "bd ready",
@@ -51,7 +51,7 @@ class TestRecognisingAClose:
         "bd close --help",
     ])
     def test_not_a_close(self, command):
-        assert rc.close_target(command) is None
+        assert rc.close_targets(command) is None
 
     @pytest.mark.parametrize("command", [
         'git commit -m "bd close escapement-abc1"',
@@ -61,7 +61,7 @@ class TestRecognisingAClose:
     def test_a_quoted_mention_is_not_a_close(self, command):
         """Blocking a commit because its message says 'bd close' is a pure
         false positive — it stops real work and closes nothing."""
-        assert rc.close_target(command) is None
+        assert rc.close_targets(command) is None
 
 
 class TestBdUpdateStatusClosed:
@@ -78,10 +78,10 @@ class TestBdUpdateStatusClosed:
         every time, and told the agent about an id that does not exist —
         unrepairable from the message.
         """
-        assert rc.close_target(command) == "escapement-abc1"
+        assert rc.close_targets(command) == ["escapement-abc1"]
 
     def test_status_open_is_not_a_close(self):
-        assert rc.close_target("bd update escapement-abc1 --status open") is None
+        assert rc.close_targets("bd update escapement-abc1 --status open") is None
 
 
 class TestWaiverIsOnlyAnEnvPrefix:
@@ -122,12 +122,12 @@ class TestWaiverIsOnlyAnEnvPrefix:
 class TestSegmentation:
     @pytest.mark.parametrize("separator", ["&&", "||", ";", "|"])
     def test_splits_on_shell_separators(self, separator):
-        assert rc.close_target(f"true {separator} bd close escapement-abc1") == (
-            "escapement-abc1"
-        )
+        assert rc.close_targets(
+            f"true {separator} bd close escapement-abc1"
+        ) == ["escapement-abc1"]
 
     def test_splits_on_newlines(self):
-        assert rc.close_target("set -e\nbd close escapement-abc1") == "escapement-abc1"
+        assert rc.close_targets("set -e\nbd close escapement-abc1") == ["escapement-abc1"]
 
     @pytest.mark.parametrize("separator", [";", "&&", "|", "||"])
     def test_separators_inside_quotes_are_not_boundaries(self, separator):
@@ -142,16 +142,89 @@ class TestSegmentation:
             f'REVIEW_WAIVER="docs only{separator} no behavior touched at all" '
             "bd close escapement-abc1"
         )
-        assert rc.close_target(command) == "escapement-abc1"
+        assert rc.close_targets(command) == ["escapement-abc1"]
         assert rc.waiver_reason(command, "REVIEW_WAIVER") == (
             f"docs only{separator} no behavior touched at all"
         )
 
     def test_quoted_separator_in_a_close_reason_still_resolves_the_bead(self):
         command = 'bd close escapement-abc1 --reason "shipped; verified live"'
-        assert rc.close_target(command) == "escapement-abc1"
+        assert rc.close_targets(command) == ["escapement-abc1"]
 
     def test_unquoted_separator_after_a_quoted_one_still_splits(self):
         """The quote-aware scan must not swallow real boundaries."""
         command = 'echo "a; b" && bd close escapement-abc1'
-        assert rc.close_target(command) == "escapement-abc1"
+        assert rc.close_targets(command) == ["escapement-abc1"]
+
+
+class TestOrdinaryBdUsageIsStillGated:
+    """Every case here was a live bypass, and none of them looks like evasion.
+
+    That is what made them worse than an evadable gate: an agent typing
+    `bd close -r "done"` never learns it skipped review, so no signal is
+    produced and the lapse is invisible to the corpus that half-life review
+    reads. `close_targets` returning `[]` — "a close I cannot identify" — is
+    the mechanism that stops all of them; the gate must refuse on `[]` rather
+    than treat it as "not a close".
+    """
+
+    @pytest.mark.parametrize("command,why", [
+        ('bd close -r "finished the work here"',
+         "-r is --reason; the prose was read as the bead id"),
+        ('bd close --reason-file /tmp/r.md',
+         "--reason-file value was read as the bead id"),
+        ("bd close",
+         "bd closes the last-touched issue when given no id"),
+        ("bd close $ID",
+         "an unexpanded variable is not a bead id"),
+        ("bd close ${BEAD}",
+         "an unexpanded brace variable is not a bead id"),
+    ])
+    def test_unidentifiable_close_is_reported_as_such(self, command, why):
+        assert rc.close_targets(command) == [], why
+
+    @pytest.mark.parametrize("command", [
+        "bd -C . close escapement-abc1",
+        "bd --actor bot close escapement-abc1",
+        "bd --db /tmp/x.db close escapement-abc1",
+        "bd --json --sandbox close escapement-abc1",
+        "bd done escapement-abc1",
+        "bd update escapement-abc1 -s closed",
+        "bd update -s closed escapement-abc1",
+    ])
+    def test_global_flags_and_aliases_are_still_closes(self, command):
+        """These used to parse as "not a close at all" and skip the gate."""
+        assert rc.close_targets(command) == ["escapement-abc1"]
+
+    def test_every_bead_in_a_multi_close_is_returned(self):
+        """Checking only the first id let the rest close unreviewed."""
+        assert rc.close_targets("bd close escapement-a1 escapement-b2") == [
+            "escapement-a1", "escapement-b2",
+        ]
+
+    @pytest.mark.parametrize("command", [
+        "bd close --help",
+        "bd ready",
+        "bd show escapement-abc1",
+        "bd update escapement-abc1 --status open",
+    ])
+    def test_non_closes_stay_non_closes(self, command):
+        assert rc.close_targets(command) is None
+
+
+class TestReservedMetadataIsNotHandWritable:
+    def test_direct_write_to_the_review_key_is_detected(self):
+        """Otherwise an implementer mints its own independence stamp."""
+        command = (
+            'bd update escapement-abc1 --set-metadata '
+            '\'escapement_review={"v":1,"independent":true}\''
+        )
+        assert rc.writes_reserved_metadata(command, "escapement_review")
+
+    @pytest.mark.parametrize("command", [
+        "bd update escapement-abc1 --set-metadata team=platform",
+        "bd close escapement-abc1",
+        'bd update escapement-abc1 --reason "escapement_review is fine"',
+    ])
+    def test_unrelated_metadata_is_untouched(self, command):
+        assert not rc.writes_reserved_metadata(command, "escapement_review")

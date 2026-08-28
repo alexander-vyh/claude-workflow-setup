@@ -160,7 +160,7 @@
               "event": "PreToolUse",
               "matcher": "Bash",
               "command": "python3 -B claude/hooks/review_gate.py",
-              "timeout_seconds": 15
+              "timeout_seconds": 20
             }
           ],
           "fixtures": [
@@ -174,7 +174,7 @@
           "events": [
             {
               "event": "PreToolUse",
-              "matcher": "Agent|Bash(bd close:*)|Bash(bd update:*)",
+              "matcher": "Agent|Bash",
               "command": "python3 -B ~/.claude/hooks/review_gate.py"
             }
           ],

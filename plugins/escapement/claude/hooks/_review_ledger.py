@@ -20,6 +20,8 @@ block a close for a reason unrelated to review discipline.
 from __future__ import annotations
 
 import json
+import pathlib
+import time
 from pathlib import Path
 
 LEDGER_DIR = Path("/tmp/claude-review-gate")
@@ -61,24 +63,50 @@ def record_dispatch(
         pass
 
 
-def has_dispatch(bead_id: str) -> bool:
-    """True when any session ledger holds an isolated review of this bead.
+#: How long a recorded dispatch stays usable. The recording CLI runs as a
+#: separate process moments after the reviewer returns, so minutes are enough;
+#: a day is generous. Without a bound, the ledger accumulated every dispatch
+#: from every session forever, and a reviewer run last week could vouch for
+#: work written today.
+MAX_DISPATCH_AGE_SECONDS = 24 * 60 * 60
 
-    Scanned across every ledger file rather than keyed to one session id: the
-    recording CLI runs as a subprocess and may have no resolvable session id,
-    and a reviewer dispatched in one session is legitimately recorded from the
-    same session's shell. Cross-session reuse is safe because the close path
-    independently re-checks the work fingerprint — an old dispatch cannot
-    vouch for work that has changed since.
+
+def has_dispatch(bead_id: str, session_id: str | None = None) -> bool:
+    """True when a recent isolated review of this bead was observed.
+
+    Prefers the caller's own session ledger. Falls back to scanning recent
+    ledgers only because the recording CLI runs as a subprocess that may have
+    no resolvable session id — but the scan is bounded by
+    `MAX_DISPATCH_AGE_SECONDS`, so a stale dispatch cannot vouch for new work.
+    The close path independently re-checks the work fingerprint, so this is a
+    corroborating signal, never the only one.
     """
+    if session_id:
+        return _contains(ledger_path(session_id), bead_id)
+
     if not LEDGER_DIR.is_dir():
         return False
     try:
         candidates = sorted(LEDGER_DIR.glob("*.json"))
     except OSError:
         return False
+
+    now = time.time()
     for path in candidates:
-        for entry in _load(path):
-            if isinstance(entry, dict) and bead_id in (entry.get("beads") or []):
-                return True
+        try:
+            if now - path.stat().st_mtime > MAX_DISPATCH_AGE_SECONDS:
+                continue
+        except OSError:
+            continue
+        if _contains(path, bead_id):
+            return True
+    return False
+
+
+def _contains(path: pathlib.Path, bead_id: str) -> bool:
+    if not path.exists():
+        return False
+    for entry in _load(path):
+        if isinstance(entry, dict) and bead_id in (entry.get("beads") or []):
+            return True
     return False

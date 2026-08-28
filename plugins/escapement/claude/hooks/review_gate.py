@@ -81,10 +81,15 @@ except ImportError:  # pragma: no cover - signal is best-effort
     def _record_signal(*_args, **_kwargs) -> None:
         return None
 
-from _review_command import close_target, waiver_reason  # noqa: E402
+from _review_command import (  # noqa: E402
+    close_targets,
+    waiver_reason,
+    writes_reserved_metadata,
+)
 from _review_ledger import record_dispatch  # noqa: E402
 from _review_record import (  # noqa: E402
     INDEPENDENT_REVIEWER_TYPES,
+    METADATA_KEY,
     UNAVAILABLE,
     changed_paths_since,
     extract_bead_ids,
@@ -102,9 +107,10 @@ _RECORD_CLI = str(Path(__file__).resolve().parent / "escapement_review.py")
 WAIVER_VAR = "REVIEW_WAIVER"
 
 
-def is_close_command(command: str) -> bool:
-    """True when the command actually closes a bead."""
-    return close_target(command) is not None
+#: Outcomes of a single bead's evaluation, so a multi-bead close can stop at
+#: the first refusal instead of emitting two decision documents.
+DENIED = "denied"
+ALLOWED = "allowed"
 
 
 def parse_waiver(command: str) -> str | None:
@@ -145,7 +151,7 @@ def _escape_block(bead_id: str) -> str:
     )
 
 
-def _deny(reason: str, bead_id: str, signal_decision: str, **extras) -> int:
+def _deny(reason: str, bead_id: str, signal_decision: str, **extras) -> str:
     """Emit a deny decision with its escape path, and persist the signal."""
     full = f"{reason}\n\n{_escape_block(bead_id)}"
     _record_signal(
@@ -162,10 +168,10 @@ def _deny(reason: str, bead_id: str, signal_decision: str, **extras) -> int:
             "permissionDecisionReason": full,
         },
     }, sys.stdout)
-    return 0
+    return DENIED
 
 
-def _allow(reason: str, bead_id: str, **extras) -> int:
+def _allow(reason: str, bead_id: str, **extras) -> str:
     _record_signal(
         gate_name="review_gate",
         decision="allow",
@@ -173,7 +179,56 @@ def _allow(reason: str, bead_id: str, **extras) -> int:
         bead_id=bead_id,
         **extras,
     )
-    return 0
+    return ALLOWED
+
+
+def _emit_deny(reason: str, signal_decision: str, **extras) -> str:
+    """Deny without a bead id — the escape block needs a target, this does not."""
+    _record_signal(
+        gate_name="review_gate",
+        decision=signal_decision,
+        reason=reason,
+        **extras,
+    )
+    json.dump({
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": reason,
+        },
+    }, sys.stdout)
+    return DENIED
+
+
+def _deny_unidentified(command: str) -> str:
+    return _emit_deny(
+        "This closes a bead the gate cannot identify, so its review cannot be "
+        "checked. `bd close` with no id closes the last-touched issue, and an "
+        "unexpanded variable or a reason in the positional slot resolves to "
+        "nothing.\n\n"
+        "Ways forward:\n"
+        "  1. Name the bead explicitly: bd close <bead-id>\n"
+        "  2. Keep the reason attached to its flag: "
+        "bd close <bead-id> -r \"<reason>\"\n"
+        "  3. If review genuinely does not apply, waive it with a reason that "
+        "will be kept as signal:\n"
+        "       REVIEW_WAIVER=\"<>=20-char rationale>\" bd close <bead-id>",
+        "deny:unidentified-target",
+        command_excerpt=command[:200],
+    )
+
+
+def _deny_reserved_metadata() -> str:
+    return _emit_deny(
+        f"`{METADATA_KEY}` is the review gate's own record and cannot be "
+        "written by hand — doing so would let the author of the code mint its "
+        "own independence stamp with no reviewer involved.\n\n"
+        "Way forward: record the verdict through the CLI, which stamps "
+        "independence from an observed reviewer dispatch:\n"
+        f"       python3 -B {_RECORD_CLI} record --bead <bead-id> "
+        "--findings-file <path>",
+        "deny:reserved-metadata",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -181,8 +236,8 @@ def _allow(reason: str, bead_id: str, **extras) -> int:
 # ---------------------------------------------------------------------------
 
 def evaluate_close(command: str, bead_id: str, cwd: str | None,
-                   claude_shape: bool) -> int:
-    """Decide a `bd close`, emitting the decision and signal. Returns exit code."""
+                   claude_shape: bool) -> str:
+    """Decide one bead's close, emitting the decision and signal."""
     waiver = parse_waiver(command)
     if waiver is not None:
         ok, err = validate_waiver_reason(waiver, bead_id)
@@ -238,6 +293,21 @@ def evaluate_close(command: str, bead_id: str, cwd: str | None,
 
     current = work_fingerprint(cwd)
     recorded = record.get("fingerprint")
+
+    if current and not recorded:
+        # The record was made somewhere the work could not be fingerprinted —
+        # `--cwd /tmp` does this, and it is documented in `--help`. Accepting it
+        # here would switch staleness off for that bead permanently, which is a
+        # far more attractive door than the waiver because it never has to be
+        # justified again.
+        return _deny(
+            f"The review on record for {bead_id} carries no work fingerprint, "
+            "so it cannot be tied to any particular state of the code. Re-record "
+            "it from the work tree being closed.",
+            bead_id,
+            "deny:unfingerprinted",
+        )
+
     if current and recorded and current != recorded:
         changed = changed_paths_since(cwd)
         listing = ", ".join(changed[:5]) or "uncommitted changes"
@@ -305,17 +375,36 @@ def main() -> int:
         return 0
 
     command = tool_input.get("command", "")
-    if not is_close_command(command):
+
+    # Writing the review record by hand would let an implementer mint
+    # `independent: true` for itself with no reviewer involved. Recording must
+    # go through the CLI, which is what reads the observed dispatch.
+    if writes_reserved_metadata(command, METADATA_KEY):
+        _deny_reserved_metadata()
         return 0
 
-    bead_id = close_target(command)
-    if not bead_id:
-        # Cannot bind the close to a bead (e.g. `bd close --help`). Fail open:
-        # denying a command we cannot even parse would block work for a reason
-        # unrelated to review discipline.
+    targets = close_targets(command)
+    if targets is None:
+        return 0  # not a close
+
+    if not targets:
+        # A close whose target cannot be identified: a bare `bd close` (which
+        # closes the last-touched issue), an unexpanded `$ID`, or prose sitting
+        # in the positional slot. Treating this as "not a close" was a bypass —
+        # `bd close -r "finished the work"` sailed straight through it. We
+        # cannot check a review for a bead we cannot name, so we refuse.
+        _deny_unidentified(command)
         return 0
 
-    return evaluate_close(command, bead_id, cwd, claude_shape=bool(session_id))
+    # `bd close` accepts several ids. Checking only the first let every
+    # subsequent bead close unreviewed.
+    for bead_id in targets:
+        outcome = evaluate_close(
+            command, bead_id, cwd, claude_shape=bool(session_id)
+        )
+        if outcome is DENIED:
+            return 0
+    return 0
 
 
 if __name__ == "__main__":

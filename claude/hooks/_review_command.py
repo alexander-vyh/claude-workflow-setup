@@ -1,34 +1,45 @@
 #!/usr/bin/env python3
-"""Interpret the shell command a close gate is asked to judge.
+"""Interpret the `bd` command a close gate is asked to judge.
 
 Split out of `review_gate.py` because reading a shell command correctly is its
-own responsibility with its own failure modes, and because those failure modes
-are where a gate quietly stops working. Three real defects lived in the naive
-version this replaces, all found by attacking it rather than by testing it:
+own responsibility with its own failure modes — and an adversarial review
+established that those failure modes, not the decision logic, were where this
+gate actually stopped working. The decision logic was right; it just was not
+being handed the commands agents really run.
 
-  1. `REVIEW_WAIVER=` was matched anywhere in the command string, so
-     `bd close x --reason "... REVIEW_WAIVER='...'"` counted as a waiver. The
-     self-defeating case: the gate's own denial text contains
-     `REVIEW_WAIVER="<>=20-char rationale>"`, and that placeholder clears the
-     20-character substance bar — so an agent that pasted the denial into its
-     close reason silently satisfied the gate it had just been refused by.
-     A waiver is now only honoured as a real environment-assignment prefix on
-     the segment that actually runs `bd`.
+WHAT THE COMMAND SURFACE HAS TO SURVIVE
+---------------------------------------
+Every one of these was a live bypass, and none of them looks like evasion —
+they are ordinary `bd` usage, which is worse than an evadable gate because the
+agent never learns it dodged anything and no signal is produced:
 
-  2. `bd update --status closed <id>` resolved its target to the literal
-     string `"closed"`, because the parser skipped flags but not their
-     separate value tokens. The gate then looked for a review of a bead named
-     "closed" and denied with a nonsense id.
+  bd close -r "finished the work"   `-r` is `--reason`; the prose was read as
+                                    the bead id, `bd show` failed, and the gate
+                                    fell open
+  bd close                          closes the last-touched issue; no id to
+                                    parse, so nothing was gated
+  bd close esc-a esc-b              only the first id was checked
+  bd -C . close X                   a global flag before the subcommand meant
+  bd --actor bot close X            the command was not recognised as a close
+  bd done X                         documented alias for `close`
+  bd update X -s closed             `-s` is `--status`
+  ID=x; bd close $ID                an unexpanded variable was read as the id
 
-  3. `git commit -m "bd close x"` and `echo "bd close x"` counted as closes,
-     because the match was a bare substring search over the whole command.
-     Commands are now segmented on shell separators and only a segment that
-     actually invokes `bd` is considered.
+TWO LAYERS, DELIBERATELY REDUNDANT
+-----------------------------------
+1. Know `bd`'s grammar: global flags, close verbs, and which flags consume a
+   following token.
+2. Require every resolved target to be *shaped* like a bead id.
 
-Deliberately not handled: a `bd close` appearing inside a heredoc body still
-matches, since the body arrives as its own line. Denying a close that is not
-happening is a false positive, but a cheap and rare one with a waiver escape,
-whereas parsing heredocs properly needs a real shell parser.
+Layer 2 exists because layer 1 is a list, and lists go stale the moment `bd`
+adds a flag. If anything unexpected lands in the positional slot, the answer is
+"this close targets something I cannot identify" — which the gate must refuse,
+not wave through. A gate that fails open on the inputs it does not understand
+is only enforcing against inputs that were never a problem.
+
+Deliberately not handled: `eval "bd close X"`, `sh -c "bd close X"`, and a
+`bd close` inside a heredoc body. Those are conscious limits, not oversights —
+covering them needs a real shell interpreter.
 """
 
 from __future__ import annotations
@@ -42,25 +53,48 @@ import re
 # be a bypass.
 _SEPARATORS = ("||", "&&", ";", "|", "\n")
 
-# A leading environment assignment, e.g. `FOO=bar` or `FOO="a b"`.
 _ENV_ASSIGN_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", re.DOTALL)
-
-# Tokeniser that keeps quoted runs together.
 _TOKEN_RE = re.compile(r"(?:'[^']*'|\"[^\"]*\"|\S)+")
 
-# `bd update` flags that take a *separate* value token. Without this the value
-# is mistaken for the positional bead id.
-_VALUE_FLAGS = {
-    "--status", "--reason", "--assignee", "-a", "--priority", "-p",
-    "--notes", "--append-notes", "--design", "--type", "-t", "--owner",
-    "--labels", "-l", "--estimate", "-e", "--actor", "--db", "--set-metadata",
-    "--unset-metadata", "--metadata", "--parent", "--due", "--defer",
+# Shell punctuation that may cling to a bare word, e.g. `$(bd close abc)`.
+_STRIP_CHARS = "'\"()`;&${}"
+
+#: A bead id: lowercase word segments, a short alphanumeric suffix, optional
+#: dot-separated child indices. `escapement-iw8s`, `escapement-mol-4ef`,
+#: `escapement-858.4`, `cake-4cq.1.1`.
+#:
+#: Anchored, unlike the loose scanner used to find ids *inside prose*. Here the
+#: question is "is this token a bead id", and the answer must be no for
+#: `finished the work here`, `$ID`, and `closed`.
+BEAD_ID_RE = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)+(?:\.\d+)*$")
+
+# `bd` global flags that consume the following token.
+_GLOBAL_VALUE_FLAGS = {
+    "--actor", "--db", "-C", "--directory", "--dolt-auto-commit",
+}
+# `bd` global flags that stand alone.
+_GLOBAL_BOOL_FLAGS = {
+    "--global", "--ignore-schema-skew", "--json", "--profile", "-q",
+    "--quiet", "--readonly", "--sandbox",
 }
 
-# Characters shell syntax may leave attached to a bare word, e.g. the leading
-# `$(` and trailing `)` in `$(bd close abc)`. No bead id contains any of them,
-# so stripping is safe on both ends.
-_STRIP_CHARS = "'\"()`;&${}"
+#: Subcommands that close. `done` is a documented alias for `close`.
+_CLOSE_VERBS = {"close", "done"}
+
+# Subcommand flags that consume the following token. `-r` and `-s` are the
+# short forms whose absence made prose and the word "closed" parse as bead ids.
+_VALUE_FLAGS = {
+    "-r", "--reason", "--reason-file", "--session",
+    "-s", "--status",
+    "-a", "--assignee", "-p", "--priority", "-t", "--type", "-e", "--estimate",
+    "-l", "--labels", "-d", "--description",
+    "--notes", "--append-notes", "--design", "--owner", "--parent",
+    "--due", "--defer", "--metadata", "--set-metadata", "--unset-metadata",
+    "--external-ref", "--id",
+}
+
+#: Flags meaning "do not actually close anything".
+_NON_CLOSING_FLAGS = {"-h", "--help", "--dry-run"}
 
 
 def segments(command: str) -> list[str]:
@@ -119,8 +153,7 @@ def segments(command: str) -> list[str]:
 def _strip_env_prefix(tokens: list[str]) -> tuple[dict[str, str], list[str]]:
     """Peel leading `VAR=value` assignments off a segment's token list."""
     env: dict[str, str] = {}
-    index = 0
-    for index, token in enumerate(tokens):  # noqa: B007 - index used after loop
+    for index, token in enumerate(tokens):
         match = _ENV_ASSIGN_RE.match(token)
         if not match:
             return env, tokens[index:]
@@ -129,9 +162,8 @@ def _strip_env_prefix(tokens: list[str]) -> tuple[dict[str, str], list[str]]:
     return env, []
 
 
-def _is_bd_invocation(argv: list[str]) -> bool:
-    """True when the first word actually invokes `bd` (not `mybd`, not a quote)."""
-    return bool(argv) and argv[0].strip(_STRIP_CHARS) == "bd"
+def _clean(token: str) -> str:
+    return token.strip(_STRIP_CHARS).strip()
 
 
 def _bd_segments(command: str) -> list[tuple[dict[str, str], list[str]]]:
@@ -140,65 +172,106 @@ def _bd_segments(command: str) -> list[tuple[dict[str, str], list[str]]]:
     for segment in segments(command):
         tokens = _TOKEN_RE.findall(segment)
         env, argv = _strip_env_prefix(tokens)
-        if _is_bd_invocation(argv):
+        if argv and _clean(argv[0]) == "bd":
             found.append((env, argv))
     return found
 
 
-def close_target(command: str) -> str | None:
-    """Return the bead id this command closes, or None if it closes nothing.
-
-    Recognises `bd close <id>` and `bd update <id> --status closed` in any flag
-    order, skipping the values of flags that take a separate token.
-    """
-    for env, argv in _bd_segments(command):
-        del env
-        if len(argv) < 2:
+def _skip_global_flags(tokens: list[str]) -> list[str]:
+    """Drop `bd`'s global flags so the subcommand can be found."""
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if not token.startswith("-"):
+            break
+        name = token.split("=", 1)[0]
+        if name in _GLOBAL_VALUE_FLAGS and "=" not in token:
+            index += 2
             continue
-        verb = argv[1].strip(_STRIP_CHARS)
-        rest = argv[2:]
-
-        if verb == "close":
-            target = _first_positional(rest)
-            if target:
-                return target
-        elif verb == "update" and _sets_status_closed(rest):
-            target = _first_positional(rest)
-            if target:
-                return target
-    return None
+        if name in _GLOBAL_VALUE_FLAGS or name in _GLOBAL_BOOL_FLAGS:
+            index += 1
+            continue
+        break
+    return tokens[index:]
 
 
-def _first_positional(tokens: list[str]) -> str | None:
-    """First bare word that is not a flag or a flag's value."""
+def _positionals(tokens: list[str]) -> list[str]:
+    """Every bare word that is not a flag or a flag's value."""
+    out: list[str] = []
     skip_next = False
     for token in tokens:
         if skip_next:
             skip_next = False
             continue
         if token.startswith("-"):
-            # `--flag=value` carries its value; `--flag value` consumes the next
-            # token, which is exactly how `--status closed` used to be mistaken
-            # for the bead id.
             if "=" not in token and token.split("=", 1)[0] in _VALUE_FLAGS:
                 skip_next = True
             continue
-        candidate = token.strip(_STRIP_CHARS).strip()
-        if candidate:
-            return candidate
-    return None
+        cleaned = _clean(token)
+        if cleaned:
+            out.append(cleaned)
+    return out
 
 
 def _sets_status_closed(tokens: list[str]) -> bool:
-    """True when the argv sets `--status closed` in either flag form."""
+    """True when the argv sets status to closed, in any flag form."""
     for index, token in enumerate(tokens):
-        if token.startswith("--status="):
-            if token.split("=", 1)[1].strip(_STRIP_CHARS) == "closed":
+        name, _, inline = token.partition("=")
+        if name not in ("--status", "-s"):
+            continue
+        if inline:
+            if _clean(inline) == "closed":
                 return True
-        elif token == "--status" and index + 1 < len(tokens):
-            if tokens[index + 1].strip(_STRIP_CHARS) == "closed":
-                return True
+        elif index + 1 < len(tokens) and _clean(tokens[index + 1]) == "closed":
+            return True
     return False
+
+
+def close_targets(command: str) -> list[str] | None:
+    """Resolve which beads a command closes.
+
+    Returns:
+        None  — the command does not close anything.
+        []    — it closes something we cannot identify (a bare `bd close`, an
+                unexpanded `$ID`, prose captured from an unknown flag). The
+                caller must refuse: an unidentifiable close cannot be checked
+                against a review, and treating it as "not a close" is the
+                bypass this return value exists to prevent.
+        [ids] — the beads being closed. `bd close` accepts several.
+    """
+    resolved: list[str] = []
+    closing = False
+
+    for _env, argv in _bd_segments(command):
+        rest = _skip_global_flags(argv[1:])
+        if not rest:
+            continue
+        verb = _clean(rest[0])
+        args = rest[1:]
+
+        if any(token.split("=", 1)[0] in _NON_CLOSING_FLAGS for token in args):
+            continue
+
+        if verb in _CLOSE_VERBS:
+            closing = True
+        elif verb == "update" and _sets_status_closed(args):
+            closing = True
+        else:
+            continue
+
+        for candidate in _positionals(args):
+            if BEAD_ID_RE.match(candidate):
+                if candidate not in resolved:
+                    resolved.append(candidate)
+            else:
+                # Something occupies the positional slot but is not a bead id.
+                # Never ignore it: that is how `-r "finished the work"` used to
+                # sail through.
+                return []
+
+    if not closing:
+        return None
+    return resolved
 
 
 def waiver_reason(command: str, var_name: str) -> str | None:
@@ -206,10 +279,29 @@ def waiver_reason(command: str, var_name: str) -> str | None:
 
     Only a genuine leading assignment counts. Text that merely mentions the
     variable — inside `--reason`, a comment, or an echoed denial message — is
-    not a waiver, which is what stopped the gate's own denial text from
-    satisfying it.
+    not a waiver. That distinction is what stopped the gate's own denial text,
+    which contains the literal placeholder, from satisfying the gate.
     """
     for env, _argv in _bd_segments(command):
         if var_name in env:
             return env[var_name]
     return None
+
+
+def writes_reserved_metadata(command: str, key: str) -> bool:
+    """True when a command sets the reserved review-record metadata key directly.
+
+    Recording a review must go through the recording CLI, which is what stamps
+    independence from an observed reviewer dispatch. A hand-written
+    `bd update <id> --set-metadata escapement_review={...}` would let an
+    implementer mint `independent: true` for itself with no reviewer involved.
+    """
+    for _env, argv in _bd_segments(command):
+        for index, token in enumerate(argv):
+            name, _, inline = token.partition("=")
+            if name not in ("--set-metadata", "--metadata"):
+                continue
+            value = inline or (argv[index + 1] if index + 1 < len(argv) else "")
+            if _clean(value).lstrip("'\"").startswith(key):
+                return True
+    return False

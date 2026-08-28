@@ -10,7 +10,7 @@
     {
       "id": "review_gate",
       "source": "claude/hooks/review_gate.py",
-      "timeout_seconds": 15
+      "timeout_seconds": 20
     },
     {
       "id": "beads_worktree_guard",

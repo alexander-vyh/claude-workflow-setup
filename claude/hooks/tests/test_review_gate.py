@@ -351,3 +351,142 @@ class TestSignal:
         assert signal.called
         assert signal.call_args.kwargs["gate_name"] == "review_gate"
         assert signal.call_args.kwargs["bead_id"] == "escapement-abc1"
+
+
+# ---------------------------------------------------------------------------
+# The bypasses an adversarial review found in the first implementation
+# ---------------------------------------------------------------------------
+
+class TestOrdinaryUsageCannotSlipThrough:
+    """These are not evasion — they are how agents already type `bd close`.
+
+    That is what made them the worst finding: an agent running
+    `bd close -r "done"` never learned it had skipped review, so the lapse
+    produced no signal and was invisible to the corpus half-life review reads.
+    An evadable gate at least leaves a trace.
+    """
+
+    @pytest.mark.parametrize("command", [
+        'bd close -r "finished the work here"',
+        "bd close",
+        "bd close $ID",
+    ])
+    def test_a_close_we_cannot_identify_is_refused(self, command):
+        _, decision, signal = _close(command=command, record=None)
+        assert decision["permissionDecision"] == "deny"
+        assert signal.call_args.kwargs["decision"] == "deny:unidentified-target"
+
+    def test_that_refusal_explains_how_to_name_the_bead(self):
+        """Internal transparency: the fix must be readable from the refusal."""
+        _, decision, _ = _close(command='bd close -r "done"', record=None)
+        reason = decision["permissionDecisionReason"]
+        assert "bd close <bead-id>" in reason
+        assert "REVIEW_WAIVER" in reason
+
+    @pytest.mark.parametrize("command", [
+        "bd -C . close escapement-abc1",
+        "bd --actor bot close escapement-abc1",
+        "bd done escapement-abc1",
+        "bd update escapement-abc1 -s closed",
+    ])
+    def test_global_flags_and_aliases_are_gated(self, command):
+        """Each of these used to parse as 'not a close' and skip the gate."""
+        _, decision, _ = _close(command=command, record=None)
+        assert decision["permissionDecision"] == "deny"
+
+    def test_a_second_bead_in_one_close_is_not_waved_through(self):
+        """Only the first id used to be checked; the rest closed unreviewed."""
+        def per_bead(bead_id, cwd=None):
+            return _record() if bead_id == "escapement-abc1" else None
+
+        payload = {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": "bd close escapement-abc1 escapement-zzz9"},
+            "session_id": "s1",
+            "cwd": "/tmp",
+        }
+        out = io.StringIO()
+        with patch.object(review_gate, "read_record", side_effect=per_bead), \
+             patch.object(review_gate, "work_fingerprint", return_value=FINGERPRINT), \
+             patch.object(review_gate, "_record_signal"), \
+             patch("sys.stdin", io.StringIO(json.dumps(payload))), \
+             patch("sys.stdout", out):
+            review_gate.main()
+        decision = json.loads(out.getvalue())["hookSpecificOutput"]
+        assert decision["permissionDecision"] == "deny"
+        assert "escapement-zzz9" in decision["permissionDecisionReason"]
+
+
+class TestRecordCannotBeSelfMinted:
+    def test_hand_writing_the_review_metadata_is_refused(self):
+        """Otherwise the author of the code stamps its own independence."""
+        command = (
+            'bd update escapement-abc1 --set-metadata '
+            '\'escapement_review={"v":1,"independent":true}\''
+        )
+        _, decision, signal = _close(command=command, record=None)
+        assert decision["permissionDecision"] == "deny"
+        assert signal.call_args.kwargs["decision"] == "deny:reserved-metadata"
+        assert "escapement_review.py" in decision["permissionDecisionReason"]
+
+    def test_unrelated_metadata_is_untouched(self):
+        _, decision, _ = _close(
+            command="bd update escapement-abc1 --set-metadata team=platform",
+            record=None,
+        )
+        assert decision is None
+
+
+class TestUnfingerprintedRecord:
+    def test_a_record_with_no_fingerprint_is_refused(self):
+        """`--cwd /tmp` at record time would switch staleness off forever.
+
+        It is documented in `--help`, needs no justification, and never has to
+        be repeated — a far more attractive door than the waiver, which at
+        least costs a reason that lands in the corpus.
+        """
+        _, decision, signal = _close(
+            record=_record(fingerprint=None), fingerprint=FINGERPRINT
+        )
+        assert decision["permissionDecision"] == "deny"
+        assert signal.call_args.kwargs["decision"] == "deny:unfingerprinted"
+
+
+class TestDecisionContract:
+    """One mechanism, always: JSON on stdout, exit 0.
+
+    Emitting the JSON decision *and* a non-zero exit is a contradictory double
+    signal, and the host resolves it by reporting an unexplained
+    `hook error: No stderr output` — the agent never sees why it was blocked
+    or how to proceed. That failure is live in `file_complexity_gate` today,
+    and this gate briefly reintroduced it by returning its internal
+    DENIED/ALLOWED sentinel straight out of `main()`.
+    """
+
+    @pytest.mark.parametrize("command,record", [
+        ("bd close escapement-abc1", None),
+        ('bd close -r "prose in the positional slot"', None),
+        ("bd close", None),
+        ('bd update escapement-abc1 --set-metadata \'escapement_review={}\'', None),
+        ("bd close escapement-abc1", "STALE"),
+        ("bd ready", None),
+    ])
+    def test_main_always_returns_zero(self, command, record):
+        payload = _record(fingerprint="b" * 64) if record == "STALE" else record
+        code, _, _ = _close(command=command, record=payload)
+        assert code == 0, (
+            "a non-zero exit alongside a JSON decision is the double signal "
+            "that makes a denial unreadable to the agent"
+        )
+
+    def test_every_denial_is_valid_json_on_stdout(self):
+        for command in (
+            'bd close -r "prose in the positional slot"',
+            "bd close",
+            'bd update escapement-abc1 --set-metadata \'escapement_review={}\'',
+        ):
+            _, decision, _ = _close(command=command, record=None)
+            assert decision["hookEventName"] == "PreToolUse"
+            assert decision["permissionDecision"] == "deny"
+            assert decision["permissionDecisionReason"].strip()

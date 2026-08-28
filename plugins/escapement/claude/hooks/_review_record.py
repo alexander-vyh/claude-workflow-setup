@@ -45,7 +45,7 @@ METADATA_KEY = "escapement_review"
 # treated as "no usable record" rather than being guessed at.
 RECORD_VERSION = 1
 
-_SUBPROCESS_TIMEOUT = 15
+_SUBPROCESS_TIMEOUT = 5
 
 # Untracked files above this size contribute their length rather than their
 # bytes, so a PreToolUse hook cannot be made slow by a large scratch file.
@@ -68,10 +68,17 @@ _NULL_PATTERNS = {
 # Agent types that are structurally independent reviewers: dispatched with no
 # shared conversation history, so they see the artifact rather than the
 # implementer's rationalisation of it.
+#
+# Every entry must correspond to a real agent definition in `claude/agents/`,
+# in bare and plugin-namespaced form. `code-reviewer` used to be listed here
+# and is not a registered agent in this install — an allowlist entry that
+# names no dispatchable agent is dead weight at best, and at worst hides the
+# reverse drift, where a rename makes `independent: true` unreachable while
+# every test stays green. test_review_record.py pins this set against the
+# agent directory so the drift cannot go unnoticed.
 INDEPENDENT_REVIEWER_TYPES = {
     "adversarial-reviewer",
     "escapement:adversarial-reviewer",
-    "code-reviewer",
     "test-quality-reviewer",
     "escapement:test-quality-reviewer",
 }
@@ -118,23 +125,30 @@ def work_fingerprint(cwd: str | None = None) -> str | None:
     output is not a concern here because `--exclude-standard` already applies
     `.gitignore`.
 
+    The digest is taken against the branch's merge-base, NOT against HEAD.
+    Against HEAD, committing changes the digest with byte-identical content —
+    HEAD moves and the diff empties — so the ordinary sequence *review, commit,
+    close* was denied every single time, and an earlier version of this file's
+    tests enshrined that false positive as correct behaviour. Diffing from the
+    merge-base makes the fingerprint a function of the work, not of whether the
+    work happens to be committed yet.
+
     Returning None is a real answer — "this is not a git work tree, or git is
     unavailable" — and callers must treat it as "staleness is not checkable"
     rather than as "stale".
     """
-    head = _run(["git", "rev-parse", "HEAD"], cwd=cwd)
-    if head is None:
+    base = _diff_base(cwd)
+    if base is None:
         return None
 
-    # `git diff HEAD` covers staged and unstaged tracked changes in one pass.
-    tracked_diff = _run(["git", "diff", "HEAD"], cwd=cwd) or ""
+    # Diffing from the merge-base covers committed-on-branch, staged, and
+    # unstaged changes in one pass.
+    tracked_diff = _run(["git", "diff", base], cwd=cwd) or ""
     untracked = _run(
         ["git", "ls-files", "--others", "--exclude-standard"], cwd=cwd
     ) or ""
 
     digest = hashlib.sha256()
-    digest.update(head.encode("utf-8", "replace"))
-    digest.update(b"\x00")
     digest.update(tracked_diff.encode("utf-8", "replace"))
     digest.update(b"\x00")
 
@@ -148,6 +162,47 @@ def work_fingerprint(cwd: str | None = None) -> str | None:
         digest.update(_untracked_digest(root / name))
         digest.update(b"\x00")
     return digest.hexdigest()
+
+
+def _diff_base(cwd: str | None) -> str | None:
+    """Return the commit to diff the current work against, or None.
+
+    Prefers the merge-base with the repository's default branch so that
+    committing work does not change the fingerprint. Falls back to HEAD when
+    there is no reachable default branch (a detached tree, a fresh repo, a
+    clone without remotes) — there the digest degrades to the old
+    HEAD-relative behaviour, which is still correct, just stricter about
+    commits.
+    """
+    head = _run(["git", "rev-parse", "HEAD"], cwd=cwd)
+    if head is None:
+        return None
+
+    default_ref = _run(
+        ["git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"], cwd=cwd
+    )
+    candidates = [default_ref] if default_ref else []
+    candidates += ["origin/main", "origin/master", "main", "master"]
+
+    for candidate in candidates:
+        if not candidate:
+            continue
+        base = _run(["git", "merge-base", "HEAD", candidate], cwd=cwd)
+        if base:
+            return base
+    return head
+
+
+def store_available(cwd: str | None = None) -> bool:
+    """True when `bd` itself can run here.
+
+    Separates "the task store is down" from "that bead could not be read".
+    Without this split, any command whose target does not resolve to a real
+    bead fell through the unavailable-store fail-open and closed unchecked —
+    which is exactly how `bd close -r "finished the work"` got through, since
+    the reason prose was looked up as a bead id and naturally failed.
+    """
+    return _run(["bd", "--version"], cwd=cwd) is not None
 
 
 def _untracked_digest(path: pathlib.Path) -> bytes:
@@ -180,7 +235,8 @@ def changed_paths_since(fingerprint_cwd: str | None = None) -> list[str]:
     Used only to make a stale-review denial specific ("3 files changed since
     the review") rather than a bare assertion. Never used for the decision.
     """
-    tracked = _run(["git", "diff", "--name-only", "HEAD"], cwd=fingerprint_cwd) or ""
+    base = _diff_base(fingerprint_cwd) or "HEAD"
+    tracked = _run(["git", "diff", "--name-only", base], cwd=fingerprint_cwd) or ""
     untracked = _run(
         ["git", "ls-files", "--others", "--exclude-standard"], cwd=fingerprint_cwd
     ) or ""
@@ -223,7 +279,10 @@ def read_record(bead_id: str, cwd: str | None = None) -> dict[str, Any] | None |
     """
     raw = _run(["bd", "show", bead_id, "--json"], cwd=cwd)
     if raw is None:
-        return UNAVAILABLE
+        # `bd` failing on ONE bead is not the store being down. Only report
+        # UNAVAILABLE when bd itself cannot run; otherwise this bead simply
+        # could not be read, which must fail closed.
+        return UNAVAILABLE if not store_available(cwd) else None
     if not raw:
         return None
     try:

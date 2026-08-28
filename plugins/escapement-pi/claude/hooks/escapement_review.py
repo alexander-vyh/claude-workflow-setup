@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import os
 import sys
 from pathlib import Path
 
@@ -78,7 +79,7 @@ def cmd_record(args: argparse.Namespace) -> int:
     reviewer = (args.reviewer or "").strip() or "unspecified"
 
     # Corroboration is only claimable where the host can observe a dispatch.
-    if has_dispatch(bead_id):
+    if has_dispatch(bead_id, os.environ.get("CLAUDE_SESSION_ID")):
         independent: object = True
     else:
         independent = "unverified"

@@ -39,13 +39,20 @@ def _git(repo: Path, *args: str) -> None:
 
 @pytest.fixture
 def repo(tmp_path):
-    """A real git work tree with one commit."""
-    _git(tmp_path, "init", "-q")
+    """A real git work tree: a `main` baseline plus a feature branch.
+
+    Shaped like actual Escapement work — a worktree on a task branch off the
+    default branch — because that is what makes the merge-base fingerprint
+    meaningful. On `main` itself there is nothing to diff against, and the
+    digest degrades to HEAD-relative.
+    """
+    _git(tmp_path, "init", "-q", "-b", "main")
     _git(tmp_path, "config", "user.email", "t@example.com")
     _git(tmp_path, "config", "user.name", "t")
     (tmp_path / "app.py").write_text("def total(x):\n    return x\n")
     _git(tmp_path, "add", "-A")
     _git(tmp_path, "commit", "-qm", "init")
+    _git(tmp_path, "checkout", "-q", "-b", "feature")
     return tmp_path
 
 
@@ -90,12 +97,29 @@ class TestWorkFingerprint:
         (repo / "dangling").symlink_to(repo / "nope")
         assert rr.work_fingerprint(str(repo)) is not None
 
-    def test_moves_when_the_change_is_committed(self, repo):
-        """Committing is a state change; a pre-commit review does not carry over."""
+    def test_holds_still_when_the_same_work_is_committed(self, repo):
+        """review -> commit -> close must not be denied.
+
+        This assertion used to run the other way, asserting that committing
+        invalidated the review — which enshrined the single most damaging false
+        positive in the gate as if it were the spec. Committing does not change
+        the code; it changes where the code is stored. The fingerprint is taken
+        against the merge-base precisely so that the ordinary sequence review,
+        commit, push, close is not refused every single time.
+        """
+        (repo / "app.py").write_text("def total(x):\n    return x * 2\n")
         before = rr.work_fingerprint(str(repo))
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "change")
+        assert rr.work_fingerprint(str(repo)) == before
+
+    def test_still_moves_when_committed_work_is_then_edited(self, repo):
+        """Holding still across a commit must not blunt real staleness."""
         (repo / "app.py").write_text("def total(x):\n    return x * 2\n")
         _git(repo, "add", "-A")
         _git(repo, "commit", "-qm", "change")
+        before = rr.work_fingerprint(str(repo))
+        (repo / "app.py").write_text("def total(x):\n    return x * 99\n")
         assert rr.work_fingerprint(str(repo)) != before
 
     def test_ignores_gitignored_noise(self, repo):
@@ -230,7 +254,7 @@ class TestRecordingCLI:
         assert calls[0][1]["fingerprint"] == FP
 
     def test_marks_independence_unverified_without_a_dispatch(self, monkeypatch):
-        monkeypatch.setattr(cli, "has_dispatch", lambda _b: False)
+        monkeypatch.setattr(cli, "has_dispatch", lambda _b, _s=None: False)
         _, calls = self._run(
             ["record", "--bead", "escapement-abc1", "--findings", LONG],
             monkeypatch,
@@ -238,7 +262,7 @@ class TestRecordingCLI:
         assert calls[0][1]["independent"] == "unverified"
 
     def test_marks_independence_true_with_a_dispatch(self, monkeypatch):
-        monkeypatch.setattr(cli, "has_dispatch", lambda _b: True)
+        monkeypatch.setattr(cli, "has_dispatch", lambda _b, _s=None: True)
         _, calls = self._run(
             ["record", "--bead", "escapement-abc1", "--findings", LONG],
             monkeypatch,
@@ -271,3 +295,54 @@ LONG = (
     "and the stale-fingerprint branch both behave as specified. One residual "
     "concern: a waiver reason that paraphrases the bead title still passes."
 )
+
+
+class TestReviewerAllowlistMatchesTheAgentRegistry:
+    """An allowlist that names no dispatchable agent is silent drift.
+
+    `code-reviewer` was listed and is not a registered agent here, so it could
+    never have satisfied the gate. The reverse — renaming a real agent — is
+    worse: `independent: true` becomes unreachable, every close starts failing
+    the corroboration check, and every mocked test stays green.
+    """
+
+    def _registered(self) -> set[str]:
+        agents_dir = _HOOKS_DIR.parent / "agents"
+        names = set()
+        for path in agents_dir.glob("*.md"):
+            for line in path.read_text(encoding="utf-8").splitlines()[:20]:
+                if line.startswith("name:"):
+                    names.add(line.split(":", 1)[1].strip())
+                    break
+        return names
+
+    def test_every_allowlisted_type_names_a_real_agent(self):
+        registered = self._registered()
+        assert registered, "no agent definitions found — the guard is vacuous"
+        for entry in rr.INDEPENDENT_REVIEWER_TYPES:
+            bare = entry.split(":", 1)[-1]
+            assert bare in registered, (
+                f"{entry!r} is allowlisted as an independent reviewer but no "
+                f"agent defines it. Registered: {sorted(registered)}"
+            )
+
+    def test_the_adversarial_reviewer_is_allowlisted(self):
+        """The reverse drift: a rename must not silently disarm the gate."""
+        assert "adversarial-reviewer" in rr.INDEPENDENT_REVIEWER_TYPES
+        assert "escapement:adversarial-reviewer" in rr.INDEPENDENT_REVIEWER_TYPES
+
+
+class TestStoreAvailability:
+    def test_a_bad_bead_id_is_not_an_unavailable_store(self):
+        """The split that closed the `-r "prose"` bypass.
+
+        `bd show <not-a-bead>` fails exactly like `bd` being absent. Collapsing
+        the two meant any unresolvable target fell through the fail-open path
+        and closed unchecked.
+        """
+        assert rr.store_available() is True
+        assert rr.read_record("definitely-not-a-real-bead-xyz9") is None
+
+    def test_unavailable_when_bd_cannot_run(self, monkeypatch):
+        monkeypatch.setattr(rr, "_run", lambda *_a, **_k: None)
+        assert rr.read_record("escapement-abc1") is rr.UNAVAILABLE
