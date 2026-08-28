@@ -30,6 +30,48 @@ def _text(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
+def _explicit_keys(value: dict, required: set[str], safe: set[str]) -> bool:
+    keys = set(value)
+    return required <= keys <= required | safe
+
+
+def _captured_posttool_metadata(
+    payload: dict, tool_input: dict, tool_response: dict
+) -> bool:
+    """Classify only reviewed nonidentity metadata without interpreting it."""
+    text_fields = (
+        (payload, ("cwd", "permission_mode", "prompt_id", "transcript_path")),
+        (tool_input, ("description", "prompt")),
+        (
+            tool_response,
+            ("description", "outputFile", "prompt", "resolvedModel"),
+        ),
+    )
+    if any(
+        key in owner and _text(owner[key]) is None
+        for owner, fields in text_fields
+        for key in fields
+    ):
+        return False
+    duration = payload.get("duration_ms")
+    if "duration_ms" in payload and (
+        isinstance(duration, bool) or not isinstance(duration, int) or duration < 0
+    ):
+        return False
+    effort = payload.get("effort")
+    if "effort" in payload and (
+        not isinstance(effort, dict)
+        or set(effort) != {"level"}
+        or _text(effort.get("level")) is None
+    ):
+        return False
+    if "canReadOutputFile" in tool_response and not isinstance(
+        tool_response["canReadOutputFile"], bool
+    ):
+        return False
+    return True
+
+
 def _session(record: object) -> str | None:
     return _text(record.get("session_id")) if isinstance(record, dict) else None
 
@@ -154,22 +196,36 @@ def observe_post_tool(payload: dict, ledger: dict) -> dict:
     child_id = (
         _text(tool_response.get("agentId")) if isinstance(tool_response, dict) else None
     )
+    top_required = {
+        "hook_event_name", "session_id", "tool_name", "tool_use_id",
+        "tool_input", "tool_response",
+    }
+    input_required = {"name", "run_in_background", "subagent_type"}
+    response_required = {"status", "isAsync", "agentId"}
     if (
         payload.get("hook_event_name") != "PostToolUse"
         or payload.get("tool_name") != "Agent"
         or session_id is None
         or dispatch_id is None
         or not isinstance(tool_input, dict)
-        or set(payload) != {
-            "hook_event_name", "session_id", "tool_name", "tool_use_id",
-            "tool_input", "tool_response",
-        }
-        or set(tool_input) != {"name", "run_in_background", "subagent_type"}
+        or not _explicit_keys(
+            payload,
+            top_required,
+            {"cwd", "duration_ms", "effort", "permission_mode", "prompt_id", "transcript_path"},
+        )
+        or not _explicit_keys(
+            tool_input, input_required, {"description", "prompt"}
+        )
         or name is None
         or tool_input.get("run_in_background") is not True
         or _text(tool_input.get("subagent_type")) is None
         or not isinstance(tool_response, dict)
-        or set(tool_response) != {"status", "isAsync", "agentId"}
+        or not _explicit_keys(
+            tool_response,
+            response_required,
+            {"canReadOutputFile", "description", "outputFile", "prompt", "resolvedModel"},
+        )
+        or not _captured_posttool_metadata(payload, tool_input, tool_response)
         or tool_response.get("status") != "async_launched"
         or tool_response.get("isAsync") is not True
         or child_id is None

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import copy
 import datetime as dt
+import hashlib
 import json
 import os
 import pathlib
@@ -21,6 +22,9 @@ PUBLIC_FIXTURE = (
     / "claude-post-tool-2.1.248.jsonl"
 )
 PUBLIC_PROVENANCE = PUBLIC_FIXTURE.with_suffix(".provenance.json")
+PUBLIC_RAW_PATH = (
+    PUBLIC_FIXTURE.parent / "captures" / "claude-post-tool-2.1.248.raw.jsonl"
+)
 PUBLIC_RAW_DIGEST = "e30710835fb4942d7cbad13170eb866b2132ff9327f3aa1d7ee2a6e6857dae13"
 PUBLIC_POINTERS = [
     "/hook_event_name",
@@ -47,6 +51,10 @@ def at(value: str) -> dt.datetime:
 
 def public_payload() -> dict:
     return json.loads(PUBLIC_FIXTURE.read_text(encoding="utf-8"))
+
+
+def raw_payload() -> dict:
+    return json.loads(PUBLIC_RAW_PATH.read_text(encoding="utf-8"))
 
 
 def registered(captured: dict) -> dict:
@@ -78,6 +86,15 @@ def test_public_fixture_has_the_reviewed_digest_and_leaf_allowlist() -> None:
     assert provenance["host"] == {"product": "Claude Code", "version": "2.1.248"}
     assert provenance["raw_record_sha256"] == PUBLIC_RAW_DIGEST
     assert provenance["retained_json_pointers"] == PUBLIC_POINTERS
+    assert hashlib.sha256(PUBLIC_RAW_PATH.read_bytes()).hexdigest() == PUBLIC_RAW_DIGEST
+    assert provenance["sanitizer"]["command"] == (
+        "python3 tools/sanitize_claude_lifecycle_fixtures.py "
+        "--post-tool-stream "
+        "harness/tests/fixtures/captures/claude-post-tool-2.1.248.raw.jsonl "
+        "--post-tool-fixture harness/tests/fixtures/claude-post-tool-2.1.248.jsonl "
+        "--post-tool-provenance "
+        "harness/tests/fixtures/claude-post-tool-2.1.248.provenance.json"
+    )
     assert captured == {
         "hook_event_name": "PostToolUse",
         "session_id": "5c970cf6-35a0-4cc2-8cb3-0c7651d565ed",
@@ -94,6 +111,80 @@ def test_public_fixture_has_the_reviewed_digest_and_leaf_allowlist() -> None:
             "status": "async_launched",
         },
     }
+
+
+def test_public_fixture_regenerates_from_committed_raw_capture() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(BIN.parent.parent / "tools" / "sanitize_claude_lifecycle_fixtures.py"),
+            "--post-tool-stream",
+            str(PUBLIC_RAW_PATH),
+            "--post-tool-fixture",
+            str(PUBLIC_FIXTURE),
+            "--post-tool-provenance",
+            str(PUBLIC_PROVENANCE),
+            "--check",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize(
+    ("level", "key"),
+    (
+        ("top", "cwd"),
+        ("top", "duration_ms"),
+        ("top", "effort"),
+        ("top", "permission_mode"),
+        ("top", "prompt_id"),
+        ("top", "transcript_path"),
+        ("input", "description"),
+        ("input", "prompt"),
+        ("response", "canReadOutputFile"),
+        ("response", "description"),
+        ("response", "outputFile"),
+        ("response", "prompt"),
+        ("response", "resolvedModel"),
+    ),
+)
+def test_public_posttool_accepts_each_captured_safe_metadata_field(
+    tmp_path, level, key
+) -> None:
+    captured = public_payload()
+    raw = raw_payload()
+    target = captured if level == "top" else captured[f"tool_{level}"]
+    source = raw if level == "top" else raw[f"tool_{level}"]
+    target[key] = source[key]
+    path = tmp_path / "executions.json"
+    path.write_text(json.dumps(registered(captured)), encoding="utf-8")
+    path.chmod(0o600)
+
+    observed = delegation_hook.post_tool(captured, path)
+
+    assert observed["status"] == "observed"
+    durable = ledger_api.load_trusted(path, captured["session_id"])
+    assert durable is not None
+    assert durable["executions"][0]["native_child_id"] == raw["tool_response"]["agentId"]
+
+
+def test_public_posttool_durably_applies_full_raw_envelope(tmp_path) -> None:
+    captured = raw_payload()
+    path = tmp_path / "executions.json"
+    path.write_text(json.dumps(registered(captured)), encoding="utf-8")
+    path.chmod(0o600)
+
+    observed = delegation_hook.post_tool(captured, path)
+
+    assert observed["status"] == "observed"
+    durable = ledger_api.load_trusted(path, captured["session_id"])
+    assert durable is not None
+    assert durable["executions"][0]["state"] == "running"
+    assert durable["executions"][0]["native_child_id"] == captured["tool_response"]["agentId"]
 
 
 def test_public_posttool_durably_applies_captured_async_spawn_prefix(
@@ -208,8 +299,46 @@ def test_public_posttool_rejects_any_unproven_envelope_identity(
     assert path.read_bytes() == before
 
 
+@pytest.mark.parametrize("level", ("top", "input", "response"))
+@pytest.mark.parametrize(
+    "field", ("native_child_id", "agent_id", "task_id", "child_id")
+)
+def test_public_posttool_rejects_alternate_identity_at_every_envelope_level(
+    tmp_path, level, field
+) -> None:
+    captured = raw_payload()
+    target = captured if level == "top" else captured[f"tool_{level}"]
+    target[field] = "conflicting-native-child"
+    path = tmp_path / "executions.json"
+    path.write_text(json.dumps(registered(captured)), encoding="utf-8")
+    path.chmod(0o600)
+    before = path.read_bytes()
+
+    observed = delegation_hook.post_tool(captured, path)
+
+    assert observed == {
+        "status": "unresolved",
+        "reason": "native_child_identity_unverified",
+    }
+    assert path.read_bytes() == before
+
+
+def test_public_posttool_rejects_unknown_nonidentity_metadata(tmp_path) -> None:
+    captured = raw_payload()
+    captured["unreviewed_metadata"] = "harmless-looking"
+    path = tmp_path / "executions.json"
+    path.write_text(json.dumps(registered(captured)), encoding="utf-8")
+    path.chmod(0o600)
+    before = path.read_bytes()
+
+    observed = delegation_hook.post_tool(captured, path)
+
+    assert observed["status"] == "unresolved"
+    assert path.read_bytes() == before
+
+
 def test_hook_main_applies_the_actual_posttool_envelope_end_to_end(tmp_path) -> None:
-    captured = public_payload()
+    captured = raw_payload()
     harness_root = tmp_path / "harness"
     path = harness_root / "threads" / captured["session_id"] / "executions.json"
     path.parent.mkdir(parents=True)

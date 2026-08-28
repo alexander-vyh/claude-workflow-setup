@@ -18,7 +18,7 @@
     "/tool_response/agentId"
   ],
   "sanitizer": {
-    "command": "python3 tools/sanitize_claude_lifecycle_fixtures.py --post-tool-stream \"$XNCX_POST_TOOL_STREAM\" --post-tool-fixture harness/tests/fixtures/claude-post-tool-2.1.248.jsonl --post-tool-provenance harness/tests/fixtures/claude-post-tool-2.1.248.provenance.json",
+    "command": "python3 tools/sanitize_claude_lifecycle_fixtures.py --post-tool-stream harness/tests/fixtures/captures/claude-post-tool-2.1.248.raw.jsonl --post-tool-fixture harness/tests/fixtures/claude-post-tool-2.1.248.jsonl --post-tool-provenance harness/tests/fixtures/claude-post-tool-2.1.248.provenance.json",
     "name": "sanitize_claude_lifecycle_fixtures.py",
     "version": "1"
   },

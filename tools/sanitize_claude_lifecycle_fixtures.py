@@ -39,6 +39,14 @@ POST_TOOL_POINTERS = (
     "/tool_response/isAsync",
     "/tool_response/agentId",
 )
+POST_TOOL_COMMAND = (
+    "python3 tools/sanitize_claude_lifecycle_fixtures.py "
+    "--post-tool-stream "
+    "harness/tests/fixtures/captures/claude-post-tool-2.1.248.raw.jsonl "
+    "--post-tool-fixture harness/tests/fixtures/claude-post-tool-2.1.248.jsonl "
+    "--post-tool-provenance "
+    "harness/tests/fixtures/claude-post-tool-2.1.248.provenance.json"
+)
 ABORT_COMMAND = (
     "python3 tools/sanitize_claude_lifecycle_fixtures.py "
     "--abort-stream "
@@ -371,14 +379,7 @@ def build_post_tool(source_path: Path) -> tuple[dict, dict]:
         "sanitizer": {
             "name": Path(__file__).name,
             "version": SANITIZER_VERSION,
-            "command": (
-                "python3 tools/sanitize_claude_lifecycle_fixtures.py "
-                "--post-tool-stream \"$XNCX_POST_TOOL_STREAM\" "
-                "--post-tool-fixture "
-                "harness/tests/fixtures/claude-post-tool-2.1.248.jsonl "
-                "--post-tool-provenance "
-                "harness/tests/fixtures/claude-post-tool-2.1.248.provenance.json"
-            ),
+            "command": POST_TOOL_COMMAND,
         },
     }
     return retained, provenance
