@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -122,6 +123,66 @@ def position(observed: list[list[str]], expected: list[str]) -> int:
     return observed.index(expected)
 
 
+def canary_gate_fixture(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
+    source = tmp_path / "source"
+    plugin = source / "plugins" / "escapement-claude"
+    candidate = tmp_path / "candidate"
+    fake_bin = tmp_path / "bin"
+    trace = tmp_path / "canary-ran"
+    plugin.mkdir(parents=True)
+    candidate.mkdir()
+    fake_bin.mkdir()
+    (source / "scripts").mkdir()
+    (source / "scripts" / "delegation-canary.py").write_text("raise SystemExit(0)\n")
+    (plugin / "authority.py").write_text("AUTHORITY = 'managed'\n")
+    (candidate / "authority.py").write_text("AUTHORITY = 'managed'\n")
+    _write_executable(
+        fake_bin / "python3",
+        "#!/bin/sh\n"
+        f"touch {trace}\n"
+        "exit 0\n",
+    )
+    return source, plugin, candidate, fake_bin
+
+
+def run_canary_gate(
+    source: Path, candidate: Path, fake_bin: Path
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            "bash",
+            str(PLUGIN.parents[1] / "scripts/plugin-update-canary-gate.sh"),
+            "false",
+            str(source),
+            str(candidate),
+            "/usr/bin/false",
+        ],
+        env={**os.environ, "PATH": f"{fake_bin}:/usr/bin:/bin"},
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+
+def add_interpreter_cache_drift(plugin: Path, candidate: Path) -> None:
+    source_cache = plugin / "__pycache__"
+    candidate_cache = candidate / "__pycache__"
+    source_cache.mkdir()
+    candidate_cache.mkdir()
+    (source_cache / "authority.cpython-313.pyc").write_bytes(b"source cache")
+    (candidate_cache / "authority.cpython-313.pyc").write_bytes(b"installed cache")
+    (plugin / "legacy.pyc").write_bytes(b"source legacy cache")
+    (candidate / "legacy.pyc").write_bytes(b"installed legacy cache")
+
+
+def tree_bytes(root: Path) -> dict[str, bytes]:
+    return {
+        str(path.relative_to(root)): path.read_bytes()
+        for path in root.rglob("*")
+        if path.is_file()
+    }
+
+
 def test_updater_delegates_candidate_verification_to_focused_helper():
     updater = (PLUGIN.parents[1] / "scripts/plugin-update.sh").read_text()
     helper = PLUGIN.parents[1] / "scripts/plugin-update-canary-gate.sh"
@@ -134,6 +195,80 @@ def test_updater_delegates_candidate_verification_to_focused_helper():
     helper_text = helper.read_text()
     assert "delegation-canary.py" in helper_text
     assert "diff -qr" in helper_text
+
+
+def test_parity_allows_interpreter_cache_drift_and_reaches_live_canary(tmp_path):
+    source, plugin, candidate, fake_bin = canary_gate_fixture(tmp_path)
+    add_interpreter_cache_drift(plugin, candidate)
+    before = (tree_bytes(plugin), tree_bytes(candidate))
+
+    result = run_canary_gate(source, candidate, fake_bin)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "installed plugin parity verified" in result.stdout
+    assert (tmp_path / "canary-ran").is_file()
+    assert (tree_bytes(plugin), tree_bytes(candidate)) == before
+
+
+def test_parity_rejects_authored_drift_before_live_canary(tmp_path):
+    source, plugin, candidate, fake_bin = canary_gate_fixture(tmp_path)
+    add_interpreter_cache_drift(plugin, candidate)
+    (candidate / "authority.py").write_text("AUTHORITY = 'blocked'\n")
+    before = (tree_bytes(plugin), tree_bytes(candidate))
+
+    result = run_canary_gate(source, candidate, fake_bin)
+
+    assert result.returncode != 0
+    assert "installed plugin differs from this checkout" in result.stderr
+    assert not (tmp_path / "canary-ran").exists()
+    assert (tree_bytes(plugin), tree_bytes(candidate)) == before
+
+
+def test_parity_rejects_missing_authored_file_before_live_canary(tmp_path):
+    source, plugin, candidate, fake_bin = canary_gate_fixture(tmp_path)
+    add_interpreter_cache_drift(plugin, candidate)
+    (candidate / "authority.py").unlink()
+    before = (tree_bytes(plugin), tree_bytes(candidate))
+
+    result = run_canary_gate(source, candidate, fake_bin)
+
+    assert result.returncode != 0
+    assert "installed plugin differs from this checkout" in result.stderr
+    assert not (tmp_path / "canary-ran").exists()
+    assert (tree_bytes(plugin), tree_bytes(candidate)) == before
+
+
+def test_parity_rejects_candidate_only_authored_file_before_canary(tmp_path):
+    source, plugin, candidate, fake_bin = canary_gate_fixture(tmp_path)
+    add_interpreter_cache_drift(plugin, candidate)
+    (candidate / "undeclared-policy.json").write_text('{"mode":"unmanaged"}\n')
+    before = (tree_bytes(plugin), tree_bytes(candidate))
+
+    result = run_canary_gate(source, candidate, fake_bin)
+
+    assert result.returncode != 0
+    assert "installed plugin differs from this checkout" in result.stderr
+    assert not (tmp_path / "canary-ran").exists()
+    assert (tree_bytes(plugin), tree_bytes(candidate)) == before
+
+
+def test_parity_does_not_broadly_ignore_authored_cache_named_paths(tmp_path):
+    source, plugin, candidate, fake_bin = canary_gate_fixture(tmp_path)
+    add_interpreter_cache_drift(plugin, candidate)
+    (plugin / "policy-cache").mkdir()
+    (candidate / "policy-cache").mkdir()
+    (plugin / "policy-cache" / "authority.json").write_text('{"mode":"managed"}\n')
+    (candidate / "policy-cache" / "authority.json").write_text(
+        '{"mode":"unmanaged"}\n'
+    )
+    before = (tree_bytes(plugin), tree_bytes(candidate))
+
+    result = run_canary_gate(source, candidate, fake_bin)
+
+    assert result.returncode != 0
+    assert "installed plugin differs from this checkout" in result.stderr
+    assert not (tmp_path / "canary-ran").exists()
+    assert (tree_bytes(plugin), tree_bytes(candidate)) == before
 
 
 def test_single_transaction_commits_only_after_parity_and_live_canary(tmp_path):

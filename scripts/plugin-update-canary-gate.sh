@@ -18,7 +18,8 @@ if [[ "$dry_run" == true ]]; then
   exit 0
 fi
 
-if ! diff -qr "$source_root/plugins/escapement-claude" "$candidate_root" >/dev/null; then
+if ! diff -qr -x __pycache__ -x '*.pyc' \
+  "$source_root/plugins/escapement-claude" "$candidate_root" >/dev/null; then
   echo "installed plugin differs from this checkout" >&2
   exit 1
 fi
