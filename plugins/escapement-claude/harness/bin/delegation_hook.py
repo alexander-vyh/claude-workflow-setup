@@ -1,9 +1,20 @@
 #!/usr/bin/env python3
 """Observe managed Claude Agent dispatch without denying native capacity.
 
-Agent PreToolUse is expectation-first and non-blocking. Agent PostToolUse
-remains unregistered until an installed payload capture proves native child
-identity and terminal semantics.
+Agent PreToolUse is expectation-first and non-blocking. Agent PostToolUse is
+still unregistered here, but no longer for want of proof: escapement-g27c
+captured real host payloads (Claude Code 2.1.248) showing that PostToolUse
+fires for tool_name "Agent" and carries the native child identifier at
+tool_response.agentId, that SubagentStart and SubagentStop carry the same value
+at agent_id, and that SubagentStop.last_assistant_message carries the
+subagent's final text under both dispatch modes. The capture is
+harness/tests/fixtures/agent_dispatch_hook_payloads.json, asserted by
+harness/tests/test_agent_dispatch_capability.py.
+
+Registering the adapter is escapement-mn2q. Two captured facts constrain it:
+the relative order of PostToolUse and SubagentStop is dispatch-mode dependent,
+so binding must be order-tolerant; and tool_use_id is absent from the subagent
+events, so agent_id is the only join back to the dispatch.
 """
 
 from __future__ import annotations
