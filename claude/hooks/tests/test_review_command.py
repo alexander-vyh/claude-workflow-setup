@@ -296,3 +296,60 @@ class TestCommandSubstitutionIsNotAHidingPlace:
             'reviewable here" bd close escapement-abc1',
             "REVIEW_WAIVER",
         ).startswith("tracked separately (see")
+
+
+class TestProcessSubstitutionIsAlsoNotAHidingPlace:
+    """`<(cmd)` and `>(cmd)` run their command too — escapement-843m.
+
+    Found by adversarial review of the command-substitution fix, and the
+    criticism was exact: that fix rewrote this module's "conscious limits"
+    paragraph to argue command substitution did not belong beside `eval` and
+    `sh -c` because it "appears constantly in ordinary command lines". Process
+    substitution has identical properties — same `(`-adjacent shape, available
+    in the zsh this repo runs, ordinary in real command lines — so leaving it
+    open while the prose implied the class was closed was worse than the
+    original silence. A documented limit that is wrong is a trap.
+
+    Quoting semantics differ from `$()` and are honoured: the shell expands
+    `$(...)` and backticks inside double quotes, but does NOT perform process
+    substitution there. So `"<(bd close X)"` is literal text.
+    """
+
+    @pytest.mark.parametrize("command", [
+        "cat <(bd close escapement-abc1)",
+        "tee >(bd close escapement-abc1) < input.txt",
+        "cat < <(bd close escapement-abc1)",
+        "diff <(bd close escapement-abc1) <(echo other)",
+    ])
+    def test_a_process_substituted_close_is_still_a_close(self, command):
+        assert rc.close_targets(command) == ["escapement-abc1"], command
+
+    def test_an_unidentifiable_process_substituted_close_is_refused(self):
+        assert rc.close_targets("cat <(bd close)") == []
+
+    def test_process_substitution_is_literal_inside_double_quotes(self):
+        """The shell does not expand it there, so neither do we.
+
+        Getting this wrong in the permissive direction would deny an agent
+        writing about the syntax in a bead description — the false-positive
+        direction that teaches people to route around the gate.
+        """
+        assert rc.close_targets(
+            'bd create "doc" -d "the string <(bd close x) is an example"'
+        ) is None
+
+    def test_a_redirection_that_is_not_substitution_is_untouched(self):
+        """`>` and `<` alone are redirection; only `>(`/`<(` open a command.
+
+        `bd close X > /dev/null` resolves to `[]` — refuse — because the
+        redirection target lands in the positional slot and is not a bead id.
+        That is pre-existing behaviour, it fails CLOSED, and an independent
+        reviewer called it the right answer, so this change does not touch it.
+        Pinned here so the process-substitution openers are not quietly
+        widened into general redirection handling, which could swallow a real
+        bead id and turn a refusal into a silent allow.
+        """
+        assert rc.close_targets("bd close escapement-abc1 > /dev/null") == []
+        assert rc.close_targets("bd ready < input.txt") is None
+        # The opener is the two-character sequence, never a bare `<` or `>`.
+        assert rc.close_targets("bd close escapement-abc1") == ["escapement-abc1"]

@@ -938,3 +938,82 @@ class TestTheCaptureFeatureIsGatedAsOneUnit:
             "the blocking rule is gated off; the docstring must not list it "
             "under ENFORCED NOW"
         )
+
+
+class TestALateBlockingVerdictIsStillConsulted:
+    """escapement-a7is — `evaluate_close` read a snapshot, not the evidence.
+
+    `record["blocking"]` is frozen at the moment `escapement_review record`
+    runs. The ledger keeps accumulating afterwards. So a reviewer that returns
+    BLOCK *after* the record is written was never consulted again, the
+    fingerprint is unchanged so staleness cannot fire, and the close succeeds
+    with an unread blocker sitting in the ledger.
+
+    The verdict-capture wiring makes this the NORMAL case rather than an exotic
+    one: a backgrounded reviewer's text arrives at SubagentStop, asynchronously,
+    and nothing orders that against when the implementer chooses to record. The
+    original bug was "the ledger is written before the reviewer speaks"; this is
+    the same temporal blind spot moved to "the record is sealed before the
+    reviewer speaks".
+
+    Fix under test: re-read the ledger at close time and refuse if it NOW shows
+    a blocking verdict for this bead at this fingerprint.
+    """
+
+    def _ledger_with_blocking_verdict(self, fingerprint=FINGERPRINT):
+        _review_ledger.record_dispatch(
+            "s1", ["escapement-abc1"], "escapement:adversarial-reviewer", fingerprint
+        )
+        _review_ledger.record_agent_id(
+            "s1", ["escapement-abc1"], "escapement:adversarial-reviewer", "agent-late"
+        )
+        _review_ledger.record_subagent_verdict(
+            "s1", "agent-late",
+            "BLOCKER: the close path never re-reads the ledger after recording.",
+        )
+
+    def test_a_blocker_arriving_after_the_record_still_refuses_the_close(self):
+        """The record says clean; the ledger says blocked. Evidence wins."""
+        self._ledger_with_blocking_verdict()
+        with patch.object(review_gate, "VERDICT_CAPTURE_SUPPORTED", True):
+            _, decision, _ = _close(record=_record(blocking=False))
+        assert decision is not None, (
+            "a blocking verdict that landed after the record must not be "
+            "invisible just because the record was sealed first"
+        )
+        assert decision["permissionDecision"] == "deny"
+        assert "blocking" in decision["permissionDecisionReason"].lower()
+
+    def test_a_clean_ledger_does_not_invent_a_blocker(self):
+        """Positive control: re-reading must not become a second denial source."""
+        _review_ledger.record_dispatch(
+            "s1", ["escapement-abc1"], "escapement:adversarial-reviewer", FINGERPRINT
+        )
+        _review_ledger.record_agent_id(
+            "s1", ["escapement-abc1"], "escapement:adversarial-reviewer", "agent-ok"
+        )
+        _review_ledger.record_subagent_verdict(
+            "s1", "agent-ok",
+            "No blockers. The fingerprint comparison rejects the stale case.",
+        )
+        with patch.object(review_gate, "VERDICT_CAPTURE_SUPPORTED", True):
+            _, decision, _ = _close(record=_record(blocking=False))
+        assert decision is None
+
+    def test_a_blocker_at_a_different_fingerprint_does_not_refuse(self):
+        """After a repair the tree moved, so the old blocker is retired.
+
+        Without this the repair loop would never terminate: the blocking entry
+        would outlive the fix that addressed it and deny forever.
+        """
+        self._ledger_with_blocking_verdict(fingerprint="old" + "0" * 61)
+        with patch.object(review_gate, "VERDICT_CAPTURE_SUPPORTED", True):
+            _, decision, _ = _close(record=_record(blocking=False))
+        assert decision is None
+
+    def test_the_late_blocker_check_is_gated_with_the_rest_of_capture(self):
+        """Consistency with escapement-1nzm: an unproven classifier may not deny."""
+        self._ledger_with_blocking_verdict()
+        with patch.object(review_gate, "VERDICT_CAPTURE_SUPPORTED", False):
+            _, decision, _ = _close(record=_record(blocking=False))
+        assert decision is None
