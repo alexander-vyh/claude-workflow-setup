@@ -13,6 +13,7 @@ from delegation_canary_evidence import (
     dispatches,
     terminal_record,
     verify_candidate_plugin,
+    verify_dispatch_hook_responses,
     verify_overlap,
     verify_peer_dependency,
 )
@@ -41,22 +42,39 @@ def write_mode(thread: Path, session_id: str, repo: Path) -> None:
     path.chmod(0o600)
 
 
-def register_dispatches(records: list[dict], ledger_path: Path, hook) -> None:
-    for _index, record, item in dispatches(records):
-        tool_input = item["input"]
-        result = hook.pre_tool(
-            {
-                "hook_event_name": "PreToolUse",
-                "tool_name": "Agent",
-                "session_id": record.get("session_id"),
-                "tool_use_id": item["id"],
-                "tool_input": tool_input,
-            },
-            None,
-            ledger_path,
-        )
-        if result.get("reason") != "dispatch_registered":
+def require_registered_dispatches(
+    records: list[dict], ledger_path: Path, session_id: str, api
+) -> dict:
+    verify_dispatch_hook_responses(records)
+    current = api["store"].load_trusted(ledger_path, session_id)
+    if current is None or current.get("parent_session_id") != session_id:
+        raise CanaryFailure("managed_completion_unresolved")
+    expected = {
+        item["id"]: item["input"]["name"] for _index, _record, item in dispatches(records)
+    }
+    executions = current.get("executions")
+    if not isinstance(executions, list) or len(executions) != len(expected):
+        raise CanaryFailure("managed_completion_unresolved")
+    for execution in executions:
+        dispatch_id = execution.get("dispatch_tool_use_id")
+        if (
+            dispatch_id not in expected
+            or execution.get("host") != "claude"
+            or execution.get("agent_name") != expected[dispatch_id]
+            or execution.get("bead_id") != "canary-root"
+            or execution.get("attempt") != 1
+            or execution.get("generation") != 1
+            or execution.get("state") != "queued"
+            or execution.get("native_child_id") is not None
+            or not isinstance(execution.get("execution_id"), str)
+            or not execution["execution_id"]
+            or not isinstance(execution.get("watchdog_id"), str)
+            or not execution["watchdog_id"]
+        ):
             raise CanaryFailure("managed_completion_unresolved")
+    if len({item["execution_id"] for item in executions}) != len(executions):
+        raise CanaryFailure("managed_completion_unresolved")
+    return current
 
 
 def apply_transcript(
@@ -146,7 +164,6 @@ def apply_results(
 def load_api(candidate_root: Path) -> dict[str, object]:
     sys.path.insert(0, str(candidate_root / "harness" / "bin"))
     import claude_agent_lifecycle as adapter
-    import delegation_hook as hook
     import execution_ledger as ledger
     import execution_store as store
     import result_application as application
@@ -154,7 +171,6 @@ def load_api(candidate_root: Path) -> dict[str, object]:
 
     return {
         "adapter": adapter,
-        "hook": hook,
         "ledger": ledger,
         "store": store,
         "application": application,
@@ -163,8 +179,7 @@ def load_api(candidate_root: Path) -> dict[str, object]:
 
 
 def verify_managed(
-    records: list[dict], scratch: Path, repo: Path, version: str,
-    candidate_root: Path, api,
+    records: list[dict], scratch: Path, version: str, candidate_root: Path, api,
 ) -> dict:
     from delegation_canary_evidence import session_and_version
 
@@ -173,9 +188,8 @@ def verify_managed(
         raise CanaryFailure("host_capability_unresolved")
     verify_candidate_plugin(records, candidate_root)
     thread = scratch / "harness" / "threads" / session_id
-    write_mode(thread, session_id, repo)
     ledger_path = thread / "executions.json"
-    register_dispatches(records, ledger_path, api["hook"])
+    require_registered_dispatches(records, ledger_path, session_id, api)
     transcript = scratch / "managed-stream.jsonl"
     transcript.write_text(
         "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8"

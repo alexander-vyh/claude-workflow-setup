@@ -160,10 +160,16 @@ def observe_post_tool(payload: dict, ledger: dict) -> dict:
         or session_id is None
         or dispatch_id is None
         or not isinstance(tool_input, dict)
+        or set(payload) != {
+            "hook_event_name", "session_id", "tool_name", "tool_use_id",
+            "tool_input", "tool_response",
+        }
+        or set(tool_input) != {"name", "run_in_background", "subagent_type"}
         or name is None
         or tool_input.get("run_in_background") is not True
         or _text(tool_input.get("subagent_type")) is None
         or not isinstance(tool_response, dict)
+        or set(tool_response) != {"status", "isAsync", "agentId"}
         or tool_response.get("status") != "async_launched"
         or tool_response.get("isAsync") is not True
         or child_id is None
@@ -191,6 +197,51 @@ def observe_post_tool(payload: dict, ledger: dict) -> dict:
     return {"status": "observed", "events": [bound, started]}
 
 
+def _ordered_background_witness(
+    records: list[dict], execution: dict, session_id: str
+) -> tuple[int, int, int, dict, dict, dict] | None:
+    dispatches = []
+    starts = []
+    launches = []
+    for index, record in enumerate(records):
+        agent = _agent_use(record)
+        if agent == (
+            session_id,
+            execution.get("dispatch_tool_use_id"),
+            execution.get("agent_name"),
+        ):
+            dispatches.append((index, record))
+        if (
+            _session(record) == session_id
+            and record.get("type") == "system"
+            and record.get("subtype") == "task_started"
+            and record.get("tool_use_id") == execution.get("dispatch_tool_use_id")
+            and _text(record.get("task_id")) is not None
+            and record.get("is_backgrounded") is True
+            and record.get("task_type") == "local_agent"
+        ):
+            starts.append((index, record))
+        if (
+            _session(record) == session_id
+            and _result_tool_id(record) == execution.get("dispatch_tool_use_id")
+            and isinstance(record.get("tool_use_result"), dict)
+            and record["tool_use_result"].get("status") == "async_launched"
+            and record["tool_use_result"].get("isAsync") is True
+            and _text(record["tool_use_result"].get("agentId")) is not None
+        ):
+            launches.append((index, record))
+    if len(dispatches) != 1 or len(starts) != 1 or len(launches) != 1:
+        return None
+    dispatch_index, dispatch = dispatches[0]
+    start_index, started = starts[0]
+    launch_index, launched = launches[0]
+    if not dispatch_index < start_index < launch_index:
+        return None
+    if started["task_id"] != launched["tool_use_result"]["agentId"]:
+        return None
+    return dispatch_index, start_index, launch_index, dispatch, started, launched
+
+
 def _background_spawn(records: list[dict], ledger: dict) -> list[dict]:
     for agent_record in records:
         agent = _agent_use(agent_record)
@@ -204,33 +255,12 @@ def _background_spawn(records: list[dict], ledger: dict) -> list[dict]:
             or execution.get("native_child_id") is not None
         ):
             continue
-        starts = [
-            item
-            for item in records
-            if _session(item) == session_id
-            and item.get("type") == "system"
-            and item.get("subtype") == "task_started"
-            and item.get("tool_use_id") == dispatch_id
-            and _text(item.get("task_id")) is not None
-            and item.get("is_backgrounded") is True
-            and item.get("task_type") == "local_agent"
-        ]
-        launches = [
-            item
-            for item in records
-            if _session(item) == session_id
-            and _result_tool_id(item) == dispatch_id
-            and isinstance(item.get("tool_use_result"), dict)
-            and item["tool_use_result"].get("status") == "async_launched"
-            and item["tool_use_result"].get("isAsync") is True
-            and _text(item["tool_use_result"].get("agentId")) is not None
-        ]
-        if len(starts) != 1 or len(launches) != 1:
+        witness_records = _ordered_background_witness(records, execution, session_id)
+        if witness_records is None:
             continue
-        child_id = starts[0]["task_id"]
-        if launches[0]["tool_use_result"]["agentId"] != child_id:
-            continue
-        witness = {"agent": agent_record, "started": starts[0], "launched": launches[0]}
+        _dispatch_i, _start_i, _launch_i, agent_record, started_record, launch_record = witness_records
+        child_id = started_record["task_id"]
+        witness = {"agent": agent_record, "started": started_record, "launched": launch_record}
         bound = _event_base(ledger, execution, "child_bound", witness)
         bound["native_child_id"] = child_id
         started = _event_base(ledger, execution, "child_started", witness)
@@ -240,7 +270,7 @@ def _background_spawn(records: list[dict], ledger: dict) -> list[dict]:
 
 
 def _abort_events(records: list[dict], ledger: dict) -> list[dict]:
-    for agent_record in records:
+    for dispatch_index, agent_record in enumerate(records):
         agent = _agent_use(agent_record)
         if agent is None:
             continue
@@ -253,7 +283,7 @@ def _abort_events(records: list[dict], ledger: dict) -> list[dict]:
         ):
             continue
         matches = []
-        for item in records:
+        for error_index, item in enumerate(records):
             content = _tool_content(item)
             if _session(item) != session_id or content is None:
                 continue
@@ -271,7 +301,8 @@ def _abort_events(records: list[dict], ledger: dict) -> list[dict]:
                     or isinstance(content["content"], str) and bool(content["content"])
                 )
             ):
-                matches.append(item)
+                if dispatch_index < error_index:
+                    matches.append(item)
         if len(matches) == 1:
             event = _event_base(ledger, execution, "dispatch_aborted", matches[0])
             event["terminal_reason"] = "native_dispatch_error"
@@ -317,7 +348,7 @@ def _peer_events(records: list[dict], ledger: dict) -> list[dict]:
 
 def _terminal_events(records: list[dict], ledger: dict) -> list[dict]:
     events: list[dict] = []
-    for record in records:
+    for terminal_index, record in enumerate(records):
         session_id = _session(record)
         dispatch_id = (
             _text(record.get("tool_use_id")) if isinstance(record, dict) else None
@@ -347,6 +378,9 @@ def _terminal_events(records: list[dict], ledger: dict) -> list[dict]:
             and item.get("generation") == 1
         ]
         if len(matches) != 1:
+            continue
+        witness = _ordered_background_witness(records, matches[0], session_id)
+        if witness is None or witness[2] >= terminal_index:
             continue
         event = _event_base(ledger, matches[0], "child_terminal", record)
         event.update(

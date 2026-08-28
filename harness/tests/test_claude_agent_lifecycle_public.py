@@ -166,6 +166,8 @@ def test_public_posttool_adapter_failure_never_denies_claude_capacity(
         "subagent-type",
         "status",
         "agent-id",
+        "conflicting-native-child-id",
+        "surplus-agent-id",
     ),
 )
 def test_public_posttool_rejects_any_unproven_envelope_identity(
@@ -186,8 +188,12 @@ def test_public_posttool_rejects_any_unproven_envelope_identity(
         captured["tool_input"].pop("subagent_type")
     elif mutation == "status":
         captured["tool_response"]["status"] = "completed"
-    else:
+    elif mutation == "agent-id":
         captured["tool_response"].pop("agentId")
+    elif mutation == "conflicting-native-child-id":
+        captured["tool_response"]["native_child_id"] = "conflicting-child"
+    else:
+        captured["tool_response"]["agent_id"] = captured["tool_response"]["agentId"]
     path = tmp_path / "executions.json"
     path.write_text(json.dumps(registered(public_payload())), encoding="utf-8")
     path.chmod(0o600)

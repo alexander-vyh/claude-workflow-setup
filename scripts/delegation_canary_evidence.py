@@ -64,6 +64,45 @@ def dispatches(records: list[dict]) -> list[tuple[int, dict, dict]]:
     return found
 
 
+def verify_dispatch_hook_responses(records: list[dict]) -> None:
+    """Require one successful candidate PreToolUse registration per dispatch."""
+    observed = dispatches(records)
+    if len(observed) != 4:
+        raise CanaryFailure("managed_completion_unresolved")
+    expected_output = {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "allow",
+            "permissionDecisionReason": "dispatch_registered",
+        }
+    }
+    for offset, (dispatch_index, dispatch_record, _item) in enumerate(observed):
+        boundary = observed[offset + 1][0] if offset + 1 < len(observed) else len(records)
+        matches = []
+        for record in records[dispatch_index + 1 : boundary]:
+            stdout = record.get("stdout") if isinstance(record, dict) else None
+            try:
+                parsed = json.loads(stdout) if isinstance(stdout, str) else None
+            except json.JSONDecodeError:
+                parsed = None
+            if parsed != expected_output:
+                continue
+            if (
+                record.get("type") == "system"
+                and record.get("subtype") == "hook_response"
+                and record.get("hook_event") == "PreToolUse"
+                and record.get("hook_name") == "PreToolUse:Agent"
+                and record.get("session_id") == dispatch_record.get("session_id")
+                and record.get("output") == stdout
+                and record.get("stderr") == ""
+                and record.get("exit_code") == 0
+                and record.get("outcome") == "success"
+            ):
+                matches.append(record)
+        if len(matches) != 1:
+            raise CanaryFailure("managed_completion_unresolved")
+
+
 def session_and_version(records: list[dict]) -> tuple[str, str]:
     init = next(
         (

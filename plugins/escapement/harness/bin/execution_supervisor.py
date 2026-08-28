@@ -185,9 +185,13 @@ def _recovery_descriptor(plan: dict, item: dict) -> dict:
     activity_kind = item.get("last_activity_kind") or "none"
     activity_at = item.get("last_activity_at") or "none"
     native_child = item.get("native_child_id") or "none"
+    relationship = (
+        f"parent bead {canonical['parent_id']} and child bead {item['bead_id']}"
+        if canonical["parent_id"] is not None
+        else f"standalone bead {item['bead_id']}"
+    )
     prompt = (
-        f"Reconcile delegated execution {item['execution_id']} for parent bead "
-        f"{canonical['parent_id']} and child bead {item['bead_id']}; attempt "
+        f"Reconcile delegated execution {item['execution_id']} for {relationship}; attempt "
         f"{item['attempt']} generation {item['generation']} crossed its {reason} "
         f"deadline {deadline}. Last accepted activity: {activity_kind} at "
         f"{activity_at}. Native child: {native_child}; native status "

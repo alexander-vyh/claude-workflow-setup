@@ -107,6 +107,32 @@ def test_supervisor_accepts_standalone_bead_without_parent_lookup(
     assert canonical["parent_id"] is None
 
 
+def test_overdue_standalone_recovery_does_not_invent_a_parent(tmp_path) -> None:
+    threads_root = tmp_path / "harness" / "threads"
+    write_thread(threads_root)
+    run_bd, calls = runner(present=True, value=None)
+    spawned: list[dict] = []
+
+    result = supervisor.reconcile_all(
+        threads_root,
+        at("2026-08-27T23:01:01Z"),
+        "standalone-supervisor",
+        spawned.append,
+        native_status=lambda _item: None,
+        run_bd=run_bd,
+    )
+
+    assert result["status"] == "ok"
+    assert calls == [["show", BEAD]]
+    assert len(spawned) == 1
+    descriptor = spawned[0]
+    assert descriptor["bead_id"] == BEAD
+    assert descriptor.get("parent_bead_id") is None
+    assert "standalone bead escapement-standalone-root" in descriptor["prompt"]
+    assert "parent bead" not in descriptor["prompt"]
+    assert "None" not in descriptor["prompt"]
+
+
 @pytest.mark.parametrize(
     "malformed_parent",
     ["", False, True, [], {}, 17],

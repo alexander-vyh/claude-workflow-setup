@@ -292,25 +292,37 @@ def managed_stream(scenario: str = "ok") -> list[dict]:
 def fake_claude(path: Path) -> Path:
     path.write_text(
         f"#!{sys.executable}\n"
-        "import os, pathlib, sys\n"
+        "import json, os, pathlib, subprocess, sys, uuid\n"
         "if '--version' in sys.argv[1:]:\n"
         " print('2.1.247 (Claude Code)'); raise SystemExit(0)\n"
         "audit=pathlib.Path(os.environ['FAKE_CLAUDE_AUDIT'])\n"
         "with audit.open('a') as handle:\n"
-        " import json; handle.write(json.dumps({'config_dir':os.environ.get('CLAUDE_CONFIG_DIR'),'args':sys.argv[1:]})+'\\n')\n"
+        " handle.write(json.dumps({'config_dir':os.environ.get('CLAUDE_CONFIG_DIR'),'args':sys.argv[1:]})+'\\n')\n"
         "counter=pathlib.Path(os.environ['FAKE_CLAUDE_COUNTER'])\n"
         "count=int(counter.read_text()) if counter.exists() else 0\n"
         "counter.write_text(str(count+1))\n"
         "key='FAKE_UNMANAGED_STREAM' if count == 0 else 'FAKE_MANAGED_STREAM'\n"
-        "stream=pathlib.Path(os.environ[key]).read_text()\n"
+        "records=[json.loads(line) for line in pathlib.Path(os.environ[key]).read_text().splitlines()]\n"
+        "session_id=sys.argv[sys.argv.index('--session-id')+1]\n"
+        "for record in records:\n"
+        " if isinstance(record.get('session_id'),str): record['session_id']=session_id\n"
         "plugin_dir=sys.argv[sys.argv.index('--plugin-dir')+1]\n"
         "if not pathlib.Path(plugin_dir).is_absolute():\n"
-        " records=[json.loads(line) for line in stream.splitlines()]\n"
         " for record in records:\n"
         "  if record.get('type')=='system' and record.get('subtype')=='init':\n"
         "   record['plugins']=[]; record['plugin_errors']=[{'type':'path-not-found','path':plugin_dir}]\n"
-        " stream=''.join(json.dumps(record)+'\\n' for record in records)\n"
-        "sys.stdout.write(stream)\n",
+        "if os.environ.get('FAKE_INVOKE_AGENT_HOOKS') == '1':\n"
+        " observed=[]\n"
+        " for record in records:\n"
+        "  observed.append(record)\n"
+        "  content=record.get('message',{}).get('content',[])\n"
+        "  item=content[0] if len(content)==1 and isinstance(content[0],dict) else {}\n"
+        "  if item.get('type')!='tool_use' or item.get('name')!='Agent': continue\n"
+        "  payload={'hook_event_name':'PreToolUse','tool_name':'Agent','session_id':record.get('session_id'),'tool_use_id':item.get('id'),'tool_input':item.get('input')}\n"
+        "  hook=subprocess.run([sys.executable,'-B',str(pathlib.Path(plugin_dir)/'harness/bin/delegation_hook.py')],input=json.dumps(payload),capture_output=True,text=True,env=os.environ)\n"
+        "  if os.environ.get('FAKE_EMIT_HOOK_RESPONSES') == '1': observed.append({'type':'system','subtype':'hook_response','hook_id':str(uuid.uuid4()),'hook_name':'PreToolUse:Agent','hook_event':'PreToolUse','output':hook.stdout,'stdout':hook.stdout,'stderr':hook.stderr,'exit_code':hook.returncode,'outcome':'success' if hook.returncode==0 else 'error','session_id':record.get('session_id')})\n"
+        " records=observed\n"
+        "sys.stdout.write(''.join(json.dumps(record)+'\\n' for record in records))\n",
         encoding="utf-8",
     )
     path.chmod(0o755)
@@ -349,6 +361,8 @@ def run_canary(
     init_target: str = "managed",
     relative_paths: bool = False,
     claude_path_mode: str = "absolute",
+    invoke_agent_hooks: bool = True,
+    emit_hook_responses: bool = True,
 ):
     assert CANARY.is_file(), "delegation canary is not implemented"
     unmanaged = tmp_path / "unmanaged.jsonl"
@@ -408,6 +422,8 @@ def run_canary(
             "FAKE_CLAUDE_AUDIT": str(tmp_path / "claude-audit.jsonl"),
             "FAKE_UNMANAGED_STREAM": str(unmanaged),
             "FAKE_MANAGED_STREAM": str(managed),
+            "FAKE_INVOKE_AGENT_HOOKS": "1" if invoke_agent_hooks else "0",
+            "FAKE_EMIT_HOOK_RESPONSES": "1" if emit_hook_responses else "0",
             "PATH": child_path,
         },
         capture_output=True,
@@ -443,6 +459,26 @@ def test_isolated_canary_proves_unmanaged_and_managed_public_outcomes(tmp_path) 
     ]
 
 
+def test_canary_rejects_valid_transcript_without_automatic_hook_ledger(tmp_path) -> None:
+    result, output = run_canary(tmp_path, invoke_agent_hooks=False)
+
+    assert result.returncode != 0
+    assert output == {"status": "fail", "reason": "managed_completion_unresolved"}
+
+
+def test_canary_rejects_hook_ledger_without_structured_host_response(tmp_path) -> None:
+    result, output = run_canary(tmp_path, emit_hook_responses=False)
+
+    assert result.returncode != 0
+    assert output == {"status": "fail", "reason": "managed_completion_unresolved"}
+
+
+def test_canary_has_no_post_hoc_dispatch_registration_authority() -> None:
+    lifecycle = (ROOT / "scripts" / "delegation_canary_lifecycle.py").read_text()
+
+    assert "register_dispatches" not in lifecycle
+
+
 def test_canary_accepts_acknowledged_child_to_child_dependency(tmp_path) -> None:
     result, output = run_canary(tmp_path, "live-peer")
 
@@ -459,7 +495,20 @@ def test_result_release_rejects_cross_swapped_terminal_evidence(tmp_path) -> Non
     lifecycle.write_mode(thread, session_id, tmp_path)
     ledger_path = thread / "executions.json"
     api = lifecycle.load_api(PLUGIN)
-    lifecycle.register_dispatches(records, ledger_path, api["hook"])
+    import delegation_hook
+
+    for _index, record, item in lifecycle.dispatches(records):
+        assert delegation_hook.pre_tool(
+            {
+                "hook_event_name": "PreToolUse",
+                "tool_name": "Agent",
+                "session_id": record["session_id"],
+                "tool_use_id": item["id"],
+                "tool_input": item["input"],
+            },
+            None,
+            ledger_path,
+        )["reason"] == "dispatch_registered"
     transcript = scratch / "managed-stream.jsonl"
     transcript.parent.mkdir(parents=True, exist_ok=True)
     write_jsonl(transcript, records)

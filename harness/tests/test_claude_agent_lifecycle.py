@@ -441,6 +441,89 @@ def test_background_spawn_prefix_binds_starts_and_blocks_completion(tmp_path) ->
     assert completion(ledger) == ("block", "delegated_execution_unresolved")
 
 
+@pytest.mark.parametrize(
+    "order",
+    (
+        ("terminal", "launch", "start", "dispatch"),
+        ("dispatch", "launch", "start", "terminal"),
+        ("start", "dispatch", "launch", "terminal"),
+    ),
+)
+def test_background_lifecycle_rejects_out_of_order_native_records(
+    tmp_path, order
+) -> None:
+    adapter = load_adapter()
+    captured = fixtures()
+    by_name = {
+        "dispatch": copy.deepcopy(captured["background_agent_tool_use"]),
+        "start": copy.deepcopy(captured["background_task_started"]),
+        "launch": copy.deepcopy(captured["background_async_result"]),
+        "terminal": copy.deepcopy(captured["background_task_terminal"]),
+    }
+    ledger = background_ledger()
+    before = copy.deepcopy(ledger)
+    transcript = write_transcript(
+        tmp_path / "out-of-order.jsonl", *(by_name[name] for name in order)
+    )
+
+    assert adapter.observe_transcript(transcript, ledger) == []
+    assert ledger == before
+    assert completion(ledger) == ("block", "delegated_execution_unresolved")
+
+
+def test_terminal_before_launch_never_completes_after_ordered_spawn(tmp_path) -> None:
+    adapter = load_adapter()
+    captured = fixtures()
+    ledger = background_ledger()
+    transcript = write_transcript(
+        tmp_path / "terminal-before-launch.jsonl",
+        captured["background_agent_tool_use"],
+        captured["background_task_started"],
+        captured["background_task_terminal"],
+        captured["background_async_result"],
+    )
+
+    spawn = adapter.observe_transcript(transcript, ledger)
+    assert [event["kind"] for event in spawn] == ["child_bound", "child_started"]
+    apply_events(ledger, spawn, "2026-08-27T22:10:08Z")
+    assert adapter.observe_transcript(transcript, ledger) == []
+    assert item(ledger)["state"] == "running"
+    assert completion(ledger) == ("block", "delegated_execution_unresolved")
+
+
+def test_abort_rejects_error_before_dispatch(tmp_path) -> None:
+    adapter = load_adapter()
+    captured = fixtures()
+    dispatch = tool_use(captured["no_spawn_agent_tool_use"])
+    session_id = captured["no_spawn_agent_tool_use"]["session_id"]
+    ledger = ledger_api.new_ledger(session_id)
+    ledger_api.register_execution(
+        ledger,
+        {
+            "kind": "dispatch_registered",
+            "parent_session_id": session_id,
+            "bead_id": "escapement-xncx",
+            "execution_id": "fixture-no-spawn-execution",
+            "host": "claude",
+            "agent_name": dispatch["input"]["name"],
+            "dispatch_tool_use_id": dispatch["id"],
+            "watchdog_id": "watch-fixture-no-spawn",
+            "attempt": 1,
+            "generation": 1,
+        },
+        at("2026-08-27T22:10:55Z"),
+    )
+    before = copy.deepcopy(ledger)
+    transcript = write_transcript(
+        tmp_path / "abort-before-dispatch.jsonl",
+        captured["no_spawn_error_result"],
+        captured["no_spawn_agent_tool_use"],
+    )
+
+    assert adapter.observe_transcript(transcript, ledger) == []
+    assert ledger == before
+
+
 def test_matching_peer_activity_and_terminal_are_separate_prefixes(tmp_path) -> None:
     adapter = load_adapter()
     captured = fixtures()
@@ -465,7 +548,11 @@ def test_matching_peer_activity_and_terminal_are_separate_prefixes(tmp_path) -> 
     assert completion(ledger) == ("block", "delegated_execution_unresolved")
 
     terminal = write_transcript(
-        tmp_path / "terminal.jsonl", captured["background_task_terminal"]
+        tmp_path / "terminal.jsonl",
+        captured["background_agent_tool_use"],
+        captured["background_task_started"],
+        captured["background_async_result"],
+        captured["background_task_terminal"],
     )
     terminal_events = adapter.observe_transcript(terminal, ledger)
     assert [event["kind"] for event in terminal_events] == ["child_terminal"]

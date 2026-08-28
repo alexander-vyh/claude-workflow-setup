@@ -132,8 +132,7 @@ def execute(args) -> dict:
         managed_session, managed_prompt(dependency), environment, args.timeout,
     )
     managed_result = verify_managed(
-        managed, scratch_root, repo, version, candidate_root,
-        load_api(candidate_root),
+        managed, scratch_root, version, candidate_root, load_api(candidate_root),
     )
     return {
         "status": "pass", "host_version": version,
