@@ -103,7 +103,9 @@ def pre_tool(payload: dict, run_bd, ledger_path) -> dict:
             record_incident(
                 path.parent / "execution_incident.json",
                 parent_session_id=session_id,
-                tool_use_id=tool_use_id if isinstance(tool_use_id, str) and tool_use_id else None,
+                tool_use_id=tool_use_id
+                if isinstance(tool_use_id, str) and tool_use_id
+                else None,
                 reason="invalid_agent_dispatch_payload",
                 now=_iso_now(),
             )
@@ -126,7 +128,7 @@ def pre_tool(payload: dict, run_bd, ledger_path) -> dict:
             host="claude",
             now=now,
         )
-    except (OSError, ValueError):
+    except (OSError, TypeError, ValueError, KeyError):
         try:
             record_incident(
                 incident_path,
@@ -175,7 +177,7 @@ def pre_tool(payload: dict, run_bd, ledger_path) -> dict:
             lambda: new_ledger(session_id),
             register,
         )
-    except (OSError, ValueError):
+    except (OSError, TypeError, ValueError, KeyError):
         return {"decision": "allow", "reason": "dispatch_evidence_unresolved"}
 
     dispatched = next(

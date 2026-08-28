@@ -18,6 +18,7 @@ import sys
 
 from execution_cancellation import cancel_unreported, overdue_reason
 from execution_ledger import apply_event, reconcile_deadlines
+from execution_parent import classify_canonical_parent
 from execution_store import load_trusted, mutate_atomic
 import gate_signal
 from thread_identity import InvalidActorIdentity, resolve_thread_dir
@@ -63,6 +64,22 @@ def _apply_normalized_events(
             "to the active attempt.",
         )
         return
+    transcript_path = payload.get("transcript_path")
+    if isinstance(transcript_path, str) and transcript_path:
+        try:
+            from claude_agent_lifecycle import observe_transcript
+
+            observed = observe_transcript(pathlib.Path(transcript_path), ledger)
+        except Exception:
+            # The observer is optional host evidence.  Never let its own drift
+            # mutate durable state or deny Claude; leave managed completion
+            # unresolved and make that fact visible at SessionStart.
+            _append_once(
+                messages,
+                "Claude lifecycle observation failed; managed completion remains unresolved.",
+            )
+            return
+        events = [*events, *observed]
     for event in events:
         if not isinstance(event, dict) or not isinstance(event.get("generation"), int):
             _append_once(
@@ -104,8 +121,10 @@ def _canonical_parent_messages(ledger: dict, run_bd, messages: list[str]) -> Non
                 f"{bead_id}` before continuing.",
             )
             continue
-        parent_id = child.get("parent") or child.get("parent_id")
-        if not isinstance(parent_id, str) or not parent_id:
+        relationship, parent_id = classify_canonical_parent(child)
+        if relationship == "standalone":
+            continue
+        if relationship != "parented":
             _append_once(
                 messages,
                 f"canonical parent relationship for {bead_id} is unresolved; run `bd "

@@ -57,7 +57,6 @@ done
   echo "FATAL: continuation supervisor state helper is missing: $supervisor_state_helper" >&2
   exit 1
 }
-
 # Resolve only the installed user-scope plugin. Historical cache siblings and
 # project-scope entries are not deployment authority.
 resolve_install_path() {
@@ -519,7 +518,7 @@ if [[ "$DRY_RUN" == true ]]; then
 elif ! "$supervisor_installer"; then
   fail_after_refresh "continuation supervisor installation failed"
 fi
-
+if ! "$REPO_DIR/scripts/plugin-update-canary-gate.sh" "$DRY_RUN" "$REPO_DIR" "$new_path" "$(command -v claude)"; then fail_after_refresh "isolated delegation canary failed"; fi
 if [[ "$DRY_RUN" != true ]]; then
   python3 -B "$TRANSACTION_HELPER" commit --journal "$TRANSACTION_JOURNAL"
   trap - ERR

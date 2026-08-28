@@ -124,10 +124,14 @@ CODEX_HOOK_SUPPORT = {
     "harness/bin/repo_outcome.py",
     # execution_reconcile.py remains bundled while its unconditional
     # SessionStart registration is partial and disabled.
+    "harness/bin/claude_agent_lifecycle.py",
     "harness/bin/execution_reconcile.py",
     # Retain the complete trusted-ledger closure used by isolated reconciliation.
     "harness/bin/execution_ledger.py",
+    "harness/bin/execution_event_identity.py",
+    "harness/bin/execution_parent.py",
     "harness/bin/execution_store.py",
+    "harness/bin/execution_incident_validation.py",
     "harness/bin/execution_validation.py",
     # execution_reconcile's `cancel` escape and its gate-signal write; without
     # these the bundled reconciler cannot import and the Stop denial names a

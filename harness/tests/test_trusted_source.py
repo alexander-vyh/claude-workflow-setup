@@ -22,6 +22,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
+from jsonschema import Draft202012Validator
 
 BIN = pathlib.Path(__file__).resolve().parent.parent / "bin"
 sys.path.insert(0, str(BIN))
@@ -322,6 +323,7 @@ def test_schema_declares_closed_enums_for_runtime_decisions():
         "running",
         "terminal",
         "cancelled",
+        "aborted",
         "unknown",
     ]
     assert execution_properties["reconcile_due"]["enum"] == [
@@ -337,6 +339,282 @@ def test_schema_declares_closed_enums_for_runtime_decisions():
         "applying",
         "applied",
     ]
+
+
+def test_schema_enforces_resolved_deadline_and_host_observation_contracts():
+    schema_path = BIN.parent / "schemas" / "executions.schema.json"
+    schema = json.loads(schema_path.read_text())
+    validator = Draft202012Validator(schema)
+    resolved = _valid_ledger()
+    item = resolved["executions"][0]
+    item.update(
+        {
+            "state": "terminal",
+            "terminal_at": "2026-08-09T20:05:00Z",
+            "terminal_reason": "completed",
+            "terminal_event_id": "terminal-schema-control",
+            "result_digest": "sha256:schema-control",
+            "start_deadline": None,
+            "idle_deadline": None,
+            "hard_deadline": None,
+            "reconcile_due": None,
+            "recovery_claim": None,
+        }
+    )
+    assert validator.is_valid(resolved)
+
+    retained_deadline = json.loads(json.dumps(resolved))
+    retained_deadline["executions"][0]["idle_deadline"] = "2026-08-09T20:19:00Z"
+    assert not validator.is_valid(retained_deadline)
+
+    invalid_observation = json.loads(json.dumps(resolved))
+    invalid_observation["incidents"] = [
+        {
+            "type": "host_event_observation",
+            "execution_id": "exec-alpha",
+            "attempt": 1,
+            "generation": 1,
+            "host_event_id": "claude:schema:invalid",
+        }
+    ]
+    assert not validator.is_valid(invalid_observation)
+
+
+def test_schema_accepts_unbound_cancelled_but_rejects_unbound_terminal():
+    schema_path = BIN.parent / "schemas" / "executions.schema.json"
+    validator = Draft202012Validator(json.loads(schema_path.read_text()))
+    cancelled = _valid_ledger()
+    item = cancelled["executions"][0]
+    item.update(
+        {
+            "native_child_id": None,
+            "state": "cancelled",
+            "started_at": None,
+            "last_activity_at": "2026-08-09T20:05:00Z",
+            "last_activity_kind": "terminal_event",
+            "start_deadline": None,
+            "idle_deadline": None,
+            "hard_deadline": None,
+            "reconcile_due": None,
+            "terminal_at": "2026-08-09T20:05:00Z",
+            "terminal_reason": "unreported_child_cancelled",
+            "terminal_event_id": "unreported-cancel:exec-alpha:1:1",
+            "result_digest": None,
+            "recovery_claim": None,
+        }
+    )
+
+    assert validator.is_valid(cancelled)
+
+    terminal = json.loads(json.dumps(cancelled))
+    terminal_item = terminal["executions"][0]
+    terminal_item["state"] = "terminal"
+    terminal_item["terminal_reason"] = "completed"
+    terminal_item["terminal_event_id"] = "terminal-without-child"
+    terminal_item["result_digest"] = "sha256:terminal-result"
+    assert not validator.is_valid(terminal)
+
+    unsupported = json.loads(json.dumps(cancelled))
+    unsupported_item = unsupported["executions"][0]
+    unsupported_item["terminal_reason"] = "dispatch_failed"
+    unsupported_item["terminal_event_id"] = "dispatch-failed:exec-alpha:1:1"
+    assert not validator.is_valid(unsupported)
+
+
+def _unbound_cancelled_ledger() -> dict:
+    cancelled = _valid_ledger()
+    item = cancelled["executions"][0]
+    item.update(
+        {
+            "native_child_id": None,
+            "state": "cancelled",
+            "started_at": None,
+            "last_activity_at": "2026-08-09T20:05:00Z",
+            "last_activity_kind": "terminal_event",
+            "start_deadline": None,
+            "idle_deadline": None,
+            "hard_deadline": None,
+            "reconcile_due": None,
+            "terminal_at": "2026-08-09T20:05:00Z",
+            "terminal_reason": "unreported_child_cancelled",
+            "terminal_event_id": "unreported-cancel:exec-alpha:1:1",
+            "result_digest": None,
+            "recovery_claim": None,
+        }
+    )
+    return cancelled
+
+
+def _matching_unreported_incident() -> dict:
+    return {
+        "type": "unreported_child_cancelled",
+        "execution_id": "exec-alpha",
+        "attempt": 1,
+        "generation": 1,
+        "actor": "operator-alex",
+        "reason": "child never emitted a native identity or terminal event",
+        "overdue_basis": "hard",
+        "state_before": "queued",
+        "native_child_id": None,
+        "recorded_at": "2026-08-09T20:05:00Z",
+    }
+
+
+def test_unbound_cancelled_ledger_requires_matching_audit_evidence(tmp_path):
+    cancelled = _unbound_cancelled_ledger()
+    path = tmp_path / "executions.json"
+    _write_ledger(path, cancelled)
+
+    assert execution_ledger.load_trusted(path, "parent-7") is None
+
+
+def test_unbound_cancelled_ledger_accepts_exact_matching_audit(tmp_path):
+    cancelled = _unbound_cancelled_ledger()
+    cancelled["incidents"] = [_matching_unreported_incident()]
+    path = tmp_path / "executions.json"
+    _write_ledger(path, cancelled)
+
+    assert execution_ledger.load_trusted(path, "parent-7") == cancelled
+
+
+@pytest.mark.parametrize(
+    ("owner", "field", "value"),
+    [
+        ("incident", "execution_id", "exec-foreign"),
+        ("incident", "attempt", 2),
+        ("incident", "generation", 2),
+        ("incident", "native_child_id", "fabricated-child"),
+        ("incident", "recorded_at", "2026-08-09T20:06:00Z"),
+        ("incident", "state_before", "running"),
+        ("incident", "overdue_basis", "idle"),
+        ("incident", "actor", ""),
+        ("incident", "reason", "tbd"),
+        ("incident", "host_event_id", "fabricated-host-authority"),
+        ("execution", "terminal_event_id", "unreported-cancel:exec-foreign:1:1"),
+    ],
+)
+def test_unbound_cancelled_ledger_rejects_mismatched_audit_linkage(
+    tmp_path, owner, field, value
+):
+    cancelled = _unbound_cancelled_ledger()
+    cancelled["incidents"] = [_matching_unreported_incident()]
+    target = (
+        cancelled["incidents"][0]
+        if owner == "incident"
+        else cancelled["executions"][0]
+    )
+    target[field] = value
+    path = tmp_path / "executions.json"
+    _write_ledger(path, cancelled)
+
+    assert execution_ledger.load_trusted(path, "parent-7") is None
+
+
+def _dispatch_failed_ledger() -> dict:
+    failed = _valid_ledger()
+    item = failed["executions"][0]
+    item.update(
+        {
+            "host": "claude",
+            "native_child_id": None,
+            "state": "aborted",
+            "started_at": None,
+            "last_activity_at": None,
+            "last_activity_kind": None,
+            "start_deadline": None,
+            "idle_deadline": None,
+            "hard_deadline": None,
+            "reconcile_due": None,
+            "terminal_at": "2026-08-09T20:05:00Z",
+            "terminal_reason": "dispatch_failed",
+            "terminal_event_id": "claude:dispatch-failed:call-44",
+            "result_digest": None,
+            "recovery_claim": None,
+        }
+    )
+    failed["incidents"] = [
+        {
+            "type": "dispatch_failed",
+            "execution_id": "exec-alpha",
+            "attempt": 1,
+            "generation": 1,
+            "host_error": "host rejected the requested agent type",
+            "state_before": "queued",
+            "recorded_at": "2026-08-09T20:05:00Z",
+        }
+    ]
+    return failed
+
+
+def test_schema_enforces_dispatch_failure_audit_shape():
+    schema_path = BIN.parent / "schemas" / "executions.schema.json"
+    validator = Draft202012Validator(json.loads(schema_path.read_text()))
+    failed = _dispatch_failed_ledger()
+    assert validator.is_valid(failed)
+
+    missing_timestamp = json.loads(json.dumps(failed))
+    missing_timestamp["incidents"][0]["recorded_at"] = None
+    assert not validator.is_valid(missing_timestamp)
+
+    extra_authority = json.loads(json.dumps(failed))
+    extra_authority["incidents"][0]["host_event_id"] = "fabricated-authority"
+    assert not validator.is_valid(extra_authority)
+
+
+def test_dispatch_failed_ledger_accepts_exact_matching_audit(tmp_path):
+    failed = _dispatch_failed_ledger()
+    path = tmp_path / "executions.json"
+    _write_ledger(path, failed)
+
+    assert execution_ledger.load_trusted(path, "parent-7") == failed
+
+
+@pytest.mark.parametrize(
+    ("owner", "field", "value"),
+    [
+        ("incident", "execution_id", "exec-foreign"),
+        ("incident", "attempt", 2),
+        ("incident", "generation", 2),
+        ("incident", "host_error", None),
+        ("incident", "state_before", "running"),
+        ("incident", "recorded_at", None),
+        ("incident", "extra", "unsupported"),
+        ("execution", "terminal_event_id", "fabricated-dispatch-failure"),
+    ],
+)
+def test_dispatch_failed_ledger_rejects_mismatched_audit_linkage(
+    tmp_path, owner, field, value
+):
+    failed = _dispatch_failed_ledger()
+    target = failed["incidents"][0] if owner == "incident" else failed["executions"][0]
+    target[field] = value
+    path = tmp_path / "executions.json"
+    _write_ledger(path, failed)
+
+    assert execution_ledger.load_trusted(path, "parent-7") is None
+
+
+@pytest.mark.parametrize("state", ["queued", "running", "unknown"])
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("terminal_at", "2026-08-09T20:05:00Z"),
+        ("terminal_reason", "completed"),
+        ("terminal_event_id", "terminal-active-state-control"),
+        ("result_digest", "sha256:active-state-control"),
+    ],
+)
+def test_schema_rejects_terminal_evidence_on_active_execution_states(
+    state, field, value
+):
+    schema_path = BIN.parent / "schemas" / "executions.schema.json"
+    validator = Draft202012Validator(json.loads(schema_path.read_text()))
+    active_with_terminal_evidence = _valid_ledger()
+    item = active_with_terminal_evidence["executions"][0]
+    item["state"] = state
+    item[field] = value
+
+    assert not validator.is_valid(active_with_terminal_evidence)
 
 
 def test_concurrent_mutations_serialize_without_lost_updates(tmp_path):

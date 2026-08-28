@@ -3,11 +3,14 @@
 
 from __future__ import annotations
 
+import copy
 import datetime as dt
 from typing import Any
 
+from execution_incident_validation import validate_incidents
+
 UTC = dt.timezone.utc
-EXECUTION_STATES = {"queued", "running", "terminal", "cancelled", "unknown"}
+EXECUTION_STATES = {"queued", "running", "terminal", "cancelled", "aborted", "unknown"}
 RECONCILE_STATES = {None, "start", "idle", "hard"}
 APPLICATION_STATES = {"unapplied", "applying", "applied"}
 RUNNING_ACTIVITY_KINDS = {
@@ -167,8 +170,28 @@ def _valid_terminal_state(item: dict) -> bool:
         # unterminalizable. `terminal` still requires it — a real result digest
         # implies a real child that produced it — and a cancelled execution
         # still carries no result_digest, so it can never be mistaken for one.
-        return (
+        if not (
             all(_nonempty_text(item[key]) for key in terminal_fields)
+            and item["result_digest"] is None
+        ):
+            return False
+        if item["native_child_id"] is not None:
+            return True
+        return (
+            item["terminal_reason"] == "unreported_child_cancelled"
+            and item["terminal_event_id"]
+            == (
+                f"unreported-cancel:{item['execution_id']}:"
+                f"{item['attempt']}:{item['generation']}"
+            )
+        )
+    if state == "aborted":
+        return (
+            item["native_child_id"] is None
+            and item["started_at"] is None
+            and item["last_activity_at"] is None
+            and item["last_activity_kind"] is None
+            and all(_nonempty_text(item[key]) for key in terminal_fields)
             and item["result_digest"] is None
         )
     return all(item[key] is None for key in (*terminal_fields, "result_digest"))
@@ -191,6 +214,47 @@ def _valid_running_state(item: dict) -> bool:
         started_at <= last_activity_at
         and idle_deadline == last_activity_at + dt.timedelta(minutes=15)
     )
+
+
+def _legacy_resolved_evidence(item: object) -> bool:
+    if not isinstance(item, dict) or item.get("state") not in {"terminal", "cancelled"}:
+        return False
+    terminal_fields = ("terminal_at", "terminal_reason", "terminal_event_id")
+    if not _nonempty_text(item.get("native_child_id")) or not all(
+        _nonempty_text(item.get(field)) for field in terminal_fields
+    ):
+        return False
+    if item["state"] == "terminal":
+        return _nonempty_text(item.get("result_digest"))
+    return item.get("result_digest") is None
+
+
+def normalize_legacy_resolved_ledger(value: Any) -> Any:
+    """Clear only pre-resolution residue from version-one terminal evidence."""
+    if not isinstance(value, dict) or value.get("version") != 1:
+        return value
+    executions = value.get("executions")
+    if not isinstance(executions, list):
+        return value
+    resolved = [
+        item
+        for item in executions
+        if isinstance(item, dict) and item.get("state") in {"terminal", "cancelled"}
+    ]
+    if not all(_legacy_resolved_evidence(item) for item in resolved):
+        return value
+    normalized = copy.deepcopy(value)
+    for item in normalized["executions"]:
+        if item.get("state") in {"terminal", "cancelled"}:
+            for field in (
+                "start_deadline",
+                "idle_deadline",
+                "hard_deadline",
+                "reconcile_due",
+                "recovery_claim",
+            ):
+                item[field] = None
+    return normalized
 
 
 def _valid_execution(item: Any) -> bool:
@@ -219,9 +283,12 @@ def _valid_execution(item: Any) -> bool:
         or item.get("reconcile_due") not in RECONCILE_STATES
     ):
         return False
+    if not _valid_timestamp(item.get("queued_at")):
+        return False
+    deadline_fields = ("start_deadline", "idle_deadline", "hard_deadline")
+    resolved = item["state"] in {"terminal", "cancelled", "aborted"}
     if not all(
-        _valid_timestamp(item.get(key))
-        for key in ("queued_at", "start_deadline", "idle_deadline", "hard_deadline")
+        _valid_timestamp(item.get(key), nullable=resolved) for key in deadline_fields
     ):
         return False
     if not all(
@@ -244,6 +311,12 @@ def _valid_execution(item: Any) -> bool:
         return False
     if recovery_claim is not None and not _claim_matches_execution(
         recovery_claim, item
+    ):
+        return False
+    if resolved and (
+        item["reconcile_due"] is not None
+        or recovery_claim is not None
+        or any(item[field] is not None for field in deadline_fields)
     ):
         return False
     if not _valid_running_state(item):
@@ -289,4 +362,5 @@ def is_valid_ledger(value: Any) -> bool:
         isinstance(item, dict) for item in incidents
     ):
         return False
-    return True
+    executions_by_id = {item["execution_id"]: item for item in executions}
+    return validate_incidents(incidents, executions_by_id)

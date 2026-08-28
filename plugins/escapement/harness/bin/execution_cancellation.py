@@ -19,32 +19,10 @@ from __future__ import annotations
 
 import datetime as dt
 
-from execution_ledger import find_execution
+from execution_ledger import clear_resolution_residue, find_execution
+from execution_incident_validation import substantive_cancellation_reason
 
 UTC = dt.timezone.utc
-
-# Manual cancellation of an unreported child carries the same substance bar as
-# a `--<gate>-waiver` reason: one honest sentence, never a placeholder.
-CANCEL_REASON_MIN_CHARS = 20
-CANCEL_REASON_PLACEHOLDERS = frozenset(
-    {
-        "none",
-        "tbd",
-        "todo",
-        "wip",
-        "n/a",
-        "na",
-        "fixme",
-        "xxx",
-        "unknown",
-        "dead",
-        "stuck",
-        "?",
-        "??",
-        "???",
-    }
-)
-
 
 def _iso(now: dt.datetime) -> str:
     if (
@@ -94,30 +72,6 @@ def overdue_reason(item: dict, now: dt.datetime) -> str | None:
     return None
 
 
-def _substantive_reason(reason: object) -> str:
-    """Return a reason meeting the repo waiver substance bar, else raise.
-
-    The placeholder check is token-wise rather than whole-string so that
-    padding a null answer to length ("tbd tbd tbd tbd tbd tbd") does not buy
-    its way past the character floor.  One real word is enough to pass it; the
-    floor then does the rest.
-    """
-    if not isinstance(reason, str):
-        raise ValueError("reason must be a string")
-    stripped = reason.strip()
-    tokens = [token.strip("-–—.,;:()[]\"'") for token in stripped.lower().split()]
-    if tokens and all(
-        token in CANCEL_REASON_PLACEHOLDERS or not token for token in tokens
-    ):
-        raise ValueError(f"reason {stripped!r} is a placeholder, not a rationale")
-    if len(stripped) < CANCEL_REASON_MIN_CHARS:
-        raise ValueError(
-            f"reason must be at least {CANCEL_REASON_MIN_CHARS} characters and say "
-            f"why no result will arrive; got {len(stripped)}"
-        )
-    return stripped
-
-
 def cancel_unreported(
     ledger: dict,
     execution_id: str,
@@ -153,17 +107,36 @@ def cancel_unreported(
     reports.
     """
     timestamp = _iso(now)
-    substantive = _substantive_reason(reason)
+    substantive = substantive_cancellation_reason(reason)
     if not isinstance(actor, str) or not actor.strip():
         raise ValueError("actor must be a non-empty string")
+    canonical_actor = actor.strip()
     item = find_execution(ledger, execution_id)
     terminal_event_id = (
         f"unreported-cancel:{execution_id}:{item['attempt']}:{item['generation']}"
     )
     if item["state"] == "cancelled" and item["terminal_event_id"] == terminal_event_id:
-        return ledger
+        matches = [
+            incident
+            for incident in ledger.get("incidents", [])
+            if incident.get("type") == "unreported_child_cancelled"
+            and incident.get("execution_id") == execution_id
+            and incident.get("attempt") == item["attempt"]
+            and incident.get("generation") == item["generation"]
+        ]
+        if (
+            len(matches) == 1
+            and matches[0].get("actor") == canonical_actor
+            and matches[0].get("reason") == substantive
+        ):
+            return ledger
+        raise ValueError("cancellation replay conflicts with durable audit evidence")
     if item["state"] in {"terminal", "cancelled"}:
         raise ValueError("execution already has different terminal evidence")
+    if item["state"] == "unknown":
+        raise ValueError(
+            "execution state is unknown; resolve its host identity before cancellation"
+        )
     basis = overdue_reason(item, now)
     if basis is None:
         raise ValueError(
@@ -190,70 +163,18 @@ def cancel_unreported(
     item["result_digest"] = None
     item["last_activity_at"] = timestamp
     item["last_activity_kind"] = "terminal_event"
-    item["reconcile_due"] = None
+    clear_resolution_residue(item)
     ledger.setdefault("incidents", []).append(
         {
             "type": "unreported_child_cancelled",
             "execution_id": execution_id,
             "attempt": item["attempt"],
             "generation": item["generation"],
-            "actor": actor.strip(),
+            "actor": canonical_actor,
             "reason": substantive,
             "overdue_basis": basis,
             "state_before": state_before,
             "native_child_id": item["native_child_id"],
-            "recorded_at": timestamp,
-        }
-    )
-    ledger["updated_at"] = timestamp
-    return ledger
-
-
-def cancel_failed_dispatch(
-    ledger: dict,
-    execution_id: str,
-    now: dt.datetime,
-    *,
-    error: str,
-) -> dict:
-    """Release an execution whose dispatch the host itself rejected.
-
-    Distinct from `cancel_unreported` on purpose. There the evidence is
-    negative — silence — so a deadline must pass and a human-authored rationale
-    is required. Here the host reported, in its own PostToolUseFailure payload,
-    that no child was created at all. Waiting out a two-hour hard deadline
-    would be waiting for something that cannot happen, and demanding an
-    operator rationale would be asking a person to restate what the host
-    already said.
-
-    It is still a cancellation, never a result: `result_digest` stays null.
-    """
-    timestamp = _iso(now)
-    item = find_execution(ledger, execution_id)
-    terminal_event_id = (
-        f"dispatch-failed:{execution_id}:{item['attempt']}:{item['generation']}"
-    )
-    if item["state"] == "cancelled" and item["terminal_event_id"] == terminal_event_id:
-        return ledger
-    if item["state"] in {"terminal", "cancelled"}:
-        raise ValueError("execution already has different terminal evidence")
-    state_before = item["state"]
-    item["state"] = "cancelled"
-    item["terminal_at"] = timestamp
-    item["terminal_reason"] = "dispatch_failed"
-    item["terminal_event_id"] = terminal_event_id
-    item["result_digest"] = None
-    item["last_activity_at"] = timestamp
-    item["last_activity_kind"] = "terminal_event"
-    item["reconcile_due"] = None
-    ledger.setdefault("incidents", []).append(
-        {
-            "type": "dispatch_failed",
-            "execution_id": execution_id,
-            "attempt": item["attempt"],
-            "generation": item["generation"],
-            "host_error": error if isinstance(error, str) else "",
-            "state_before": state_before,
             "recorded_at": timestamp,
         }
     )

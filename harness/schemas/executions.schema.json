@@ -32,14 +32,14 @@
           "dispatch_tool_use_id": {"type": "string", "minLength": 1},
           "attempt": {"type": "integer", "minimum": 1},
           "generation": {"type": "integer", "minimum": 1},
-          "state": {"type": "string", "enum": ["queued", "running", "terminal", "cancelled", "unknown"]},
+          "state": {"type": "string", "enum": ["queued", "running", "terminal", "cancelled", "aborted", "unknown"]},
           "queued_at": {"type": "string", "format": "date-time"},
           "started_at": {"type": ["string", "null"], "format": "date-time"},
           "last_activity_at": {"type": ["string", "null"], "format": "date-time"},
           "last_activity_kind": {"type": ["string", "null"]},
-          "start_deadline": {"type": "string", "format": "date-time"},
-          "idle_deadline": {"type": "string", "format": "date-time"},
-          "hard_deadline": {"type": "string", "format": "date-time"},
+          "start_deadline": {"type": ["string", "null"], "format": "date-time"},
+          "idle_deadline": {"type": ["string", "null"], "format": "date-time"},
+          "hard_deadline": {"type": ["string", "null"], "format": "date-time"},
           "reconcile_due": {"enum": ["start", "idle", "hard", null]},
           "terminal_at": {"type": ["string", "null"], "format": "date-time"},
           "terminal_reason": {"type": ["string", "null"]},
@@ -60,15 +60,143 @@
               "applied_at": {"type": ["string", "null"], "format": "date-time"}
             }
           }
-        }
+        },
+        "allOf": [
+          {
+            "if": {"properties": {"state": {"enum": ["terminal", "cancelled", "aborted"]}}},
+            "then": {
+              "properties": {
+                "start_deadline": {"type": "null"},
+                "idle_deadline": {"type": "null"},
+                "hard_deadline": {"type": "null"},
+                "reconcile_due": {"type": "null"},
+                "recovery_claim": {"type": "null"}
+              }
+            }
+          },
+          {
+            "if": {"properties": {"state": {"enum": ["queued", "running", "unknown"]}}},
+            "then": {
+              "properties": {
+                "start_deadline": {"type": "string", "format": "date-time"},
+                "idle_deadline": {"type": "string", "format": "date-time"},
+                "hard_deadline": {"type": "string", "format": "date-time"},
+                "terminal_at": {"type": "null"},
+                "terminal_reason": {"type": "null"},
+                "terminal_event_id": {"type": "null"},
+                "result_digest": {"type": "null"}
+              }
+            }
+          },
+          {
+            "if": {"properties": {"state": {"const": "terminal"}}},
+            "then": {
+              "properties": {
+                "native_child_id": {"type": "string", "minLength": 1},
+                "terminal_at": {"type": "string", "format": "date-time"},
+                "terminal_reason": {"type": "string", "minLength": 1},
+                "terminal_event_id": {"type": "string", "minLength": 1},
+                "result_digest": {"type": "string", "minLength": 1}
+              }
+            }
+          },
+          {
+            "if": {"properties": {"state": {"const": "cancelled"}}},
+            "then": {
+              "properties": {
+                "native_child_id": {"type": ["string", "null"], "minLength": 1},
+                "terminal_at": {"type": "string", "format": "date-time"},
+                "terminal_reason": {"type": "string", "minLength": 1},
+                "terminal_event_id": {"type": "string", "minLength": 1},
+                "result_digest": {"type": "null"}
+              }
+            }
+          },
+          {
+            "if": {
+              "required": ["state", "native_child_id"],
+              "properties": {
+                "state": {"const": "cancelled"},
+                "native_child_id": {"type": "null"}
+              }
+            },
+            "then": {
+              "properties": {
+                "terminal_reason": {"const": "unreported_child_cancelled"},
+                "terminal_event_id": {
+                  "type": "string",
+                  "pattern": "^unreported-cancel:[^:]+:[1-9][0-9]*:[1-9][0-9]*$"
+                }
+              }
+            }
+          },
+          {
+            "if": {"properties": {"state": {"const": "aborted"}}},
+            "then": {
+              "properties": {
+                "native_child_id": {"type": "null"},
+                "started_at": {"type": "null"},
+                "last_activity_at": {"type": "null"},
+                "last_activity_kind": {"type": "null"},
+                "terminal_at": {"type": "string", "format": "date-time"},
+                "terminal_reason": {"type": "string", "minLength": 1},
+                "terminal_event_id": {"type": "string", "minLength": 1},
+                "result_digest": {"type": "null"}
+              }
+            }
+          }
+        ]
       }
     },
     "incidents": {
       "type": "array",
-      "items": {"type": "object"}
+      "items": {
+        "oneOf": [
+          {"$ref": "#/$defs/hostObservation"},
+          {"$ref": "#/$defs/dispatchFailure"},
+          {
+            "type": "object",
+            "not": {
+              "required": ["type"],
+              "properties": {
+                "type": {
+                  "enum": ["host_event_observation", "dispatch_failed"]
+                }
+              }
+            }
+          }
+        ]
+      }
     }
   },
   "$defs": {
+    "hostObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "execution_id", "attempt", "generation", "host_event_id", "event_fingerprint"],
+      "properties": {
+        "type": {"const": "host_event_observation"},
+        "execution_id": {"type": "string", "minLength": 1},
+        "attempt": {"type": "integer", "minimum": 1},
+        "generation": {"type": "integer", "minimum": 1},
+        "host_event_id": {"type": "string", "minLength": 1},
+        "event_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "dispatchFailure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "execution_id", "attempt", "generation", "host_error", "state_before", "recorded_at"],
+      "properties": {
+        "type": {"const": "dispatch_failed"},
+        "execution_id": {"type": "string", "minLength": 1},
+        "attempt": {"type": "integer", "minimum": 1},
+        "generation": {"type": "integer", "minimum": 1},
+        "host_error": {"type": "string"},
+        "state_before": {"const": "queued"},
+        "recorded_at": {"type": "string", "format": "date-time"}
+      }
+    },
     "recoveryClaim": {
       "oneOf": [
         {"type": "null"},

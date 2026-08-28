@@ -1,0 +1,30 @@
+{
+  "host": {
+    "product": "Claude Code",
+    "version": "2.1.248"
+  },
+  "raw_digest_mode": "sha256 of exact UTF-8 JSONL record bytes including LF",
+  "raw_record_sha256": "e30710835fb4942d7cbad13170eb866b2132ff9327f3aa1d7ee2a6e6857dae13",
+  "retained_json_pointers": [
+    "/hook_event_name",
+    "/session_id",
+    "/tool_name",
+    "/tool_use_id",
+    "/tool_input/name",
+    "/tool_input/run_in_background",
+    "/tool_input/subagent_type",
+    "/tool_response/status",
+    "/tool_response/isAsync",
+    "/tool_response/agentId"
+  ],
+  "sanitizer": {
+    "command": "python3 tools/sanitize_claude_lifecycle_fixtures.py --post-tool-stream harness/tests/fixtures/captures/claude-post-tool-2.1.248.raw.jsonl --post-tool-fixture harness/tests/fixtures/claude-post-tool-2.1.248.jsonl --post-tool-provenance harness/tests/fixtures/claude-post-tool-2.1.248.provenance.json",
+    "name": "sanitize_claude_lifecycle_fixtures.py",
+    "version": "1"
+  },
+  "schema_version": 1,
+  "source": {
+    "capture_id": "post_tool_stream",
+    "line": 1
+  }
+}

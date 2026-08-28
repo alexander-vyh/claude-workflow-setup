@@ -88,6 +88,46 @@ def applying_terminal() -> dict:
     return ledger
 
 
+def valid_aborted() -> dict:
+    ledger = valid_ledger()
+    item = ledger["executions"][0]
+    item["native_child_id"] = None
+    item["state"] = "aborted"
+    item["started_at"] = None
+    item["last_activity_at"] = None
+    item["last_activity_kind"] = None
+    item["start_deadline"] = None
+    item["idle_deadline"] = None
+    item["hard_deadline"] = None
+    item["reconcile_due"] = None
+    item["terminal_at"] = "2026-08-09T20:05:00Z"
+    item["terminal_reason"] = "native_dispatch_rejected_before_spawn"
+    item["terminal_event_id"] = "claude:no-spawn:16f6b6de"
+    item["result_digest"] = None
+    item["recovery_claim"] = None
+    return ledger
+
+
+def legacy_resolved(state: str) -> dict:
+    ledger = valid_ledger()
+    item = ledger["executions"][0]
+    item["state"] = state
+    item["terminal_at"] = "2026-08-09T20:05:00Z"
+    item["terminal_reason"] = "completed" if state == "terminal" else "cancelled"
+    item["terminal_event_id"] = f"{state}-legacy-900"
+    item["result_digest"] = "sha256:legacy-result" if state == "terminal" else None
+    item["reconcile_due"] = "idle"
+    item["recovery_claim"] = {
+        "owner": "legacy-supervisor",
+        "execution_id": "exec-alpha",
+        "attempt": 1,
+        "generation": 1,
+        "claimed_at": "2026-08-09T20:04:00Z",
+        "expires_at": "2026-08-09T20:04:30Z",
+    }
+    return ledger
+
+
 def write(path: pathlib.Path, ledger: dict) -> None:
     path.write_text(json.dumps(ledger))
     path.chmod(0o600)
@@ -99,6 +139,96 @@ def test_complete_running_execution_is_trusted_positive_control(tmp_path) -> Non
     write(path, ledger)
 
     assert ledger_api.load_trusted(path, "parent-7") == ledger
+
+
+def test_complete_aborted_execution_is_trusted_positive_control(tmp_path) -> None:
+    ledger = valid_aborted()
+    path = tmp_path / "executions.json"
+    write(path, ledger)
+
+    assert ledger_api.load_trusted(path, "parent-7") == ledger
+
+
+@pytest.mark.parametrize("state", ["terminal", "cancelled"])
+def test_version_one_legacy_resolved_ledger_normalizes_only_stale_resolution_residue(
+    tmp_path, state
+) -> None:
+    ledger = legacy_resolved(state)
+    path = tmp_path / "executions.json"
+    write(path, ledger)
+
+    loaded = ledger_api.load_trusted(path, "parent-7")
+
+    assert loaded is not None
+    item = loaded["executions"][0]
+    assert item["state"] == state
+    assert item["terminal_event_id"] == f"{state}-legacy-900"
+    assert item["result_digest"] == (
+        "sha256:legacy-result" if state == "terminal" else None
+    )
+    assert all(
+        item[field] is None
+        for field in ("start_deadline", "idle_deadline", "hard_deadline", "reconcile_due", "recovery_claim")
+    )
+
+
+def test_non_version_one_legacy_resolution_residue_is_not_normalized(tmp_path) -> None:
+    ledger = legacy_resolved("terminal")
+    ledger["version"] = 2
+    path = tmp_path / "executions.json"
+    write(path, ledger)
+
+    assert ledger_api.load_trusted(path, "parent-7") is None
+
+
+def test_malformed_host_observation_is_untrusted(tmp_path) -> None:
+    ledger = valid_ledger()
+    ledger["incidents"] = [
+        {
+            "type": "host_event_observation",
+            "execution_id": "exec-alpha",
+            "attempt": 1,
+            "generation": 1,
+            "host_event_id": "claude:malformed-observation",
+            "event_fingerprint": "not-a-sha256",
+        }
+    ]
+    path = tmp_path / "executions.json"
+    write(path, ledger)
+
+    assert ledger_api.load_trusted(path, "parent-7") is None
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("native_child_id", "fabricated-child"),
+        ("start_deadline", "2026-08-09T20:02:00Z"),
+        ("idle_deadline", "2026-08-09T20:15:00Z"),
+        ("hard_deadline", "2026-08-09T22:00:00Z"),
+        ("reconcile_due", "start"),
+        (
+            "recovery_claim",
+            {
+                "owner": "supervisor-a",
+                "execution_id": "exec-alpha",
+                "attempt": 1,
+                "generation": 1,
+                "claimed_at": "2026-08-09T20:04:00Z",
+                "expires_at": "2026-08-09T20:04:30Z",
+            },
+        ),
+    ],
+)
+def test_aborted_execution_with_identity_or_recovery_residue_is_unresolved(
+    tmp_path, field, value
+) -> None:
+    ledger = valid_aborted()
+    ledger["executions"][0][field] = value
+    path = tmp_path / "executions.json"
+    write(path, ledger)
+
+    assert ledger_api.load_trusted(path, "parent-7") is None
 
 
 @pytest.mark.parametrize(
@@ -377,13 +507,16 @@ def _local_execution_dependencies(path: pathlib.Path) -> set[str]:
 
 def test_extracted_modules_have_one_way_ownership_not_token_forwarding() -> None:
     ledger_path = BIN / "execution_ledger.py"
+    identity_path = BIN / "execution_event_identity.py"
     validation_path = BIN / "execution_validation.py"
     store_path = BIN / "execution_store.py"
 
     assert "execution_ledger" not in _imports(validation_path)
     assert "execution_ledger" not in _imports(store_path)
     assert "execution_store" in _imports(ledger_path)
+    assert "execution_event_identity" in _imports(ledger_path)
     assert "execution_validation" in _imports(store_path)
+    assert not _local_execution_dependencies(identity_path)
     assert _defined_functions(ledger_path).isdisjoint(
         {
             "_valid_timestamp",
@@ -399,9 +532,11 @@ def test_extracted_modules_have_one_way_ownership_not_token_forwarding() -> None
 
 def test_execution_module_dependencies_match_one_way_allowlist() -> None:
     expected = {
-        "execution_validation.py": set(),
+        "execution_incident_validation.py": set(),
+        "execution_validation.py": {"execution_incident_validation"},
         "execution_store.py": {"execution_validation"},
-        "execution_ledger.py": {"execution_store"},
+        "execution_event_identity.py": set(),
+        "execution_ledger.py": {"execution_event_identity", "execution_store"},
         "result_application.py": {"execution_store"},
     }
     assert {
@@ -412,7 +547,9 @@ def test_execution_module_dependencies_match_one_way_allowlist() -> None:
 def test_execution_modules_reject_dynamic_import_escape_hatches() -> None:
     paths = [
         BIN / "execution_validation.py",
+        BIN / "execution_incident_validation.py",
         BIN / "execution_store.py",
+        BIN / "execution_event_identity.py",
         BIN / "execution_ledger.py",
         BIN / "result_application.py",
     ]
@@ -514,6 +651,7 @@ def test_storage_primitives_exist_only_in_execution_store() -> None:
     paths = {
         "execution_validation.py": BIN / "execution_validation.py",
         "execution_store.py": BIN / "execution_store.py",
+        "execution_event_identity.py": BIN / "execution_event_identity.py",
         "execution_ledger.py": BIN / "execution_ledger.py",
         "result_application.py": BIN / "result_application.py",
     }
@@ -546,8 +684,10 @@ def test_execution_modules_stay_below_repository_soft_line_limit() -> None:
     paths = [
         BIN / "execution_ledger.py",
         BIN / "execution_validation.py",
+        BIN / "execution_incident_validation.py",
         BIN / "execution_store.py",
         BIN / "execution_cancellation.py",
+        BIN / "execution_event_identity.py",
         BIN / "result_application.py",
     ]
     counts = {path.name: len(path.read_text().splitlines()) for path in paths}

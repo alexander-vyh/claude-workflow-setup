@@ -36,10 +36,7 @@ cat > "$T/.claude/plugins/installed_plugins.json" <<JSON
   { "scope": "user", "installPath": "$CACHE", "version": "sha-current" }
 ] } }
 JSON
-cat > "$BIN/claude" <<'STUB'
-#!/usr/bin/env bash
-exit 0
-STUB
+ln -s "$REPO/tests/helpers/fake_delegation_canary_claude.py" "$BIN/claude"
 cat > "$BIN/uname" <<'STUB'
 #!/usr/bin/env bash
 printf 'Darwin\n'
@@ -94,6 +91,10 @@ ENV=(HOME="$T" PATH="$BIN:$PATH" ESCAPEMENT_PIN_REMOTE="$REPO" ESCAPEMENT_PIN_RE
 # Initial install creates the pinned checkout.
 env "${ENV[@]}" bash "$REPO/INSTALL.sh" >"$T/install.log" 2>&1 \
   || { cat "$T/install.log"; bad "initial install failed"; }
+python3 "$REPO/tests/helpers/fake_delegation_canary_claude.py" \
+  --assert-audit "$T/canary-audit.jsonl" \
+  && ok "initial install exercised armed native-hook canary" \
+  || bad "initial install did not exercise armed native-hook canary"
 PIN="$T/.claude/.escapement-pinned"
 [ -d "$PIN/.git" ] && ok "pinned checkout created" || bad "no pinned checkout at $PIN"
 
@@ -114,10 +115,15 @@ grep -qi "deploy-dir drift" "$T/u1.log" && ok "drift warning shown" || { cat "$T
 grep -q "INSTALL.sh" "$T/u1.log" && ok "drift listing names the drifted file" || bad "drift listing did not name the file"
 
 # --update WITH --allow-pinned-drift must PROCEED.
+rm -f "$T/canary-audit.jsonl"
 if env "${ENV[@]}" bash "$REPO/INSTALL.sh" --update --allow-pinned-drift >"$T/u2.log" 2>&1; then
   ok "--allow-pinned-drift proceeds"
 else
   cat "$T/u2.log"; bad "--allow-pinned-drift should proceed (exited non-zero)"
 fi
+python3 "$REPO/tests/helpers/fake_delegation_canary_claude.py" \
+  --assert-audit "$T/canary-audit.jsonl" \
+  && ok "allowed drift update exercised armed native-hook canary" \
+  || bad "allowed drift update did not exercise armed native-hook canary"
 
 [ "$fail" -eq 0 ] && { echo "PASS"; exit 0; } || { echo "FAILED"; exit 1; }

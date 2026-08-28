@@ -1027,6 +1027,7 @@ def late_generation_one_terminal() -> dict:
         "terminal_event_id": "late-generation-one-terminal",
         "terminal_reason": "completed",
         "result_digest": "sha256:late-generation-one",
+        "host_event_id": "claude:terminal:late-generation-one",
     }
 
 

@@ -57,6 +57,7 @@ def _ledger(state: str) -> dict:
             "attempt": 1,
             "generation": 1,
             "terminal_event_id": f"{state}-event",
+            "host_event_id": f"fixture:{state}-event",
             "terminal_reason": "completed elsewhere",
             "native_child_id": "completed-native-child",
         }
