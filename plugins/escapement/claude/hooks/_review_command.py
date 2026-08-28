@@ -24,6 +24,8 @@ agent never learns it dodged anything and no signal is produced:
   bd done X                         documented alias for `close`
   bd update X -s closed             `-s` is `--status`
   ID=x; bd close $ID                an unexpanded variable was read as the id
+  echo $(bd close X)                a substitution runs, but argv[0] was `echo`
+  bd create -d "`bd close`"         and the shell expands inside double quotes
 
 TWO LAYERS, DELIBERATELY REDUNDANT
 -----------------------------------
@@ -37,9 +39,18 @@ adds a flag. If anything unexpected lands in the positional slot, the answer is
 not wave through. A gate that fails open on the inputs it does not understand
 is only enforcing against inputs that were never a problem.
 
+The last two were found by accident rather than by reasoning: a backticked
+`bd close`, written as an *illustration* inside a `--description "..."`
+argument while filing an unrelated bead, was expanded by the shell and really
+closed the last-touched issue. Nothing in the gate saw a close. That is the
+worst shape a bypass can take — it needs no intent, produces no signal, and
+teaches nobody anything.
+
 Deliberately not handled: `eval "bd close X"`, `sh -c "bd close X"`, and a
 `bd close` inside a heredoc body. Those are conscious limits, not oversights —
-covering them needs a real shell interpreter.
+covering them needs a real shell interpreter. Command substitution used to be
+grouped with them; it does not belong there, because unlike `eval` it appears
+constantly in ordinary command lines.
 """
 
 from __future__ import annotations
@@ -52,6 +63,15 @@ import re
 # a close, and the gate would silently allow it. Punctuation in prose must not
 # be a bypass.
 _SEPARATORS = ("||", "&&", ";", "|", "\n")
+
+# Command substitution runs a real command, so it is a segment boundary too.
+# Crucially it is honoured INSIDE double quotes, because that is where the
+# shell expands it — which is how this was found: a backticked `bd close`
+# written as an illustration inside a `--description "..."` argument really
+# closed the last-touched issue, with the gate never seeing a close at all.
+# Single quotes still protect their contents, matching the shell.
+_SUBST_OPEN = "$("
+_SUBST_BACKTICK = "`"
 
 _ENV_ASSIGN_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", re.DOTALL)
 _TOKEN_RE = re.compile(r"(?:'[^']*'|\"[^\"]*\"|\S)+")
@@ -103,14 +123,53 @@ def segments(command: str) -> list[str]:
     Quote-aware: separators inside `'...'` or `"..."` are literal text, not
     command boundaries. A backslash escapes the next character outside single
     quotes, matching shell behaviour closely enough for this purpose.
+
+    Command substitutions are the exception to the double-quote rule, because
+    they are the exception in the shell: `"$(bd close x)"` runs, and so does
+    `` "`bd close x`" ``. Their contents therefore become segments of their own
+    even inside double quotes. A closing `)` only ends a substitution that was
+    opened — treating every `)` as a boundary would split a waiver reason
+    containing an ordinary parenthesis, stranding the `REVIEW_WAIVER=` prefix
+    in a different segment and quietly turning a valid waiver into an unwaived
+    close.
     """
     text = command or ""
     out: list[str] = []
     current: list[str] = []
     quote: str | None = None
+    depth = 0
     index = 0
+
+    def flush() -> None:
+        nonlocal current
+        out.append("".join(current))
+        current = []
+
     while index < len(text):
         char = text[index]
+
+        if quote == "'":
+            current.append(char)
+            if char == "'":
+                quote = None
+            index += 1
+            continue
+
+        # Checked before the double-quote branch: the shell expands these there.
+        if text.startswith(_SUBST_OPEN, index):
+            flush()
+            depth += 1
+            index += len(_SUBST_OPEN)
+            continue
+        if char == _SUBST_BACKTICK:
+            flush()
+            index += 1
+            continue
+        if char == ")" and depth > 0:
+            flush()
+            depth -= 1
+            index += 1
+            continue
 
         if quote:
             current.append(char)
@@ -138,15 +197,14 @@ def segments(command: str) -> list[str]:
             (sep for sep in _SEPARATORS if text.startswith(sep, index)), None
         )
         if separator:
-            out.append("".join(current))
-            current = []
+            flush()
             index += len(separator)
             continue
 
         current.append(char)
         index += 1
 
-    out.append("".join(current))
+    flush()
     return [segment.strip() for segment in out if segment.strip()]
 
 
