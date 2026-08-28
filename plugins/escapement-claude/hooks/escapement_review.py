@@ -78,8 +78,13 @@ def cmd_record(args: argparse.Namespace) -> int:
 
     reviewer = (args.reviewer or "").strip() or "unspecified"
 
-    # Corroboration is only claimable where the host can observe a dispatch.
-    if has_dispatch(bead_id, os.environ.get("CLAUDE_SESSION_ID")):
+    # Corroboration is only claimable where the host can observe a dispatch,
+    # AND only for a dispatch that read THIS state of the work. Passing the
+    # fingerprint is what binds review->record: without it, an implementer
+    # could have a reviewer read state A, rewrite everything, and record at
+    # state B with the reviewer's blessing still attached.
+    fingerprint = work_fingerprint(args.cwd)
+    if has_dispatch(bead_id, os.environ.get("CLAUDE_SESSION_ID"), fingerprint):
         independent: object = True
     else:
         independent = "unverified"
@@ -88,7 +93,7 @@ def cmd_record(args: argparse.Namespace) -> int:
         bead_id=bead_id,
         findings=findings or "",
         reviewer=reviewer,
-        fingerprint=work_fingerprint(args.cwd),
+        fingerprint=fingerprint,
         recorded_at=dt.datetime.now(dt.timezone.utc).isoformat(),
         host=args.host,
     )
@@ -105,11 +110,15 @@ def cmd_record(args: argparse.Namespace) -> int:
     print(f"Recorded independent review of {bead_id} (reviewer={reviewer}).")
     if independent is not True:
         print(
-            "  independence: unverified — no isolated reviewer dispatch was "
-            "observable for this bead.\n"
+            "  independence: unverified — no isolated reviewer dispatch matching "
+            "the current state of the work was observable for this bead.\n"
+            "  Either no reviewer was dispatched, or the code changed after it "
+            "read it — a reviewer that read an earlier state does not vouch for "
+            "this one.\n"
             "  On Claude, dispatch one of "
             f"{', '.join(sorted(INDEPENDENT_REVIEWER_TYPES))} naming {bead_id} "
-            "and re-record; on Codex this is the honest maximum."
+            "and re-record without editing in between; on Codex this is the "
+            "honest maximum."
         )
     return 0
 

@@ -254,7 +254,7 @@ class TestRecordingCLI:
         assert calls[0][1]["fingerprint"] == FP
 
     def test_marks_independence_unverified_without_a_dispatch(self, monkeypatch):
-        monkeypatch.setattr(cli, "has_dispatch", lambda _b, _s=None: False)
+        monkeypatch.setattr(cli, "has_dispatch", lambda _b, _s=None, _f=None: False)
         _, calls = self._run(
             ["record", "--bead", "escapement-abc1", "--findings", LONG],
             monkeypatch,
@@ -262,12 +262,35 @@ class TestRecordingCLI:
         assert calls[0][1]["independent"] == "unverified"
 
     def test_marks_independence_true_with_a_dispatch(self, monkeypatch):
-        monkeypatch.setattr(cli, "has_dispatch", lambda _b, _s=None: True)
+        monkeypatch.setattr(cli, "has_dispatch", lambda _b, _s=None, _f=None: True)
         _, calls = self._run(
             ["record", "--bead", "escapement-abc1", "--findings", LONG],
             monkeypatch,
         )
         assert calls[0][1]["independent"] is True
+
+    def test_the_current_fingerprint_is_what_gets_checked(self, monkeypatch):
+        """Binds review->record: the dispatch must have read THIS state.
+
+        Passing the fingerprint through is the entire fix for "reviewer reads
+        state A, implementer rewrites, records at state B". If the CLI ever
+        stops forwarding it, that attack silently works again.
+        """
+        seen = {}
+
+        def spy(bead, session=None, fingerprint=None):
+            seen.update(bead=bead, fingerprint=fingerprint)
+            return True
+
+        monkeypatch.setattr(cli, "has_dispatch", spy)
+        self._run(
+            ["record", "--bead", "escapement-abc1", "--findings", LONG],
+            monkeypatch,
+        )
+        assert seen["bead"] == "escapement-abc1"
+        assert seen["fingerprint"] == FP, (
+            "the dispatch check must be given the CURRENT work fingerprint"
+        )
 
     def test_reads_findings_from_a_file(self, monkeypatch, tmp_path):
         verdict = tmp_path / "verdict.md"
