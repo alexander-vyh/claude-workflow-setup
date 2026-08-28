@@ -219,23 +219,28 @@ def find_dispatch(
 
 
 def _candidate_paths(session_id: str | None) -> list[Path]:
+    """Ledger files a lookup may read. Without a session id: none.
+
+    This used to fall back to globbing EVERY session's ledger in the shared,
+    machine-wide `/tmp/claude-review-gate`, keeping any file touched within
+    `MAX_DISPATCH_AGE_SECONDS` and blind to which repository produced it. The
+    fallback was not an edge case: `escapement_review.py` sources the id from
+    `CLAUDE_SESSION_ID`, which is unset in this environment, so the glob was
+    the ONLY branch that ever ran. One repository's reviewer verdict could
+    therefore corroborate another repository's bead, and a `bd close` in repo B
+    could be denied by blocking findings a reviewer produced in repo A.
+
+    Returning nothing is fail-OPEN at both call sites, deliberately: the review
+    gate leaves `blocked` False, and `escapement_review` records the review as
+    `"unverified"` instead of borrowing another session's findings. An
+    unverified-but-honest record beats a confidently mis-attributed one.
+
+    Restoring a cross-session lookup requires a real session identifier, not a
+    wider search.
+    """
     if session_id:
         return [ledger_path(session_id)]
-    if not _dir_is_trusted(LEDGER_DIR):
-        return []
-    try:
-        candidates = sorted(LEDGER_DIR.glob("*.json"))
-    except OSError:
-        return []
-    now = time.time()
-    fresh: list[Path] = []
-    for path in candidates:
-        try:
-            if now - path.stat().st_mtime <= MAX_DISPATCH_AGE_SECONDS:
-                fresh.append(path)
-        except OSError:
-            continue
-    return fresh
+    return []
 
 
 def has_dispatch(
