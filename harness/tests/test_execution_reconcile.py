@@ -37,6 +37,12 @@ BEAD = "escapement-e3ai.5"
 ROOT = "escapement-e3ai"
 EXECUTION = "exec-reconcile-alpha"
 
+# Wall-clock hang guard for subprocess completion. Deliberately generous: it
+# exists so a genuine deadlock fails the run instead of hanging it forever, and
+# it asserts nothing about how fast a healthy run is. The real timing invariant
+# is the bounded `select` while the lock is held.
+SUBPROCESS_HANG_GUARD_SECONDS = 60
+
 
 def at(value: str) -> dt.datetime:
     return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
@@ -631,7 +637,13 @@ def test_public_sessionstart_emits_only_after_durable_reconciliation(tmp_path) -
             fcntl.flock(lock_file, fcntl.LOCK_UN)
 
     assert process is not None
-    stdout, stderr = process.communicate(timeout=5)
+    # Hang guard, NOT part of the oracle. The invariant is the pair of
+    # assertions above — nothing readable and no exit while the lock is held.
+    # This budget only has to be longer than a healthy run, and a healthy run
+    # here starts two interpreters (this hook, then the fake `bd`). At 5s it
+    # went red on a machine running concurrent suites; the same pattern
+    # elsewhere in this suite already allows 15s.
+    stdout, stderr = process.communicate(timeout=SUBPROCESS_HANG_GUARD_SECONDS)
     assert process.returncode == 0, stderr
     output = json.loads(stdout)
     context = output["hookSpecificOutput"]["additionalContext"]
