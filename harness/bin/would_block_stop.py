@@ -289,9 +289,11 @@ def execution_stop_decision(
             return ("allow", "delegated_outcome_complete")
         return ("block", "parent_outcome_unresolved")
 
-    # Without supervisor/wakeup evidence, an unbound queued dispatch has no
-    # trusted native identity.  Even after its timer elapses it remains
-    # unresolved rather than becoming an observed overdue child.
+    if any(_deadline_due(execution, now) for execution in active):
+        return ("block", "delegated_execution_overdue")
+
+    # Before its timer elapses, an unbound queued dispatch without supervisor
+    # or wake evidence has no trusted native identity and remains unresolved.
     if (
         not scheduled
         and health is None
@@ -301,9 +303,6 @@ def execution_stop_decision(
         )
     ):
         return ("block", "delegated_execution_unresolved")
-
-    if any(_deadline_due(execution, now) for execution in active):
-        return ("block", "delegated_execution_overdue")
 
     wakes = [
         _matching_managed_wake(execution, ledger["parent_session_id"], scheduled, now)

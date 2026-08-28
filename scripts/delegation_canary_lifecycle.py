@@ -14,6 +14,7 @@ from delegation_canary_evidence import (
     terminal_record,
     verify_candidate_plugin,
     verify_dispatch_hook_responses,
+    verify_post_tool_hook_responses,
     verify_overlap,
     verify_peer_dependency,
 )
@@ -46,6 +47,7 @@ def require_registered_dispatches(
     records: list[dict], ledger_path: Path, session_id: str, api
 ) -> dict:
     verify_dispatch_hook_responses(records)
+    launched = verify_post_tool_hook_responses(records)
     current = api["store"].load_trusted(ledger_path, session_id)
     if current is None or current.get("parent_session_id") != session_id:
         raise CanaryFailure("managed_completion_unresolved")
@@ -64,12 +66,21 @@ def require_registered_dispatches(
             or execution.get("bead_id") != "canary-root"
             or execution.get("attempt") != 1
             or execution.get("generation") != 1
-            or execution.get("state") != "queued"
-            or execution.get("native_child_id") is not None
             or not isinstance(execution.get("execution_id"), str)
             or not execution["execution_id"]
             or not isinstance(execution.get("watchdog_id"), str)
             or not execution["watchdog_id"]
+        ):
+            raise CanaryFailure("managed_completion_unresolved")
+        if dispatch_id in launched:
+            if (
+                execution.get("state") not in {"running", "terminal"}
+                or execution.get("native_child_id") != launched[dispatch_id]
+            ):
+                raise CanaryFailure("managed_completion_unresolved")
+        elif not (
+            execution.get("state") in {"queued", "aborted"}
+            and execution.get("native_child_id") is None
         ):
             raise CanaryFailure("managed_completion_unresolved")
     if len({item["execution_id"] for item in executions}) != len(executions):

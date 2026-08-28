@@ -852,7 +852,9 @@ def test_invalid_interactive_spawn_identity_shapes_produce_no_events_or_mutation
     assert observed == []
     assert ledger == before
     assert item(ledger)["native_child_id"] is None
-    assert completion(ledger) == ("block", "delegated_execution_unresolved")
+    assert stop_policy.execution_stop_decision(
+        "closed", ledger, None, [], at("2026-08-27T18:00:23Z")
+    ) == ("block", "delegated_execution_unresolved")
 
 
 @pytest.mark.parametrize(

@@ -7,6 +7,8 @@ import copy
 import datetime as dt
 from typing import Any
 
+from execution_incident_validation import validate_incidents
+
 UTC = dt.timezone.utc
 EXECUTION_STATES = {"queued", "running", "terminal", "cancelled", "aborted", "unknown"}
 RECONCILE_STATES = {None, "start", "idle", "hard"}
@@ -62,14 +64,6 @@ _RECOVERY_CLAIM_KEYS = {
     "expires_at",
 }
 _APPLICATION_CLAIM_KEYS = _RECOVERY_CLAIM_KEYS | {"claim_generation"}
-_HOST_OBSERVATION_KEYS = {
-    "type",
-    "execution_id",
-    "attempt",
-    "generation",
-    "host_event_id",
-    "event_fingerprint",
-}
 
 
 def _parse(value: str) -> dt.datetime:
@@ -176,9 +170,20 @@ def _valid_terminal_state(item: dict) -> bool:
         # unterminalizable. `terminal` still requires it — a real result digest
         # implies a real child that produced it — and a cancelled execution
         # still carries no result_digest, so it can never be mistaken for one.
-        return (
+        if not (
             all(_nonempty_text(item[key]) for key in terminal_fields)
             and item["result_digest"] is None
+        ):
+            return False
+        if item["native_child_id"] is not None:
+            return True
+        return (
+            item["terminal_reason"] == "unreported_child_cancelled"
+            and item["terminal_event_id"]
+            == (
+                f"unreported-cancel:{item['execution_id']}:"
+                f"{item['attempt']}:{item['generation']}"
+            )
         )
     if state == "aborted":
         return (
@@ -250,23 +255,6 @@ def normalize_legacy_resolved_ledger(value: Any) -> Any:
             ):
                 item[field] = None
     return normalized
-
-
-def _valid_host_observation(incident: dict, executions: dict[str, dict]) -> bool:
-    if set(incident) != _HOST_OBSERVATION_KEYS:
-        return False
-    execution = executions.get(incident.get("execution_id"))
-    fingerprint = incident.get("event_fingerprint")
-    return (
-        execution is not None
-        and _integer(incident.get("attempt"), minimum=1)
-        and incident["attempt"] == execution["attempt"]
-        and _integer(incident.get("generation"), minimum=1)
-        and _nonempty_text(incident.get("host_event_id"))
-        and isinstance(fingerprint, str)
-        and len(fingerprint) == 64
-        and set(fingerprint) <= set("0123456789abcdef")
-    )
 
 
 def _valid_execution(item: Any) -> bool:
@@ -375,13 +363,4 @@ def is_valid_ledger(value: Any) -> bool:
     ):
         return False
     executions_by_id = {item["execution_id"]: item for item in executions}
-    observations = [
-        item for item in incidents if item.get("type") == "host_event_observation"
-    ]
-    if not all(
-        _valid_host_observation(item, executions_by_id) for item in observations
-    ):
-        return False
-    if len({item["host_event_id"] for item in observations}) != len(observations):
-        return False
-    return True
+    return validate_incidents(incidents, executions_by_id)

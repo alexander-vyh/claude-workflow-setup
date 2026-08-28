@@ -103,6 +103,55 @@ def verify_dispatch_hook_responses(records: list[dict]) -> None:
             raise CanaryFailure("managed_completion_unresolved")
 
 
+def async_launches(records: list[dict]) -> list[tuple[int, dict, str, str]]:
+    """Return exact background launch receipts and their host child identity."""
+    found = []
+    for index, record in enumerate(records):
+        item = tool_content(record)
+        result = record.get("tool_use_result") if isinstance(record, dict) else None
+        tool_id = item.get("tool_use_id") if isinstance(item, dict) else None
+        child_id = result.get("agentId") if isinstance(result, dict) else None
+        if (
+            isinstance(item, dict)
+            and item.get("type") == "tool_result"
+            and isinstance(tool_id, str)
+            and tool_id
+            and isinstance(result, dict)
+            and result.get("status") == "async_launched"
+            and result.get("isAsync") is True
+            and isinstance(child_id, str)
+            and child_id
+        ):
+            found.append((index, record, tool_id, child_id))
+    return found
+
+
+def verify_post_tool_hook_responses(records: list[dict]) -> dict[str, str]:
+    """Require public PostToolUse success before each native launch receipt."""
+    launches = async_launches(records)
+    if len(launches) != 3:
+        raise CanaryFailure("managed_completion_unresolved")
+    previous_launch_index = -1
+    for launch_index, launch_record, _tool_id, _child_id in launches:
+        matches = [
+            record
+            for record in records[previous_launch_index + 1 : launch_index]
+            if record.get("type") == "system"
+            and record.get("subtype") == "hook_response"
+            and record.get("hook_event") == "PostToolUse"
+            and record.get("hook_name") == "PostToolUse:Agent"
+            and record.get("session_id") == launch_record.get("session_id")
+            and record.get("output") == record.get("stdout") == ""
+            and record.get("stderr") == ""
+            and record.get("exit_code") == 0
+            and record.get("outcome") == "success"
+        ]
+        if not matches:
+            raise CanaryFailure("managed_completion_unresolved")
+        previous_launch_index = launch_index
+    return {tool_id: child_id for _index, _record, tool_id, child_id in launches}
+
+
 def verify_unmanaged_hook_response(
     records: list[dict], dispatch_index: int, dispatch_record: dict, start_index: int
 ) -> None:
@@ -244,14 +293,17 @@ def verify_overlap(records: list[dict], terminal: list[dict]) -> None:
 
 
 def terminal_record(records: list[dict], execution: dict) -> tuple[int, dict] | None:
+    terminal_event_id = execution.get("terminal_event_id")
+    native_child_id = execution.get("native_child_id")
+    public_stop_id = f"subagent-stop:{native_child_id}"
     matches = [
         (index, record) for index, record in enumerate(records)
         if record.get("type") == "system"
         and record.get("subtype") == "task_notification"
         and record.get("status") == "completed"
         and record.get("tool_use_id") == execution.get("dispatch_tool_use_id")
-        and record.get("task_id") == execution.get("native_child_id")
-        and record.get("uuid") == execution.get("terminal_event_id")
+        and record.get("task_id") == native_child_id
+        and (record.get("uuid") == terminal_event_id or terminal_event_id == public_stop_id)
     ]
     return matches[0] if len(matches) == 1 else None
 

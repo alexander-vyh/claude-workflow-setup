@@ -169,6 +169,7 @@ def _make_terminal(thread_dir: pathlib.Path, execution_id: str) -> None:
             {
                 **base,
                 "kind": "child_terminal",
+                "host_event_id": "host-terminal-1",
                 "terminal_event_id": "terminal-1",
                 "terminal_reason": "completed",
                 "result_digest": "sha256:deadbeef",
@@ -255,6 +256,25 @@ def test_cancellation_is_audited_with_actor_reason_and_crossed_deadline(
     assert incident["reason"] == GOOD_REASON
     assert incident["overdue_basis"] == "hard"
     assert incident["state_before"] == "queued"
+    assert incident["native_child_id"] is None
+    assert _only(_ledger(thread_dir))["native_child_id"] is None
+    assert set(incident) == {
+        "type",
+        "execution_id",
+        "attempt",
+        "generation",
+        "actor",
+        "reason",
+        "overdue_basis",
+        "state_before",
+        "native_child_id",
+        "recorded_at",
+    }
+    assert "host_event_id" not in incident
+    assert not any(
+        entry.get("type") == "host_event_observation"
+        for entry in _ledger(thread_dir)["incidents"]
+    )
 
 
 def test_cancelling_never_claims_the_child_produced_a_result(tmp_path) -> None:
@@ -281,6 +301,51 @@ def test_cancelling_never_claims_the_child_produced_a_result(tmp_path) -> None:
     assert item["state"] == "cancelled"
     assert item["result_digest"] is None
     assert item["result_application"]["state"] == "unapplied"
+
+
+def test_cancel_clears_every_deadline_and_recovery_claim(tmp_path) -> None:
+    """A cancelled ledger must satisfy the resolved-state storage contract."""
+    thread_dir = _thread(tmp_path)
+    execution_id = _dispatch(thread_dir)
+    overdue = _clock(thread_dir, hours=3)
+
+    def claim(current: dict) -> dict:
+        ledger_api.reconcile_deadlines(current, overdue)
+        assert ledger_api.claim_recovery(
+            current, execution_id, overdue, "supervisor-a", 30
+        ) is not None
+        return current
+
+    mutate_atomic(thread_dir / "executions.json", claim)
+    assert (
+        _cli(
+            "cancel",
+            "--session",
+            SESSION,
+            "--ledger-path",
+            str(thread_dir / "executions.json"),
+            "--execution-id",
+            execution_id,
+            "--reason",
+            GOOD_REASON,
+            "--now",
+            _iso(overdue),
+        )
+        == 0
+    )
+
+    item = _only(_ledger(thread_dir))
+    assert item["state"] == "cancelled"
+    assert all(
+        item[field] is None
+        for field in (
+            "start_deadline",
+            "idle_deadline",
+            "hard_deadline",
+            "reconcile_due",
+            "recovery_claim",
+        )
+    )
     # The result-application claim is the gate that guards "was this consumed".
     # A cancellation must never become claimable as a consumable result.
     assert (
@@ -317,7 +382,10 @@ def test_cancel_is_idempotent_and_records_one_incident(tmp_path) -> None:
     )
 
     assert _cli(*argv) == 0
+    path = thread_dir / "executions.json"
+    first = path.read_bytes()
     assert _cli(*argv) == 0
+    assert path.read_bytes() == first
 
     ledger = _ledger(thread_dir)
     assert _only(ledger)["state"] == "cancelled"
@@ -331,6 +399,75 @@ def test_cancel_is_idempotent_and_records_one_incident(tmp_path) -> None:
         )
         == 1
     )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("--actor", "different-operator"),
+        ("--reason", "a conflicting rationale for the same cancellation replay"),
+    ],
+)
+def test_cancel_replay_rejects_conflicting_audit_semantics(
+    tmp_path, field, value
+) -> None:
+    thread_dir = _thread(tmp_path)
+    execution_id = _dispatch(thread_dir)
+    overdue = _clock(thread_dir, hours=3)
+    argv = [
+        "cancel",
+        "--session",
+        SESSION,
+        "--ledger-path",
+        str(thread_dir / "executions.json"),
+        "--execution-id",
+        execution_id,
+        "--reason",
+        GOOD_REASON,
+        "--actor",
+        "operator-original",
+        "--now",
+        _iso(overdue),
+    ]
+    assert _cli(*argv) == 0
+    before = (thread_dir / "executions.json").read_bytes()
+    argv[argv.index(field) + 1] = value
+
+    assert _cli(*argv) == 2
+    assert (thread_dir / "executions.json").read_bytes() == before
+
+
+def test_cancel_explicitly_refuses_unknown_execution_state(tmp_path) -> None:
+    thread_dir = _thread(tmp_path)
+    execution_id = _dispatch(thread_dir)
+    path = thread_dir / "executions.json"
+
+    def make_unknown(current: dict) -> dict:
+        current["executions"][0]["state"] = "unknown"
+        return current
+
+    mutate_atomic(path, make_unknown)
+    overdue = _clock(thread_dir, hours=3)
+
+    assert (
+        _cli(
+            "cancel",
+            "--session",
+            SESSION,
+            "--ledger-path",
+            str(path),
+            "--execution-id",
+            execution_id,
+            "--reason",
+            GOOD_REASON,
+            "--now",
+            _iso(overdue),
+        )
+        == 2
+    )
+    ledger = _ledger(thread_dir)
+    assert _only(ledger)["state"] == "unknown"
+    assert ledger["incidents"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -594,6 +731,43 @@ def test_an_unreadable_deadline_is_never_evidence_of_being_overdue(damage) -> No
     }
     far_future = dt.datetime(2030, 1, 1, tzinfo=UTC)
     assert execution_cancellation.overdue_reason(item, far_future) is None
+
+
+def test_public_cancel_refuses_a_malformed_durable_deadline_without_mutation(
+    tmp_path,
+) -> None:
+    """Untrusted durable timing evidence cannot license public cancellation."""
+    thread_dir = _thread(tmp_path)
+    execution_id = _dispatch(thread_dir)
+    path = thread_dir / "executions.json"
+    damaged = json.loads(path.read_text(encoding="utf-8"))
+    item = _only(damaged)
+    item["start_deadline"] = "later on"
+    item["hard_deadline"] = "2031-01-01T00:00:00Z"
+    path.write_text(json.dumps(damaged), encoding="utf-8")
+    path.chmod(0o600)
+    before = path.read_bytes()
+
+    assert (
+        _cli(
+            "cancel",
+            "--session",
+            SESSION,
+            "--ledger-path",
+            str(path),
+            "--execution-id",
+            execution_id,
+            "--reason",
+            GOOD_REASON,
+            "--now",
+            "2030-01-01T00:00:00Z",
+        )
+        == 2
+    )
+    assert path.read_bytes() == before
+    after = json.loads(before)
+    assert _only(after)["state"] == "queued"
+    assert after["incidents"] == []
 
 
 @pytest.mark.parametrize(

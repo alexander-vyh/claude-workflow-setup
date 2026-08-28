@@ -131,6 +131,7 @@ CODEX_HOOK_SUPPORT = {
     "harness/bin/execution_event_identity.py",
     "harness/bin/execution_parent.py",
     "harness/bin/execution_store.py",
+    "harness/bin/execution_incident_validation.py",
     "harness/bin/execution_validation.py",
     # execution_reconcile's `cancel` escape and its gate-signal write; without
     # these the bundled reconciler cannot import and the Stop denial names a

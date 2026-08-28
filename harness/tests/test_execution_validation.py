@@ -532,7 +532,8 @@ def test_extracted_modules_have_one_way_ownership_not_token_forwarding() -> None
 
 def test_execution_module_dependencies_match_one_way_allowlist() -> None:
     expected = {
-        "execution_validation.py": set(),
+        "execution_incident_validation.py": set(),
+        "execution_validation.py": {"execution_incident_validation"},
         "execution_store.py": {"execution_validation"},
         "execution_event_identity.py": set(),
         "execution_ledger.py": {"execution_event_identity", "execution_store"},
@@ -546,6 +547,7 @@ def test_execution_module_dependencies_match_one_way_allowlist() -> None:
 def test_execution_modules_reject_dynamic_import_escape_hatches() -> None:
     paths = [
         BIN / "execution_validation.py",
+        BIN / "execution_incident_validation.py",
         BIN / "execution_store.py",
         BIN / "execution_event_identity.py",
         BIN / "execution_ledger.py",
@@ -682,6 +684,7 @@ def test_execution_modules_stay_below_repository_soft_line_limit() -> None:
     paths = [
         BIN / "execution_ledger.py",
         BIN / "execution_validation.py",
+        BIN / "execution_incident_validation.py",
         BIN / "execution_store.py",
         BIN / "execution_cancellation.py",
         BIN / "execution_event_identity.py",

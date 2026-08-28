@@ -217,8 +217,15 @@ def _resolution_fields(kind: str, event: dict) -> dict[str, str]:
     return fields
 
 
-def _clear_resolution_residue(item: dict) -> None:
-    for field in ("start_deadline", "idle_deadline", "hard_deadline", "reconcile_due", "recovery_claim"):
+def clear_resolution_residue(item: dict) -> None:
+    """Clear active-only coordination state after an execution resolves."""
+    for field in (
+        "start_deadline",
+        "idle_deadline",
+        "hard_deadline",
+        "reconcile_due",
+        "recovery_claim",
+    ):
         item[field] = None
 
 
@@ -310,7 +317,7 @@ def _apply_event(ledger: dict, event: dict, now: dt.datetime) -> dict:
         item["result_digest"] = resolution["result_digest"]
         item["last_activity_at"] = timestamp
         item["last_activity_kind"] = "terminal_event"
-        _clear_resolution_residue(item)
+        clear_resolution_residue(item)
     elif kind == "child_cancelled":
         terminal_event_id = resolution["terminal_event_id"]
         if (
@@ -327,7 +334,7 @@ def _apply_event(ledger: dict, event: dict, now: dt.datetime) -> dict:
         item["terminal_event_id"] = terminal_event_id
         item["last_activity_at"] = timestamp
         item["last_activity_kind"] = "terminal_event"
-        _clear_resolution_residue(item)
+        clear_resolution_residue(item)
     elif kind == "dispatch_aborted":
         if item["state"] != "queued" or item["native_child_id"] is not None:
             raise ValueError("dispatch can be aborted only while queued and unbound")
@@ -336,7 +343,7 @@ def _apply_event(ledger: dict, event: dict, now: dt.datetime) -> dict:
         item["terminal_reason"] = resolution["terminal_reason"]
         item["terminal_event_id"] = resolution["host_event_id"]
         item["result_digest"] = None
-        _clear_resolution_residue(item)
+        clear_resolution_residue(item)
     # snapshot_reconciled and the three diagnostic kinds are recognized but
     # intentionally cannot renew activity or deadlines.
     record_host_event(ledger.setdefault("incidents", []), event, observation)

@@ -334,6 +334,26 @@ def fake_claude(path: Path) -> Path:
         "   else: observed.append(response)\n"
         "  if pending is not None and item.get('input',{}).get('name') == 'canary-child-3': observed.append(pending); pending=None\n"
         " if pending is not None: observed.append(pending)\n"
+        " if count != 0 and os.environ.get('FAKE_INVOKE_MANAGED_POSTTOOL') == '1':\n"
+        "  dispatch_inputs={}\n"
+        "  for record in records:\n"
+        "   content=record.get('message',{}).get('content',[])\n"
+        "   item=content[0] if len(content)==1 and isinstance(content[0],dict) else {}\n"
+        "   if item.get('type')=='tool_use' and item.get('name')=='Agent': dispatch_inputs[item.get('id')]=item.get('input')\n"
+        "  completed=[]\n"
+        "  for record in observed:\n"
+        "   content=record.get('message',{}).get('content',[])\n"
+        "   item=content[0] if len(content)==1 and isinstance(content[0],dict) else {}\n"
+        "   result=record.get('tool_use_result')\n"
+        "   tool_id=item.get('tool_use_id')\n"
+        "   tool_input=dispatch_inputs.get(tool_id)\n"
+        "   if not isinstance(result,dict) or result.get('status')!='async_launched' or not isinstance(tool_input,dict): completed.append(record); continue\n"
+        "   payload={'hook_event_name':'PostToolUse','tool_name':'Agent','session_id':record.get('session_id'),'tool_use_id':tool_id,'tool_input':tool_input,'tool_response':{'status':result.get('status'),'isAsync':result.get('isAsync'),'agentId':result.get('agentId')}}\n"
+        "   mode=os.environ.get('FAKE_MANAGED_POSTTOOL_MODE','ok')\n"
+        "   hook=subprocess.CompletedProcess([],0,'','') if mode == 'noop' else subprocess.run([sys.executable,'-B',str(pathlib.Path(plugin_dir)/'harness/bin/delegation_hook.py')],input=json.dumps(payload),capture_output=True,text=True,env=os.environ)\n"
+        "   completed.append({'type':'system','subtype':'hook_response','hook_id':str(uuid.uuid4()),'hook_name':'PostToolUse:Agent','hook_event':'PostToolUse','output':hook.stdout,'stdout':hook.stdout,'stderr':hook.stderr,'exit_code':hook.returncode,'outcome':'success' if hook.returncode==0 else 'error','session_id':record.get('session_id')})\n"
+        "   completed.append(record)\n"
+        "  observed=completed\n"
         " records=observed\n"
         "sys.stdout.write(''.join(json.dumps(record)+'\\n' for record in records))\n",
         encoding="utf-8",
@@ -376,6 +396,8 @@ def run_canary(
     claude_path_mode: str = "absolute",
     invoke_unmanaged_hook: bool = True,
     invoke_managed_hooks: bool = True,
+    invoke_managed_posttool: bool = True,
+    managed_posttool_mode: str = "ok",
     emit_unmanaged_hook_response: bool = True,
     emit_managed_hook_responses: bool = True,
     unmanaged_hook_mode: str = "ok",
@@ -443,6 +465,10 @@ def run_canary(
                 "1" if invoke_unmanaged_hook else "0"
             ),
             "FAKE_INVOKE_MANAGED_AGENT_HOOKS": "1" if invoke_managed_hooks else "0",
+            "FAKE_INVOKE_MANAGED_POSTTOOL": (
+                "1" if invoke_managed_posttool else "0"
+            ),
+            "FAKE_MANAGED_POSTTOOL_MODE": managed_posttool_mode,
             "FAKE_EMIT_UNMANAGED_HOOK_RESPONSE": (
                 "1" if emit_unmanaged_hook_response else "0"
             ),
@@ -488,6 +514,44 @@ def test_isolated_canary_proves_unmanaged_and_managed_public_outcomes(tmp_path) 
     ]
 
 
+def test_fake_host_uses_real_posttool_response_shape(tmp_path) -> None:
+    result, _output = run_canary(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    streams = list((tmp_path / "scratch" / "config").glob("*.stdout.jsonl"))
+    responses = []
+    for stream in streams:
+        responses.extend(
+            record
+            for record in (
+                json.loads(line) for line in stream.read_text().splitlines()
+            )
+                if record.get("hook_event") == "PostToolUse"
+                and record.get("hook_name") == "PostToolUse:Agent"
+                and record.get("subtype") == "hook_response"
+            )
+    assert len(responses) == 3
+    assert all("tool_use_id" not in record for record in responses)
+
+
+def test_terminal_witness_accepts_public_subagent_stop_identity() -> None:
+    load_lifecycle_module()
+    records = managed_stream()
+    terminal = next(
+        record
+        for record in records
+        if record.get("subtype") == "task_notification"
+        and record.get("task_id") == "canary-native-2"
+    )
+    execution = {
+        "dispatch_tool_use_id": terminal["tool_use_id"],
+        "native_child_id": terminal["task_id"],
+        "terminal_event_id": "subagent-stop:canary-native-2",
+    }
+    from delegation_canary_evidence import terminal_record
+
+    assert terminal_record(records, execution) == (records.index(terminal), terminal)
+
+
 def test_canary_rejects_valid_transcript_without_automatic_hook_ledger(tmp_path) -> None:
     result, output = run_canary(tmp_path, invoke_managed_hooks=False)
 
@@ -497,6 +561,20 @@ def test_canary_rejects_valid_transcript_without_automatic_hook_ledger(tmp_path)
 
 def test_canary_rejects_hook_ledger_without_structured_host_response(tmp_path) -> None:
     result, output = run_canary(tmp_path, emit_managed_hook_responses=False)
+
+    assert result.returncode != 0
+    assert output == {"status": "fail", "reason": "managed_completion_unresolved"}
+
+
+def test_canary_rejects_noop_managed_posttool_hook(tmp_path) -> None:
+    result, output = run_canary(tmp_path, managed_posttool_mode="noop")
+
+    assert result.returncode != 0
+    assert output == {"status": "fail", "reason": "managed_completion_unresolved"}
+
+
+def test_canary_rejects_missing_managed_posttool_hook(tmp_path) -> None:
+    result, output = run_canary(tmp_path, invoke_managed_posttool=False)
 
     assert result.returncode != 0
     assert output == {"status": "fail", "reason": "managed_completion_unresolved"}
@@ -578,6 +656,92 @@ def test_result_release_rejects_cross_swapped_terminal_evidence(tmp_path) -> Non
 
     with pytest.raises(lifecycle.CanaryFailure, match="managed_completion_unresolved"):
         lifecycle.apply_results(ledger_path, session_id, records, api)
+
+
+def test_canary_accepts_lifecycle_already_applied_by_public_hooks(tmp_path) -> None:
+    """A correct candidate must not fail because its hooks observed completion early."""
+    lifecycle = load_lifecycle_module()
+    records = []
+    for record in managed_stream():
+        content = record.get("message", {}).get("content", [])
+        item = content[0] if len(content) == 1 and isinstance(content[0], dict) else {}
+        result = record.get("tool_use_result")
+        if isinstance(result, dict) and result.get("status") == "async_launched":
+            records.append(
+                    {
+                    "type": "system",
+                    "subtype": "hook_response",
+                    "hook_name": "PostToolUse:Agent",
+                    "hook_event": "PostToolUse",
+                    "output": "",
+                    "stdout": "",
+                    "stderr": "",
+                    "exit_code": 0,
+                        "outcome": "success",
+                        "session_id": record["session_id"],
+                    }
+                )
+        records.append(record)
+        if item.get("type") != "tool_use" or item.get("name") != "Agent":
+            continue
+        output = json.dumps(
+            {
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "allow",
+                    "permissionDecisionReason": "dispatch_registered",
+                }
+            }
+        )
+        records.append(
+            {
+                "type": "system",
+                "subtype": "hook_response",
+                "hook_name": "PreToolUse:Agent",
+                "hook_event": "PreToolUse",
+                "output": output,
+                "stdout": output,
+                "stderr": "",
+                "exit_code": 0,
+                "outcome": "success",
+                "session_id": record["session_id"],
+            }
+        )
+    session_id = "canary-managed-session"
+    scratch = tmp_path / "scratch"
+    thread = scratch / "harness" / "threads" / session_id
+    lifecycle.write_mode(thread, session_id, tmp_path)
+    ledger_path = thread / "executions.json"
+    api = lifecycle.load_api(PLUGIN)
+    import delegation_hook
+
+    for _index, record, item in lifecycle.dispatches(records):
+        assert delegation_hook.pre_tool(
+            {
+                "hook_event_name": "PreToolUse",
+                "tool_name": "Agent",
+                "session_id": record["session_id"],
+                "tool_use_id": item["id"],
+                "tool_input": item["input"],
+            },
+            None,
+            ledger_path,
+        )["reason"] == "dispatch_registered"
+    transcript = scratch / "managed-stream.jsonl"
+    transcript.parent.mkdir(parents=True, exist_ok=True)
+    write_jsonl(transcript, records)
+    lifecycle.apply_transcript(transcript, ledger_path, session_id, api)
+
+    result = lifecycle.verify_managed(
+        records, scratch, "2.1.247", PLUGIN, api
+    )
+
+    assert result["terminal_count"] == 3
+    assert result["abort_count"] == 1
+    assert result["completion_decision"] == [
+        "allow",
+        "delegated_outcome_complete",
+    ]
 
 
 @pytest.mark.parametrize(

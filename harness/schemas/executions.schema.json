@@ -104,11 +104,29 @@
             "if": {"properties": {"state": {"const": "cancelled"}}},
             "then": {
               "properties": {
-                "native_child_id": {"type": "string", "minLength": 1},
+                "native_child_id": {"type": ["string", "null"], "minLength": 1},
                 "terminal_at": {"type": "string", "format": "date-time"},
                 "terminal_reason": {"type": "string", "minLength": 1},
                 "terminal_event_id": {"type": "string", "minLength": 1},
                 "result_digest": {"type": "null"}
+              }
+            }
+          },
+          {
+            "if": {
+              "required": ["state", "native_child_id"],
+              "properties": {
+                "state": {"const": "cancelled"},
+                "native_child_id": {"type": "null"}
+              }
+            },
+            "then": {
+              "properties": {
+                "terminal_reason": {"const": "unreported_child_cancelled"},
+                "terminal_event_id": {
+                  "type": "string",
+                  "pattern": "^unreported-cancel:[^:]+:[1-9][0-9]*:[1-9][0-9]*$"
+                }
               }
             }
           },
@@ -135,11 +153,16 @@
       "items": {
         "oneOf": [
           {"$ref": "#/$defs/hostObservation"},
+          {"$ref": "#/$defs/dispatchFailure"},
           {
             "type": "object",
             "not": {
               "required": ["type"],
-              "properties": {"type": {"const": "host_event_observation"}}
+              "properties": {
+                "type": {
+                  "enum": ["host_event_observation", "dispatch_failed"]
+                }
+              }
             }
           }
         ]
@@ -158,6 +181,20 @@
         "generation": {"type": "integer", "minimum": 1},
         "host_event_id": {"type": "string", "minLength": 1},
         "event_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "dispatchFailure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "execution_id", "attempt", "generation", "host_error", "state_before", "recorded_at"],
+      "properties": {
+        "type": {"const": "dispatch_failed"},
+        "execution_id": {"type": "string", "minLength": 1},
+        "attempt": {"type": "integer", "minimum": 1},
+        "generation": {"type": "integer", "minimum": 1},
+        "host_error": {"type": "string"},
+        "state_before": {"const": "queued"},
+        "recorded_at": {"type": "string", "format": "date-time"}
       }
     },
     "recoveryClaim": {

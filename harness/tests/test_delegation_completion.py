@@ -130,6 +130,9 @@ def _replay(thread_dir: pathlib.Path, events: list[dict]) -> list[dict]:
             payload["tool_input"]["name"] = AGENT
             results.append(delegation_hook.pre_tool(payload, None, ledger_path))
         elif event == "PostToolUse":
+            # Apply the same documented named-agent normalization to the
+            # matching completion envelope, where identity is re-verified.
+            payload["tool_input"]["name"] = AGENT
             results.append(delegation_hook.post_tool(payload, ledger_path))
         elif event == "PostToolUseFailure":
             results.append(delegation_hook.post_tool_failure(payload, ledger_path))
@@ -245,6 +248,36 @@ def test_subagent_stop_for_an_unknown_child_changes_nothing(tmp_path) -> None:
     assert _only(thread_dir, session_id) == before
 
 
+@pytest.mark.parametrize("verdict", [None, 42, "", "   ", "missing"])
+def test_malformed_subagent_stop_cannot_create_a_claimable_result(
+    tmp_path, verdict
+) -> None:
+    trial = "background_dispatch"
+    session_id = _session_of(trial)
+    thread_dir = _thread(tmp_path, session_id)
+    events = _events(trial)
+    stop = copy.deepcopy(
+        next(event for event in events if event.get("hook_event_name") == "SubagentStop")
+    )
+    post_index = next(
+        index
+        for index, event in enumerate(events)
+        if event.get("hook_event_name") == "PostToolUse"
+    )
+    _replay(thread_dir, events[: post_index + 1])
+    path = thread_dir / "executions.json"
+    before = path.read_bytes()
+    if verdict == "missing":
+        stop.pop("last_assistant_message", None)
+    else:
+        stop["last_assistant_message"] = verdict
+
+    result = delegation_hook.subagent_stop(stop, path)
+
+    assert result == {"status": "unresolved", "reason": "child_result_unverified"}
+    assert path.read_bytes() == before
+
+
 # ---------------------------------------------------------------------------
 # The dispatch that never produced a child at all
 # ---------------------------------------------------------------------------
@@ -263,7 +296,8 @@ def test_host_rejected_dispatch_is_released_immediately(tmp_path) -> None:
     _replay(thread_dir, _events(trial))
 
     item = _only(thread_dir, session_id)
-    assert item["state"] == "cancelled"
+    assert item["state"] == "aborted"
+    assert item["native_child_id"] is None
     assert item["terminal_reason"] == "dispatch_failed"
     assert item["result_digest"] is None, "a failed dispatch produced no result"
 
@@ -291,6 +325,80 @@ def test_host_rejected_dispatch_records_the_hosts_own_error(tmp_path) -> None:
     assert len(incidents) == 1
     assert incidents[0]["host_error"] == host_error
     assert incidents[0]["state_before"] == "queued"
+    assert incidents[0]["recorded_at"] == ledger["executions"][0]["terminal_at"]
+    assert incidents[0]["recorded_at"] is not None
+
+
+def test_failure_after_the_child_started_cannot_release_completion(tmp_path) -> None:
+    """A late failure event is not evidence that a running child never existed."""
+    trial = "background_dispatch"
+    session_id = _session_of(trial)
+    thread_dir = _thread(tmp_path, session_id)
+    events = _events(trial)
+    post_index = next(
+        index
+        for index, event in enumerate(events)
+        if event.get("hook_event_name") == "PostToolUse"
+    )
+    _replay(thread_dir, events[: post_index + 1])
+    path = thread_dir / "executions.json"
+    before = path.read_bytes()
+    failure = copy.deepcopy(events[0])
+    failure["hook_event_name"] = "PostToolUseFailure"
+    failure["error"] = "late failure must not erase a running child"
+
+    result = delegation_hook.post_tool_failure(failure, path)
+
+    assert result["status"] == "unresolved"
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("trial", ["foreground_dispatch", "dispatch_failure"])
+def test_generation_one_host_event_cannot_mutate_recovery_generation(
+    tmp_path, trial
+) -> None:
+    session_id = _session_of(trial)
+    thread_dir = _thread(tmp_path, session_id)
+    events = _events(trial)
+    _replay(thread_dir, [events[0]])
+    path = thread_dir / "executions.json"
+
+    def advance_generation(current: dict) -> dict:
+        item = current["executions"][0]
+        due = dt.datetime.fromisoformat(item["start_deadline"].replace("Z", "+00:00"))
+        ledger_api.reconcile_deadlines(current, due)
+        assert ledger_api.claim_recovery(current, item["execution_id"], due, "a", 1)
+        assert ledger_api.claim_recovery(
+            current, item["execution_id"], due + dt.timedelta(seconds=1), "b", 30
+        )
+        return current
+
+    ledger_api.mutate_atomic(path, advance_generation)
+    before = path.read_bytes()
+    if trial == "foreground_dispatch":
+        event = copy.deepcopy(
+            next(
+                payload
+                for payload in events
+                if payload.get("hook_event_name") == "PostToolUse"
+            )
+        )
+        event["tool_input"]["name"] = AGENT
+        result = delegation_hook.post_tool(event, path)
+    else:
+        event = copy.deepcopy(events[1])
+        result = delegation_hook.post_tool_failure(event, path)
+
+    assert result == {
+        "status": "unresolved",
+        "reason": "lifecycle_generation_unverified",
+    }
+    assert path.read_bytes() == before
+    ledger = load_trusted(path, session_id)
+    assert ledger is not None
+    assert execution_stop_decision(
+        "closed", ledger, None, [], dt.datetime.now(UTC)
+    )[0] == "block"
 
 
 # ---------------------------------------------------------------------------
@@ -346,10 +454,80 @@ def test_redelivering_the_whole_sequence_changes_nothing(tmp_path, trial) -> Non
     events = _events(trial)
 
     _replay(thread_dir, events)
-    after_first = copy.deepcopy(_only(thread_dir, session_id))
+    path = thread_dir / "executions.json"
+    after_first = path.read_bytes()
     _replay(thread_dir, _events(trial))
 
-    assert _only(thread_dir, session_id) == after_first
+    assert path.read_bytes() == after_first
+
+
+@pytest.mark.parametrize(
+    "damage",
+    ["missing-content", "missing-agent-name", "surplus-native-child"],
+)
+def test_malformed_foreground_completion_never_becomes_claimable(
+    tmp_path, damage
+) -> None:
+    """Only the captured foreground result envelope may assert a verdict."""
+    trial = "foreground_dispatch"
+    session_id = _session_of(trial)
+    thread_dir = _thread(tmp_path, session_id)
+    events = _events(trial)
+    _replay(thread_dir, [events[0]])
+    payload = next(
+        copy.deepcopy(event)
+        for event in events
+        if event.get("hook_event_name") == "PostToolUse"
+    )
+    if damage != "missing-agent-name":
+        payload["tool_input"]["name"] = AGENT
+    if damage == "missing-content":
+        payload["tool_response"].pop("content")
+    elif damage == "surplus-native-child":
+        payload["tool_response"]["native_child_id"] = "invented-child"
+    path = thread_dir / "executions.json"
+    before = path.read_bytes()
+
+    result = delegation_hook.post_tool(payload, path)
+
+    assert result["status"] == "unresolved"
+    assert path.read_bytes() == before
+    ledger = load_trusted(path, session_id)
+    assert ledger is not None
+    item = _only(thread_dir, session_id)
+    assert item["state"] == "queued"
+    assert ledger_api.claim_result_application(
+        ledger,
+        item["execution_id"],
+        dt.datetime.now(UTC),
+        "owner-1",
+        60,
+        attempt=1,
+        generation=1,
+    ) is None
+
+
+def test_altered_foreground_replay_is_rejected_without_mutation(tmp_path) -> None:
+    """One host identity cannot be replayed with a different child verdict."""
+    trial = "foreground_dispatch"
+    session_id = _session_of(trial)
+    thread_dir = _thread(tmp_path, session_id)
+    events = _events(trial)
+    _replay(thread_dir, events)
+    path = thread_dir / "executions.json"
+    before = path.read_bytes()
+    altered = next(
+        copy.deepcopy(event)
+        for event in events
+        if event.get("hook_event_name") == "PostToolUse"
+    )
+    altered["tool_input"]["name"] = AGENT
+    altered["tool_response"]["content"][0]["text"] = "TAMPERED"
+
+    result = delegation_hook.post_tool(altered, path)
+
+    assert result["status"] == "unresolved"
+    assert path.read_bytes() == before
 
 
 @pytest.mark.parametrize(

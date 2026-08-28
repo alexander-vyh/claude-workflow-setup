@@ -175,12 +175,14 @@ def _host_stream(args: list[str]) -> int:
             ]
             record.pop("plugin_errors", None)
     observed = []
+    dispatch_inputs = {}
     for record in records:
         observed.append(record)
         content = record.get("message", {}).get("content", [])
         item = content[0] if len(content) == 1 and isinstance(content[0], dict) else {}
         if item.get("type") != "tool_use" or item.get("name") != "Agent":
             continue
+        dispatch_inputs[item.get("id")] = item.get("input")
         payload = {
             "hook_event_name": "PreToolUse",
             "tool_name": "Agent",
@@ -211,6 +213,67 @@ def _host_stream(args: list[str]) -> int:
                 "session_id": session_id,
             }
         )
+    if managed:
+        completed = []
+        for record in observed:
+            content = record.get("message", {}).get("content", [])
+            item = (
+                content[0]
+                if len(content) == 1 and isinstance(content[0], dict)
+                else {}
+            )
+            result = record.get("tool_use_result")
+            tool_id = item.get("tool_use_id")
+            tool_input = dispatch_inputs.get(tool_id)
+            if (
+                not isinstance(result, dict)
+                or result.get("status") != "async_launched"
+                or not isinstance(tool_input, dict)
+            ):
+                completed.append(record)
+                continue
+            hook = subprocess.run(
+                [
+                    sys.executable,
+                    "-B",
+                    str(candidate / "harness/bin/delegation_hook.py"),
+                ],
+                input=json.dumps(
+                    {
+                        "hook_event_name": "PostToolUse",
+                        "tool_name": "Agent",
+                        "session_id": session_id,
+                        "tool_use_id": tool_id,
+                        "tool_input": tool_input,
+                        "tool_response": {
+                            "status": result.get("status"),
+                            "isAsync": result.get("isAsync"),
+                            "agentId": result.get("agentId"),
+                        },
+                    }
+                ),
+                capture_output=True,
+                text=True,
+                env=os.environ,
+                timeout=10,
+            )
+            completed.append(
+                {
+                    "type": "system",
+                    "subtype": "hook_response",
+                    "hook_id": str(uuid.uuid4()),
+                    "hook_name": "PostToolUse:Agent",
+                    "hook_event": "PostToolUse",
+                    "output": hook.stdout,
+                    "stdout": hook.stdout,
+                    "stderr": hook.stderr,
+                    "exit_code": hook.returncode,
+                    "outcome": "success" if hook.returncode == 0 else "error",
+                    "session_id": session_id,
+                }
+            )
+            completed.append(record)
+        observed = completed
     sys.stdout.write("".join(json.dumps(record) + "\n" for record in observed))
     return 0
 
