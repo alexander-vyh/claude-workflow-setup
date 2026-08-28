@@ -146,7 +146,17 @@ def _agent_records(index: int) -> tuple[list[dict], dict]:
     return records, terminal
 
 
-def _live_peer_records(launches: list[list[dict]], scenario: str) -> list[dict]:
+def _live_peer_records(
+    launches: list[list[dict]], scenario: str, addressee_key: str = "to"
+) -> list[dict]:
+    """Build a peer-message transcript.
+
+    `addressee_key` defaults to `to`, which is what the live SendMessage tool
+    actually requires. It used to be hardcoded to `recipient`, a key the tool
+    does not define — so the fixture and the verifier agreed with each other and
+    disagreed with reality, and the canary rejected every real deployment while
+    this suite stayed green.
+    """
     send_id = "toolu_peer_send"
     sender_index = 2 if scenario == "live-wrong-sender" else 0
     recipient_index = 2 if scenario == "live-wrong-recipient-name" else 1
@@ -164,7 +174,7 @@ def _live_peer_records(launches: list[list[dict]], scenario: str) -> list[dict]:
                     "id": send_id,
                     "name": "SendMessage",
                     "input": {
-                        "recipient": f"canary-child-{recipient_index + 1}",
+                        addressee_key: f"canary-child-{recipient_index + 1}",
                         "message": token,
                     },
                 }
@@ -252,6 +262,8 @@ def managed_stream(scenario: str = "ok") -> list[dict]:
         launch_and_terminal = [record for launch in launches for record in launch]
     if scenario == "missing-peer":
         peer_records = []
+    elif scenario == "live-peer-legacy-recipient":
+        peer_records = _live_peer_records(launches, scenario, addressee_key="recipient")
     elif scenario.startswith("live-"):
         peer_records = _live_peer_records(launches, scenario)
     else:
@@ -599,7 +611,22 @@ def test_canary_has_no_post_hoc_dispatch_registration_authority() -> None:
 
 
 def test_canary_accepts_acknowledged_child_to_child_dependency(tmp_path) -> None:
+    """The default fixture now addresses the peer with `to`, the tool's own key.
+
+    It previously used `recipient`, which SendMessage does not define. Fixture
+    and verifier agreed with each other and disagreed with the live tool, so
+    this test passed while the canary rejected every real deployment with
+    `peer_dependency_unproven` -- blocking plugin updates outright.
+    """
     result, output = run_canary(tmp_path, "live-peer")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert output["managed"]["peer_dependency_proven"] is True
+
+
+def test_canary_still_accepts_the_legacy_recipient_key(tmp_path) -> None:
+    """Transcripts captured before the repair must keep verifying."""
+    result, output = run_canary(tmp_path, "live-peer-legacy-recipient")
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert output["managed"]["peer_dependency_proven"] is True

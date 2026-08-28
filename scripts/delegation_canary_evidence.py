@@ -347,6 +347,26 @@ def _peer_acknowledgement(item: dict) -> dict | None:
     return acknowledgement
 
 
+def _addressee(tool_input: dict) -> str | None:
+    """The agent a SendMessage is addressed to.
+
+    The live tool names this parameter `to` (required, alongside `message`).
+    This module previously read `recipient`, a key the tool does not define, so
+    `verify_peer_dependency` could never match a real transcript and every
+    deployment failed `peer_dependency_unproven` -- the canary hard-blocked
+    plugin updates while its own tests stayed green, because the fixtures
+    asserted the same invented key rather than the tool's actual shape.
+
+    `recipient` is still accepted so transcripts captured before this repair
+    keep verifying; `to` wins when both appear.
+    """
+    for key in ("to", "recipient"):
+        value = tool_input.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
 def verify_peer_dependency(records: list[dict], terminal: list[dict]) -> None:
     by_name = {item["agent_name"]: item for item in terminal}
     sender = by_name.get("canary-child-1")
@@ -373,7 +393,7 @@ def verify_peer_dependency(records: list[dict], terminal: list[dict]) -> None:
             body = tool_input.get("message")
             tokens = DEPENDENCY_RE.findall(body) if isinstance(body, str) else []
             if (
-                tool_input.get("recipient") == recipient["agent_name"]
+                _addressee(tool_input) == recipient["agent_name"]
                 and isinstance(item.get("id"), str)
                 and len(tokens) == 1
             ):
