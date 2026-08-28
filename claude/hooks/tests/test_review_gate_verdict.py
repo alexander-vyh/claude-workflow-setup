@@ -594,3 +594,121 @@ class TestTheGateActuallyEnforcesTheOutcomeNow:
             session_id=None,
         )
         assert decision is None
+
+
+class TestTheMandatedFormatSurvivesTheWholeChain:
+    """The gap that a hand-built record cannot see.
+
+    Every other close test in this file constructs a record dict directly with
+    `blocking=` already set, so `classify_blocking` is never invoked. That made
+    the whole suite blind to the single most dangerous deployment state: the
+    flag enabled on top of a classifier that cannot separate PASS from REJECT.
+    In that state a clean review denies, and the denial's own remedy cannot
+    clear it — the failure escapement-1nzm named, arriving through the deploy
+    rather than through the code.
+
+    Caught by reviewer-outcome-lens asking whether the classifier fix was
+    actually live before the flag was, which is a question the suite could not
+    answer about itself.
+
+    So this drives the FULL chain — dispatch, PostToolUse, SubagentStop, the
+    real recording CLI, then the close — using the literal output format
+    `claude/agents/adversarial-reviewer.md` mandates. It is the only test where
+    a broken classifier changes the user-visible answer.
+    """
+
+    CLEAN = (
+        "## Adversarial Review: review_gate.py\n\n"
+        "### BLOCK\n"
+        "None.\n\n"
+        "### CONCERN\n"
+        "- The docstring is long, though accurate.\n\n"
+        "### Verdict\n"
+        "PASS\n"
+    )
+    REJECTED = (
+        "## Adversarial Review: review_gate.py\n\n"
+        "### BLOCK\n"
+        "- evaluate_close reads a stale snapshot and never re-reads the ledger.\n\n"
+        "### Verdict\n"
+        "REJECT\n"
+    )
+
+    def _chain(self, verdict, agent_id, fingerprint=FINGERPRINT):
+        import os
+
+        import escapement_review as cli
+        from _review_gate_case import run_event
+
+        tool_input = {
+            "subagent_type": "escapement:adversarial-reviewer",
+            "description": "review escapement-abc1",
+            "prompt": "Review escapement-abc1 and report BLOCKERS.",
+        }
+        _dispatch(tool_input, fingerprint=fingerprint)
+        run_event({
+            "hook_event_name": "PostToolUse", "tool_name": "Agent",
+            "session_id": "s1", "tool_input": tool_input,
+            # `prompt` echoes the DISPATCHER; if the extractor ever reads it,
+            # the captured "verdict" becomes the implementer's own words.
+            "tool_response": {"agentId": agent_id, "prompt": tool_input["prompt"]},
+            "cwd": "/tmp",
+        })
+        run_event({
+            "hook_event_name": "SubagentStop", "session_id": "s1",
+            "agent_id": agent_id, "last_assistant_message": verdict, "cwd": "/tmp",
+        })
+
+        written = []
+        with patch.object(cli, "write_record",
+                          side_effect=lambda b, r, cwd=None: written.append(r) or True), \
+             patch.object(cli, "work_fingerprint", return_value=fingerprint), \
+             patch.dict(os.environ, {"CLAUDE_SESSION_ID": "s1"}):
+            cli.main([
+                "record", "--bead", "escapement-abc1", "--findings",
+                "I read the reviewer's output and consider this ready to land "
+                "without any further changes being necessary at this point.",
+            ])
+        return written[0]
+
+    def test_a_clean_review_in_the_mandated_format_closes_the_bead(self):
+        """The regression that matters most: this must NOT deny.
+
+        If it ever does, agents get an unrepairable denial on honest work and
+        learn that REVIEW_WAIVER is how you close a bead.
+        """
+        record = self._chain(self.CLEAN, "agent-clean")
+        assert record["blocking"] is False, (
+            "a PASS in the repo's own mandated format must not read as blocking"
+        )
+        assert record["findings"].lstrip().startswith("## Adversarial Review")
+        assert "ready to land" in (record["response"] or ""), (
+            "the implementer's account survives as advisory text"
+        )
+        _, decision, _ = _close(record=record)
+        assert decision is None, "an honest clean review must still close"
+
+    def test_a_rejection_in_the_mandated_format_refuses_the_close(self):
+        record = self._chain(self.REJECTED, "agent-reject")
+        assert record["blocking"] is True
+        _, decision, _ = _close(record=record)
+        assert decision["permissionDecision"] == "deny"
+
+    def test_the_two_are_actually_distinguished_end_to_end(self):
+        """A constant classifier passes both tests above taken separately.
+
+        The two chains use DIFFERENT fingerprints deliberately, so they model
+        two independent states of the work rather than two opinions on one.
+        Sharing a fingerprint makes the blocking entry deny the clean record
+        too — correctly, since a second opinion at an unchanged tree does not
+        retire a BLOCK (see test_a_later_clean_opinion_does_not_retire_a_
+        blocker) — which would test that rule again instead of this one.
+        """
+        clean_fp, reject_fp = "c" * 64, "d" * 64
+        clean = self._chain(self.CLEAN, "agent-a", fingerprint=clean_fp)
+        rejected = self._chain(self.REJECTED, "agent-b", fingerprint=reject_fp)
+        assert clean["blocking"] != rejected["blocking"], (
+            "a constant classifier would make these identical"
+        )
+        assert _close(record=clean, fingerprint=clean_fp)[1] is None
+        assert _close(record=rejected, fingerprint=reject_fp)[1] is not None
