@@ -150,7 +150,7 @@
     },
     {
       "id": "review_gate",
-      "description": "Require an independent, bead-bound, non-stale review before a bead can be closed. On Claude the reviewer's own returned text is captured from SubagentStop.last_assistant_message and joined to its dispatch by tool_response.agentId (escapement-g27c proved both by observation), so the recorded findings are the reviewer's rather than the implementer's. CAPABILITY NOTE: capture, blocking classification, and the blocking deny are one feature gated by _review_verdict.VERDICT_CAPTURE_SUPPORTED, which is False pending escapement-1nzm \u2014 the classifier currently returns blocking for a clean PASS, so enabling it would deny honest closes. Until it flips, an agent that dispatches a reviewer and ignores it can still close the bead.",
+      "description": "Require an independent, bead-bound, non-stale review before a bead can be closed. On Claude the reviewer's own returned text is captured from SubagentStop.last_assistant_message and joined to its dispatch by tool_response.agentId, stored as the authoritative findings; the implementer's own text is kept only as advisory `response`. So an agent that dispatches a reviewer, ignores it, and writes its own verdict cannot close the bead, and a verdict naming unresolved blocking findings refuses the close until the work changes and is re-reviewed. Enabled 2026-08-28 once the capability was proven (escapement-g27c) and the blocking classifier could separate PASS from REJECT (escapement-1nzm). On Codex no Agent event exists, so verdict capture is skipped rather than failed and the load-bearing rules are the review record, bead binding, and work fingerprint.",
       "source": "claude/hooks/review_gate.py",
       "hosts": {
         "codex": {
@@ -189,9 +189,12 @@
           ],
           "fixtures": [
             "claude/hooks/tests/test_review_gate.py",
+            "claude/hooks/tests/test_review_gate_verdict.py",
             "claude/hooks/tests/test_review_record.py",
             "claude/hooks/tests/test_review_verdict.py",
-            "claude/hooks/tests/test_review_ledger.py"
+            "claude/hooks/tests/test_review_verdict_corpus.py",
+            "claude/hooks/tests/test_review_ledger.py",
+            "claude/hooks/tests/test_review_command.py"
           ]
         }
       }
