@@ -383,6 +383,161 @@ def test_terminal_but_unapplied_is_not_released_by_the_cancel_path(
     ) == ("block", "delegated_execution_unresolved")
 
 
+def _bind_and_start(thread_dir: pathlib.Path, execution_id: str, at: dt.datetime) -> None:
+    """Bind a running child exactly as the Agent PostToolUse adapter does."""
+
+    def observe(current: dict) -> dict:
+        base = {
+            "parent_session_id": SESSION,
+            "execution_id": execution_id,
+            "attempt": 1,
+            "generation": 1,
+            "native_child_id": "native-live-child",
+        }
+        ledger_api.apply_event(current, {**base, "kind": "child_bound"}, at)
+        ledger_api.apply_event(current, {**base, "kind": "child_started"}, at)
+        return current
+
+    mutate_atomic(thread_dir / "executions.json", observe)
+
+
+def test_a_bound_running_child_cannot_be_cancelled_as_unreported(
+    tmp_path, capsys
+) -> None:
+    """A slow child is not a dead child, and the record must not say it is.
+
+    Nothing emits `activity_completed` for a subagent, so a child's idle
+    deadline measures elapsed time rather than silence. EVERY agent that works
+    longer than IDLE_SECONDS crosses it while perfectly healthy — this is the
+    common case, not the rare one. Cancelling there would write "no result will
+    arrive" into the durable ledger about a child that is still writing, which
+    is worse than the wedge it relieves: a false audit record that later reads
+    as fact.
+
+    `idle` is the only basis reachable here: a running execution is never
+    overdue by `start`, so this guard is exactly "idle is not death".
+    """
+    thread_dir = _thread(tmp_path)
+    execution_id = _dispatch(thread_dir)
+    _bind_and_start(thread_dir, execution_id, _clock(thread_dir, seconds=1))
+    # Past the idle deadline, but well inside the two-hour hard budget.
+    overdue = _clock(thread_dir, minutes=20)
+
+    assert (
+        _cli(
+            "cancel",
+            "--session",
+            SESSION,
+            "--ledger-path",
+            str(thread_dir / "executions.json"),
+            "--execution-id",
+            execution_id,
+            "--reason",
+            "this child has been quiet a while so I assume it is gone",
+            "--now",
+            _iso(overdue),
+        )
+        == 2
+    )
+
+    refusal = capsys.readouterr().err
+    assert "bound and running" in refusal
+    assert "hard deadline" in refusal, "the refusal must name when it WOULD be allowed"
+
+    item = _only(_ledger(thread_dir))
+    assert item["state"] == "running"
+    assert _ledger(thread_dir)["incidents"] == []
+
+
+def test_a_bound_running_child_is_still_cancellable_after_its_hard_deadline(
+    tmp_path,
+) -> None:
+    """The refusal is a delay, not a dead end.
+
+    A child that binds, starts, and then dies without ever reporting is real
+    (it is what wedged session 575f5925). Once its full budget has elapsed,
+    "no result will arrive" is supportable again and recovery must work.
+    """
+    thread_dir = _thread(tmp_path)
+    execution_id = _dispatch(thread_dir)
+    _bind_and_start(thread_dir, execution_id, _clock(thread_dir, seconds=1))
+    past_hard = _clock(thread_dir, hours=3)
+
+    assert (
+        _cli(
+            "cancel",
+            "--session",
+            SESSION,
+            "--ledger-path",
+            str(thread_dir / "executions.json"),
+            "--execution-id",
+            execution_id,
+            "--reason",
+            "child bound and started but never reported across its whole budget",
+            "--now",
+            _iso(past_hard),
+        )
+        == 0
+    )
+
+    item = _only(_ledger(thread_dir))
+    assert item["state"] == "cancelled"
+    assert item["result_digest"] is None
+    incident = _ledger(thread_dir)["incidents"][0]
+    assert incident["overdue_basis"] == "hard"
+    assert incident["state_before"] == "running"
+
+
+def test_an_unbound_child_is_still_cancellable_at_its_start_deadline(
+    tmp_path,
+) -> None:
+    """The live-child guard must not close the door on the never-bound case.
+
+    An execution the host never bound has no evidence of a child at all, so a
+    crossed start deadline remains honest grounds to say no result is coming.
+    """
+    thread_dir = _thread(tmp_path)
+    execution_id = _dispatch(thread_dir)
+
+    assert (
+        _cli(
+            "cancel",
+            "--session",
+            SESSION,
+            "--ledger-path",
+            str(thread_dir / "executions.json"),
+            "--execution-id",
+            execution_id,
+            "--reason",
+            "the host never bound a native child for this dispatch at all",
+            "--now",
+            _iso(_clock(thread_dir, minutes=3)),
+        )
+        == 0
+    )
+
+    assert _only(_ledger(thread_dir))["state"] == "cancelled"
+
+
+def test_the_overdue_denial_separates_the_slow_child_from_the_dead_one() -> None:
+    """The denial must not send an agent to cancel a live child.
+
+    Its previous wording offered `cancel` for "if the child died" with no way
+    to tell whether it had, while `list` output is exactly what distinguishes
+    the two. A denial that names a remedy the gate will refuse is the failure
+    mode this repo keeps hitting.
+    """
+    message = stop_hook._TASK_MODE_DISPLAY["delegated_execution_overdue"]
+    lowered = message.lower()
+
+    assert "native_child_id" in message, "the agent must be told what to look at"
+    assert "do not cancel it" in lowered
+    assert "slow, not dead" in lowered
+    assert "terminalizes itself" in lowered
+    # It must not promise a remedy whose availability this gate cannot see.
+    assert "schedulewakeup" not in lowered.replace(" ", "")
+
+
 def test_execution_inside_its_deadlines_cannot_be_cancelled(tmp_path) -> None:
     """Recovery is for demonstrably overdue work, not for any inconvenient child."""
     thread_dir = _thread(tmp_path)

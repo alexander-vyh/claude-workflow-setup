@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# file-complexity-waiver: 1106 lines; delegated Stop policy is isolated in execution_stop_adapter.py and the .gate-signal.jsonl writer in gate_signal.py, leaving this legacy hook with thin imports and calls to both. Growth here is denial copy (the delegated escape paths), not logic. Broader split remains owned by bead e9v.7.
+# file-complexity-waiver: 1112 lines; delegated Stop policy is isolated in execution_stop_adapter.py and the .gate-signal.jsonl writer in gate_signal.py, leaving this legacy hook with thin imports and calls to both. Growth here is denial copy (the delegated escape paths), not logic. Broader split remains owned by bead e9v.7.
 """
 Claude Code Stop-hook adapter for continuation-harness.
 
@@ -123,18 +123,24 @@ _TASK_MODE_DISPLAY: dict[str, str] = {
     ),
     "delegated_execution_overdue": (
         "continuation-harness [delegated]: delegated_execution_overdue. An agent this "
-        "session dispatched crossed its own start/idle/hard deadline and the host never "
-        "reported it finishing, so Stop is not granted. Do NOT hand-edit executions.json "
-        "and do NOT summarize and ask what to do next. Escape paths: (1) see exactly "
-        "which execution is stuck and why — `python3 "
-        "~/.claude/harness/bin/execution_reconcile.py list --session {session_id}`; "
-        "(2) if that child is genuinely still working, keep working alongside it, or "
-        "call ScheduleWakeup so this session resumes when it lands; (3) if the child "
-        "died without ever reporting, terminalize it with a real reason — `python3 "
+        "session dispatched crossed one of its own deadlines without the host reporting "
+        "it finished, so Stop is not granted. Do NOT hand-edit executions.json and do "
+        "NOT summarize and ask what to do next. START HERE — `python3 "
+        "~/.claude/harness/bin/execution_reconcile.py list --session {session_id}` "
+        "prints each execution's state, native_child_id, and which deadline it crossed. "
+        "The right move depends on what that shows, and there are only two cases. "
+        "(A) native_child_id is set and state is running: the child STARTED and has not "
+        "stopped. Nothing renews a child's idle deadline, so crossing it means the child "
+        "is SLOW, not dead — every agent that works longer than 15 minutes lands here. "
+        "Do not cancel it; `cancel` will refuse, because 'no result will arrive' would "
+        "be false. Keep working — the execution terminalizes ITSELF when the child "
+        "reports, and this gate releases with it. (B) native_child_id is null, or the "
+        "hard deadline has passed: no child was ever bound, or it has had its full "
+        "budget. Terminalize it with a real reason — `python3 "
         "~/.claude/harness/bin/execution_reconcile.py cancel --session {session_id} "
         "--execution-id <id> --reason \"<why no result will arrive, >=20 chars, no "
-        "placeholder>\"`. That records a CANCELLATION, not a result: it never claims "
-        "the child's work was done, and the reason is stored durably in the ledger."
+        "placeholder>\"`. That records a CANCELLATION, not a result: it never claims the "
+        "child's work was done, and the reason is stored durably in the ledger."
     ),
     "delegated_execution_unresolved": (
         "continuation-harness [delegated]: delegated_execution_unresolved. This "
