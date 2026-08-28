@@ -25,6 +25,9 @@ def _identical_response(sha: str) -> dict[str, object]:
         "merge_base_commit": {"sha": sha},
         "ahead_by": 0,
         "behind_by": 0,
+        "total_commits": 0,
+        "commits": [],
+        "files": [],
     }
 
 
@@ -98,7 +101,7 @@ def test_finish_rejects_identical_response_when_default_differs(tmp_path: Path) 
     assert facts["merge_result"] != facts["default_sha"]
     _set_compare(scenario, _identical_response(facts["merge_result"]))
 
-    _finish_expect_preserved(scenario, "merge-result-not-reachable-from-live-default")
+    _finish_expect_preserved(scenario, "github-inspection-failed")
 
 
 @pytest.mark.parametrize("head_field", [None, "missing"])
@@ -137,6 +140,13 @@ def test_finish_rejects_nonidentical_response_without_bound_head(
         ("behind_by", "0"),
         ("behind_by", False),
         ("behind_by", 1),
+        ("total_commits", "missing"),
+        ("total_commits", "0"),
+        ("total_commits", False),
+        ("total_commits", 1),
+        ("commits", "missing"),
+        ("commits", None),
+        ("commits", [{"sha": "0" * 40}]),
     ],
 )
 def test_finish_rejects_partially_bound_identical_response(

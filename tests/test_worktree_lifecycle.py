@@ -60,13 +60,53 @@ if "graphql" in args:
             "hasNextPage": False, "endCursor": None}}}
     print(json.dumps({"data": {"repository": repo}}))
 elif "/compare/" in joined:
-    print(json.dumps(facts.get("compare", {
-        "status": "ahead", "base_commit": {"sha": facts["merge_result"]},
-        "head_commit": {"sha": facts["default_sha"]}})))
+    compare_head = joined.rsplit("...", 1)[-1]
+    status = facts.get(
+        "compare_status",
+        "identical" if facts["merge_result"] == compare_head else "ahead",
+    )
+    if "compare_commits" in facts:
+        commits = facts["compare_commits"]
+    else:
+        commits_by_head = facts.get("compare_commits_by_head", {})
+        commit_shas = facts.get(
+            "compare_commit_shas",
+            commits_by_head.get(compare_head, facts["default_compare_commit_shas"]),
+        )
+        commits = [{"sha": sha} for sha in commit_shas]
+    response = {
+        "url": "https://api.github.com/repos/acme/widget/compare/base...head",
+        "html_url": "https://github.com/acme/widget/compare/base...head",
+        "permalink_url": "https://github.com/acme/widget/compare/base...head",
+        "diff_url": "https://github.com/acme/widget/compare/base...head.diff",
+        "patch_url": "https://github.com/acme/widget/compare/base...head.patch",
+        "status": status,
+        "ahead_by": len(commits) if status == "ahead" else 0,
+        "behind_by": 1 if status == "behind" else 0,
+        "total_commits": len(commits),
+        "base_commit": {"sha": facts.get("compare_base", facts["merge_result"])},
+        "merge_base_commit": {"sha": facts["merge_result"]},
+        "commits": commits,
+        "files": [],
+    }
+    response = facts.get("compare", response)
+    response.update(facts.get("compare_response_changes", {}))
+    for field in facts.get("omit_compare_fields", []):
+        response.pop(field, None)
+    if facts.get("omit_compare_commits"):
+        response.pop("commits")
+    print(json.dumps(response))
 else:
+    sequence = facts.get("default_sha_sequence", [facts["default_sha"]])
+    read_count = facts.get("repository_read_count", 0)
+    default_sha = sequence[min(read_count, len(sequence) - 1)]
+    facts["repository_read_count"] = read_count + 1
+    with open(os.environ["LIFECYCLE_GITHUB_FACTS"], "w", encoding="utf-8") as stream:
+        json.dump(facts, stream)
+        stream.write("\\n")
     print(json.dumps({"id": 42, "databaseId": 42, "full_name": "acme/widget",
                       "default_branch": "trunk", "defaultBranchRef": {
-                          "name": "trunk", "target": {"oid": facts["default_sha"]}}}))
+                          "name": "trunk", "target": {"oid": default_sha}}}))
 """,
         encoding="utf-8",
     )
@@ -195,7 +235,16 @@ def _scenario(tmp_path: Path) -> LifecycleScenario:
     )
 
 
-def _land(scenario: LifecycleScenario, *, advance_default: bool = True) -> str:
+def _land(
+    scenario: LifecycleScenario,
+    *,
+    advance_default: bool | None = None,
+    later_commit_count: int | None = None,
+) -> str:
+    if advance_default is not None and later_commit_count is not None:
+        raise ValueError("choose advance_default or later_commit_count, not both")
+    if later_commit_count is None:
+        later_commit_count = 2 if advance_default is None else int(advance_default)
     (scenario.worktree / "feature.txt").write_text("feature\n", encoding="utf-8")
     git(scenario.worktree, "add", "feature.txt")
     git(scenario.worktree, "commit", "-m", "feature")
@@ -209,10 +258,13 @@ def _land(scenario: LifecycleScenario, *, advance_default: bool = True) -> str:
     )
     git(scenario.seed, "merge", "--no-ff", "--no-edit", f"origin/{scenario.branch}")
     merge_result = rev(scenario.seed)
-    if advance_default:
-        (scenario.seed / "later.txt").write_text("later\n", encoding="utf-8")
-        git(scenario.seed, "add", "later.txt")
-        git(scenario.seed, "commit", "-m", "later")
+    default_compare_commit_shas: list[str] = []
+    for index in range(later_commit_count):
+        later = scenario.seed / f"later-{index}.txt"
+        later.write_text(f"later {index}\n", encoding="utf-8")
+        git(scenario.seed, "add", later.name)
+        git(scenario.seed, "commit", "-m", f"later {index}")
+        default_compare_commit_shas.append(rev(scenario.seed))
     default_sha = rev(scenario.seed)
     git(scenario.seed, "push", "origin", "trunk")
     Path(scenario.env["LIFECYCLE_GITHUB_FACTS"]).write_text(
@@ -222,6 +274,7 @@ def _land(scenario: LifecycleScenario, *, advance_default: bool = True) -> str:
                 "candidate": candidate,
                 "merge_result": merge_result,
                 "default_sha": default_sha,
+                "default_compare_commit_shas": default_compare_commit_shas,
             }
         )
         + "\n",
@@ -232,6 +285,18 @@ def _land(scenario: LifecycleScenario, *, advance_default: bool = True) -> str:
 
 def _finish(scenario: LifecycleScenario, *, cwd: Path | None = None):
     return run_cli(cwd or scenario.primary, "finish", "--lifecycle-id", "life-1", env=scenario.env)
+
+
+def _update_github_facts(scenario: LifecycleScenario, **changes: object) -> None:
+    path = Path(scenario.env["LIFECYCLE_GITHUB_FACTS"])
+    facts = json.loads(path.read_text(encoding="utf-8"))
+    facts.update(changes)
+    path.write_text(json.dumps(facts) + "\n", encoding="utf-8")
+
+
+def _github_facts(scenario: LifecycleScenario) -> dict[str, object]:
+    path = Path(scenario.env["LIFECYCLE_GITHUB_FACTS"])
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _set_cwd_scan(
@@ -306,6 +371,294 @@ def test_finish_removes_safe_local_state_despite_unrelated_mount_warning(
     invocations = [json.loads(line) for line in scenario.lsof_log.read_text().splitlines()]
     assert len(invocations) >= 2
     assert all(args == ["-a", "-d", "cwd", "-Fpcfn0"] for args in invocations)
+
+
+def test_finish_removes_safe_local_state_when_merge_is_live_default(
+    tmp_path: Path,
+) -> None:
+    scenario = _scenario(tmp_path)
+    _land(scenario, later_commit_count=0)
+
+    result = _finish(scenario)
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["status"] == "completed"
+    assert not scenario.worktree.exists()
+    assert not scenario.receipt.exists()
+
+
+def test_finish_fails_closed_when_compare_does_not_bind_live_default(
+    tmp_path: Path,
+) -> None:
+    scenario = _scenario(tmp_path)
+    _land(scenario)
+    _update_github_facts(scenario, compare_commit_shas=["c" * 40])
+
+    result = _finish(scenario)
+
+    _assert_pending_preserved(scenario, result, "github-inspection-failed")
+
+
+def test_finish_fails_closed_when_live_default_is_not_final_compare_commit(
+    tmp_path: Path,
+) -> None:
+    scenario = _scenario(tmp_path)
+    _land(scenario)
+    default_sha = _github_facts(scenario)["default_sha"]
+    _update_github_facts(
+        scenario,
+        compare_commit_shas=[default_sha, "c" * 40],
+    )
+
+    result = _finish(scenario)
+
+    _assert_pending_preserved(scenario, result, "github-inspection-failed")
+
+
+def test_finish_fails_closed_when_ahead_compare_has_no_commits(
+    tmp_path: Path,
+) -> None:
+    scenario = _scenario(tmp_path)
+    _land(scenario)
+    _update_github_facts(scenario, compare_commit_shas=[])
+
+    result = _finish(scenario)
+
+    _assert_pending_preserved(scenario, result, "github-inspection-failed")
+
+
+@pytest.mark.parametrize(
+    ("changes", "omissions"),
+    [
+        ({"ahead_by": 0}, []),
+        ({"ahead_by": False}, []),
+        ({"behind_by": 1}, []),
+        ({"behind_by": False}, []),
+        ({"total_commits": 1}, []),
+        ({"merge_base_commit": {"sha": "d" * 40}}, []),
+        ({"head_commit": {"sha": "d" * 40}}, []),
+        ({}, ["ahead_by"]),
+        ({}, ["behind_by"]),
+        ({}, ["total_commits"]),
+    ],
+)
+def test_finish_fails_closed_when_ahead_compare_metadata_is_inconsistent(
+    tmp_path: Path,
+    changes: dict[str, object],
+    omissions: list[str],
+) -> None:
+    scenario = _scenario(tmp_path)
+    _land(scenario)
+    _update_github_facts(
+        scenario,
+        compare_response_changes=changes,
+        omit_compare_fields=omissions,
+    )
+
+    result = _finish(scenario)
+
+    _assert_pending_preserved(scenario, result, "github-inspection-failed")
+
+
+def test_finish_accepts_unpaginated_compare_with_more_than_250_commits(
+    tmp_path: Path,
+) -> None:
+    scenario = _scenario(tmp_path)
+    _land(scenario)
+    default_sha = _github_facts(scenario)["default_sha"]
+    _update_github_facts(
+        scenario,
+        compare_commits=[{"sha": "a" * 40}] * 249 + [{"sha": default_sha}],
+        compare_response_changes={"ahead_by": 251, "total_commits": 251},
+    )
+
+    result = _finish(scenario)
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["status"] == "completed"
+    assert not scenario.worktree.exists()
+    assert not scenario.receipt.exists()
+
+
+def test_finish_fails_closed_when_truncated_compare_has_wrong_length(
+    tmp_path: Path,
+) -> None:
+    scenario = _scenario(tmp_path)
+    _land(scenario)
+    default_sha = _github_facts(scenario)["default_sha"]
+    _update_github_facts(
+        scenario,
+        compare_commits=[{"sha": "a" * 40}] * 248 + [{"sha": default_sha}],
+        compare_response_changes={"ahead_by": 251, "total_commits": 251},
+    )
+
+    result = _finish(scenario)
+
+    _assert_pending_preserved(scenario, result, "github-inspection-failed")
+
+
+def test_finish_fails_closed_when_final_compare_commit_is_malformed(
+    tmp_path: Path,
+) -> None:
+    scenario = _scenario(tmp_path)
+    _land(scenario)
+    _update_github_facts(scenario, compare_commit_shas=[None])
+
+    result = _finish(scenario)
+
+    _assert_pending_preserved(scenario, result, "github-inspection-failed")
+
+
+def test_finish_fails_closed_when_nonfinal_compare_commit_is_malformed(
+    tmp_path: Path,
+) -> None:
+    scenario = _scenario(tmp_path)
+    _land(scenario)
+    default_sha = _github_facts(scenario)["default_sha"]
+    _update_github_facts(
+        scenario,
+        compare_commits=[None, {"sha": default_sha}],
+    )
+
+    result = _finish(scenario)
+
+    _assert_pending_preserved(scenario, result, "github-inspection-failed")
+
+
+def test_finish_fails_closed_when_identical_endpoints_claim_ahead(
+    tmp_path: Path,
+) -> None:
+    scenario = _scenario(tmp_path)
+    _land(scenario, later_commit_count=0)
+    default_sha = _github_facts(scenario)["default_sha"]
+    _update_github_facts(
+        scenario,
+        compare_status="ahead",
+        compare_commits=[{"sha": default_sha}],
+    )
+
+    result = _finish(scenario)
+
+    _assert_pending_preserved(scenario, result, "github-inspection-failed")
+
+
+def test_finish_fails_closed_when_identical_compare_has_commits(
+    tmp_path: Path,
+) -> None:
+    scenario = _scenario(tmp_path)
+    _land(scenario, later_commit_count=0)
+    default_sha = _github_facts(scenario)["default_sha"]
+    _update_github_facts(
+        scenario,
+        compare_status="identical",
+        compare_commits=[{"sha": default_sha}],
+    )
+
+    result = _finish(scenario)
+
+    _assert_pending_preserved(scenario, result, "github-inspection-failed")
+
+
+def test_finish_fails_closed_when_identical_compare_omits_commits(
+    tmp_path: Path,
+) -> None:
+    scenario = _scenario(tmp_path)
+    _land(scenario, later_commit_count=0)
+    _update_github_facts(scenario, omit_compare_commits=True)
+
+    result = _finish(scenario)
+
+    _assert_pending_preserved(scenario, result, "github-inspection-failed")
+
+
+def test_finish_retries_when_default_moves_then_stabilizes(tmp_path: Path) -> None:
+    scenario = _scenario(tmp_path)
+    _land(scenario)
+    facts = _github_facts(scenario)
+    older_default, live_default = facts["default_compare_commit_shas"]
+    _update_github_facts(
+        scenario,
+        default_sha_sequence=[older_default, live_default, live_default],
+        compare_commits_by_head={
+            older_default: [older_default],
+            live_default: [older_default, live_default],
+        },
+    )
+
+    result = _finish(scenario)
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["status"] == "completed"
+    assert _github_facts(scenario)["repository_read_count"] == 3
+    assert not scenario.worktree.exists()
+    assert not scenario.receipt.exists()
+
+
+def test_finish_fails_closed_when_default_moves_during_both_attempts(
+    tmp_path: Path,
+) -> None:
+    scenario = _scenario(tmp_path)
+    _land(scenario)
+    facts = _github_facts(scenario)
+    older_default, live_default = facts["default_compare_commit_shas"]
+    moved_again = "c" * 40
+    _update_github_facts(
+        scenario,
+        default_sha_sequence=[older_default, live_default, moved_again],
+        compare_commits_by_head={
+            older_default: [older_default],
+            live_default: [older_default, live_default],
+        },
+    )
+
+    result = _finish(scenario)
+
+    _assert_pending_preserved(scenario, result, "github-inspection-failed")
+    assert _github_facts(scenario)["repository_read_count"] == 3
+
+
+def test_finish_fails_closed_when_compare_does_not_bind_merge_result(
+    tmp_path: Path,
+) -> None:
+    scenario = _scenario(tmp_path)
+    _land(scenario)
+    _update_github_facts(scenario, compare_base="d" * 40)
+
+    result = _finish(scenario)
+
+    _assert_pending_preserved(scenario, result, "github-inspection-failed")
+
+
+def test_finish_preserves_when_merge_result_is_not_reachable(
+    tmp_path: Path,
+) -> None:
+    scenario = _scenario(tmp_path)
+    _land(scenario)
+    _update_github_facts(scenario, compare_status="behind")
+
+    result = _finish(scenario)
+
+    _assert_pending_preserved(
+        scenario,
+        result,
+        "merge-result-not-reachable-from-live-default",
+    )
+
+
+def test_finish_fails_closed_when_compare_claims_inconsistent_identical_state(
+    tmp_path: Path,
+) -> None:
+    scenario = _scenario(tmp_path)
+    _land(scenario)
+    _update_github_facts(
+        scenario,
+        compare_status="identical",
+        compare_commit_shas=[],
+    )
+
+    result = _finish(scenario)
+
+    _assert_pending_preserved(scenario, result, "github-inspection-failed")
 
 
 def test_finish_preserves_worktree_used_as_nested_process_cwd(tmp_path: Path) -> None:
