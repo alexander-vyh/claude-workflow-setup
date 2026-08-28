@@ -37,6 +37,22 @@ def write_jsonl(path: Path, records: list[dict]) -> None:
     path.write_text("".join(json.dumps(record) + "\n" for record in records))
 
 
+def init_record(session_id: str) -> dict:
+    return {
+        "type": "system",
+        "subtype": "init",
+        "claude_code_version": "2.1.247",
+        "session_id": session_id,
+        "plugins": [
+            {
+                "name": "escapement",
+                "path": str(PLUGIN.resolve()),
+                "source": "escapement@inline",
+            }
+        ],
+    }
+
+
 def load_lifecycle_module():
     path = ROOT / "scripts" / "delegation_canary_lifecycle.py"
     assert path.is_file(), "delegation canary lifecycle module is not implemented"
@@ -52,12 +68,7 @@ def unmanaged_stream() -> list[dict]:
     records = captured()
     session_id = records["background_agent_tool_use"]["session_id"]
     return [
-        {
-            "type": "system",
-            "subtype": "init",
-            "claude_code_version": "2.1.247",
-            "session_id": session_id,
-        },
+        init_record(session_id),
         copy.deepcopy(records["background_agent_tool_use"]),
         copy.deepcopy(records["background_task_started"]),
         copy.deepcopy(records["background_async_result"]),
@@ -265,12 +276,7 @@ def managed_stream(scenario: str = "ok") -> list[dict]:
     else:
         managed_records = [*launch_and_terminal, *peer_records, *terminal_records]
     result = [
-        {
-            "type": "system",
-            "subtype": "init",
-            "claude_code_version": "2.1.247",
-            "session_id": "canary-managed-session",
-        },
+        init_record("canary-managed-session"),
         *managed_records,
         no_spawn_dispatch,
         no_spawn_result,
@@ -296,19 +302,67 @@ def fake_claude(path: Path) -> Path:
         "count=int(counter.read_text()) if counter.exists() else 0\n"
         "counter.write_text(str(count+1))\n"
         "key='FAKE_UNMANAGED_STREAM' if count == 0 else 'FAKE_MANAGED_STREAM'\n"
-        "sys.stdout.write(pathlib.Path(os.environ[key]).read_text())\n",
+        "stream=pathlib.Path(os.environ[key]).read_text()\n"
+        "plugin_dir=sys.argv[sys.argv.index('--plugin-dir')+1]\n"
+        "if not pathlib.Path(plugin_dir).is_absolute():\n"
+        " records=[json.loads(line) for line in stream.splitlines()]\n"
+        " for record in records:\n"
+        "  if record.get('type')=='system' and record.get('subtype')=='init':\n"
+        "   record['plugins']=[]; record['plugin_errors']=[{'type':'path-not-found','path':plugin_dir}]\n"
+        " stream=''.join(json.dumps(record)+'\\n' for record in records)\n"
+        "sys.stdout.write(stream)\n",
         encoding="utf-8",
     )
     path.chmod(0o755)
     return path
 
 
-def run_canary(tmp_path: Path, scenario: str = "ok", *, drift: bool = False):
+def mutate_init(records: list[dict], scenario: str, other_path: Path) -> None:
+    init = next(record for record in records if record.get("subtype") == "init")
+    plugin = init["plugins"][0]
+    if scenario == "empty-plugins":
+        init["plugins"] = []
+    elif scenario == "plugin-errors":
+        init["plugin_errors"] = [{"type": "path-not-found"}]
+    elif scenario == "empty-plugin-errors":
+        init["plugin_errors"] = []
+    elif scenario == "null-plugin-errors":
+        init["plugin_errors"] = None
+    elif scenario == "wrong-name":
+        plugin["name"] = "not-escapement"
+    elif scenario == "wrong-path":
+        plugin["path"] = str(other_path / "missing")
+    elif scenario == "wrong-source":
+        plugin["source"] = "escapement@marketplace"
+    elif scenario == "later-wrong-path":
+        later = copy.deepcopy(init)
+        later["plugins"][0]["path"] = str(other_path)
+        records.insert(1, later)
+
+
+def run_canary(
+    tmp_path: Path,
+    scenario: str = "ok",
+    *,
+    drift: bool = False,
+    init_scenario: str | None = None,
+    init_target: str = "managed",
+    relative_paths: bool = False,
+    claude_path_mode: str = "absolute",
+):
     assert CANARY.is_file(), "delegation canary is not implemented"
     unmanaged = tmp_path / "unmanaged.jsonl"
     managed = tmp_path / "managed.jsonl"
-    write_jsonl(unmanaged, unmanaged_stream())
-    write_jsonl(managed, managed_stream(scenario))
+    unmanaged_records = unmanaged_stream()
+    managed_records = managed_stream(scenario)
+    if init_scenario:
+        other_path = tmp_path / "other-plugin"
+        if init_scenario == "later-wrong-path":
+            shutil.copytree(PLUGIN, other_path)
+        target = unmanaged_records if init_target == "unmanaged" else managed_records
+        mutate_init(target, init_scenario, other_path)
+    write_jsonl(unmanaged, unmanaged_records)
+    write_jsonl(managed, managed_records)
     candidate = PLUGIN
     if drift:
         candidate = tmp_path / "candidate"
@@ -317,18 +371,33 @@ def run_canary(tmp_path: Path, scenario: str = "ok", *, drift: bool = False):
         hooks.write_text(hooks.read_text() + "\n", encoding="utf-8")
     counter = tmp_path / "claude-counter"
     scratch = tmp_path / "scratch"
+    source_arg: Path | str = ROOT
+    candidate_arg: Path | str = candidate
+    scratch_arg: Path | str = scratch
+    if relative_paths:
+        source_arg = "."
+        candidate_arg = "plugins/escapement-claude"
+        scratch_arg = os.path.relpath(scratch, ROOT)
+    claude_path = fake_claude(tmp_path / "claude")
+    child_path = os.environ.get("PATH", "")
+    claude_arg = str(claude_path)
+    if claude_path_mode == "explicit-relative":
+        claude_arg = os.path.relpath(claude_path, ROOT)
+    elif claude_path_mode == "name-relative-path":
+        claude_arg = "claude"
+        child_path = f"{os.path.relpath(tmp_path, ROOT)}:{child_path}"
     result = subprocess.run(
         [
             sys.executable,
             str(CANARY),
             "--claude-bin",
-            str(fake_claude(tmp_path / "claude")),
+            claude_arg,
             "--source-root",
-            str(ROOT),
+            str(source_arg),
             "--candidate-root",
-            str(candidate),
+            str(candidate_arg),
             "--scratch-root",
-            str(scratch),
+            str(scratch_arg),
             "--expected-version",
             "2.1.247",
         ],
@@ -339,6 +408,7 @@ def run_canary(tmp_path: Path, scenario: str = "ok", *, drift: bool = False):
             "FAKE_CLAUDE_AUDIT": str(tmp_path / "claude-audit.jsonl"),
             "FAKE_UNMANAGED_STREAM": str(unmanaged),
             "FAKE_MANAGED_STREAM": str(managed),
+            "PATH": child_path,
         },
         capture_output=True,
         text=True,
@@ -449,6 +519,56 @@ def test_canary_rejects_candidate_source_or_hook_drift(tmp_path) -> None:
 
     assert result.returncode != 0
     assert output == {"status": "fail", "reason": "installed_surface_drift"}
+
+
+@pytest.mark.parametrize(
+    ("target", "scenario"),
+    [
+        ("unmanaged", "empty-plugins"),
+        ("managed", "empty-plugins"),
+        ("unmanaged", "plugin-errors"),
+        ("managed", "plugin-errors"),
+        ("unmanaged", "empty-plugin-errors"),
+        ("managed", "null-plugin-errors"),
+        ("managed", "wrong-name"),
+        ("managed", "wrong-path"),
+        ("unmanaged", "wrong-source"),
+        ("managed", "later-wrong-path"),
+    ],
+)
+def test_canary_rejects_unloaded_or_wrong_candidate_plugin(
+    tmp_path, target, scenario
+) -> None:
+    result, output = run_canary(
+        tmp_path, init_scenario=scenario, init_target=target
+    )
+
+    assert result.returncode != 0
+    assert output == {"status": "fail", "reason": "host_capability_unresolved"}
+
+
+def test_canary_canonicalizes_relative_roots_before_changing_child_cwd(tmp_path) -> None:
+    result, output = run_canary(tmp_path, relative_paths=True)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert output["status"] == "pass"
+    calls = [
+        json.loads(line)
+        for line in (tmp_path / "claude-audit.jsonl").read_text().splitlines()
+    ]
+    for call in calls:
+        plugin_dir = call["args"][call["args"].index("--plugin-dir") + 1]
+        settings = call["args"][call["args"].index("--settings") + 1]
+        assert plugin_dir == str(PLUGIN.resolve())
+        assert Path(settings).is_absolute()
+
+
+@pytest.mark.parametrize("mode", ["explicit-relative", "name-relative-path"])
+def test_canary_resolves_claude_before_changing_child_cwd(tmp_path, mode) -> None:
+    result, output = run_canary(tmp_path, claude_path_mode=mode)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert output["status"] == "pass"
 
 
 def test_canary_isolates_settings_without_hiding_host_authentication(tmp_path) -> None:

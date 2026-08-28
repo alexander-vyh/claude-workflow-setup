@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import uuid
 from pathlib import Path
@@ -24,6 +25,17 @@ def host_version(claude_bin: Path, env: dict[str, str], timeout: int) -> str:
     if result.returncode != 0 or match is None:
         raise CanaryFailure("host_capability_unresolved")
     return match.group(1)
+
+
+def resolve_claude_bin(value: str) -> Path:
+    has_separator = os.sep in value or bool(os.altsep and os.altsep in value)
+    selected = Path(value).expanduser().resolve() if has_separator else None
+    if selected is None:
+        found = shutil.which(value)
+        selected = Path(found).resolve() if found else None
+    if selected is None or not selected.is_file() or not os.access(selected, os.X_OK):
+        raise CanaryFailure("host_capability_unresolved")
+    return selected
 
 
 def run_claude(
@@ -95,28 +107,33 @@ def managed_prompt(dependency: str) -> str:
 
 
 def execute(args) -> dict:
-    source_plugin = args.source_root / "plugins" / "escapement-claude"
-    if plugin_files(source_plugin) != plugin_files(args.candidate_root):
+    source_root = args.source_root.expanduser().resolve()
+    candidate_root = args.candidate_root.expanduser().resolve()
+    scratch_root = args.scratch_root.expanduser().resolve()
+    claude_bin = resolve_claude_bin(args.claude_bin)
+    source_plugin = source_root / "plugins" / "escapement-claude"
+    if plugin_files(source_plugin) != plugin_files(candidate_root):
         raise CanaryFailure("installed_surface_drift")
-    config, harness, repo = prepare_scratch(args.scratch_root)
+    config, harness, repo = prepare_scratch(scratch_root)
     environment = os.environ.copy()
-    version = host_version(Path(args.claude_bin), environment, args.timeout)
+    version = host_version(claude_bin, environment, args.timeout)
     if args.expected_version and version != args.expected_version:
         raise CanaryFailure("host_capability_unresolved")
     unmanaged = run_claude(
-        Path(args.claude_bin), args.candidate_root, repo, config, harness,
+        claude_bin, candidate_root, repo, config, harness,
         str(uuid.uuid4()), unmanaged_prompt(), environment, args.timeout,
     )
-    unmanaged_result = verify_unmanaged(unmanaged, harness, version)
+    unmanaged_result = verify_unmanaged(unmanaged, harness, version, candidate_root)
     managed_session = str(uuid.uuid4())
     write_mode(harness / "threads" / managed_session, managed_session, repo)
     dependency = f"DEPENDENCY-{uuid.uuid4().hex[:12].upper()}"
     managed = run_claude(
-        Path(args.claude_bin), args.candidate_root, repo, config, harness,
+        claude_bin, candidate_root, repo, config, harness,
         managed_session, managed_prompt(dependency), environment, args.timeout,
     )
     managed_result = verify_managed(
-        managed, args.scratch_root, repo, version, load_api(args.candidate_root)
+        managed, scratch_root, repo, version, candidate_root,
+        load_api(candidate_root),
     )
     return {
         "status": "pass", "host_version": version,

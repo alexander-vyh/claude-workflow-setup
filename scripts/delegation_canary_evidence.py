@@ -91,6 +91,26 @@ def root_result(records: list[dict]) -> str:
     return results[-1] if results else ""
 
 
+def verify_candidate_plugin(records: list[dict], candidate_root: Path) -> None:
+    expected = [
+        {
+            "name": "escapement",
+            "path": str(candidate_root),
+            "source": "escapement@inline",
+        }
+    ]
+    inits = [
+        record for record in records
+        if record.get("type") == "system" and record.get("subtype") == "init"
+    ]
+    if not inits or any(
+        "plugin_errors" in record
+        or record.get("plugins") != expected
+        for record in inits
+    ):
+        raise CanaryFailure("host_capability_unresolved")
+
+
 def spawn_witness(records: list[dict], tool_id: str) -> tuple[str, int, int] | None:
     starts = [
         (index, record) for index, record in enumerate(records)
@@ -116,8 +136,11 @@ def spawn_witness(records: list[dict], tool_id: str) -> tuple[str, int, int] | N
     return child_id, starts[0][0], terminals[0][0]
 
 
-def verify_unmanaged(records: list[dict], harness: Path, version: str) -> dict:
+def verify_unmanaged(
+    records: list[dict], harness: Path, version: str, candidate_root: Path
+) -> dict:
     _session, stream_version = session_and_version(records)
+    verify_candidate_plugin(records, candidate_root)
     found = dispatches(records)
     if stream_version != version or not found:
         raise CanaryFailure("native_agent_first_attempt_failed")

@@ -12,6 +12,7 @@ from delegation_canary_evidence import (
     CanaryFailure,
     dispatches,
     terminal_record,
+    verify_candidate_plugin,
     verify_overlap,
     verify_peer_dependency,
 )
@@ -162,13 +163,15 @@ def load_api(candidate_root: Path) -> dict[str, object]:
 
 
 def verify_managed(
-    records: list[dict], scratch: Path, repo: Path, version: str, api
+    records: list[dict], scratch: Path, repo: Path, version: str,
+    candidate_root: Path, api,
 ) -> dict:
     from delegation_canary_evidence import session_and_version
 
     session_id, stream_version = session_and_version(records)
     if stream_version != version:
         raise CanaryFailure("host_capability_unresolved")
+    verify_candidate_plugin(records, candidate_root)
     thread = scratch / "harness" / "threads" / session_id
     write_mode(thread, session_id, repo)
     ledger_path = thread / "executions.json"
