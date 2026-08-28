@@ -311,8 +311,9 @@ def fake_claude(path: Path) -> Path:
         " for record in records:\n"
         "  if record.get('type')=='system' and record.get('subtype')=='init':\n"
         "   record['plugins']=[]; record['plugin_errors']=[{'type':'path-not-found','path':plugin_dir}]\n"
-        "if os.environ.get('FAKE_INVOKE_AGENT_HOOKS') == '1':\n"
-        " observed=[]\n"
+        "invoke_key='FAKE_INVOKE_UNMANAGED_AGENT_HOOK' if count == 0 else 'FAKE_INVOKE_MANAGED_AGENT_HOOKS'\n"
+        "if os.environ.get(invoke_key) == '1':\n"
+        " observed=[]; pending=None\n"
         " for record in records:\n"
         "  observed.append(record)\n"
         "  content=record.get('message',{}).get('content',[])\n"
@@ -320,7 +321,19 @@ def fake_claude(path: Path) -> Path:
         "  if item.get('type')!='tool_use' or item.get('name')!='Agent': continue\n"
         "  payload={'hook_event_name':'PreToolUse','tool_name':'Agent','session_id':record.get('session_id'),'tool_use_id':item.get('id'),'tool_input':item.get('input')}\n"
         "  hook=subprocess.run([sys.executable,'-B',str(pathlib.Path(plugin_dir)/'harness/bin/delegation_hook.py')],input=json.dumps(payload),capture_output=True,text=True,env=os.environ)\n"
-        "  if os.environ.get('FAKE_EMIT_HOOK_RESPONSES') == '1': observed.append({'type':'system','subtype':'hook_response','hook_id':str(uuid.uuid4()),'hook_name':'PreToolUse:Agent','hook_event':'PreToolUse','output':hook.stdout,'stdout':hook.stdout,'stderr':hook.stderr,'exit_code':hook.returncode,'outcome':'success' if hook.returncode==0 else 'error','session_id':record.get('session_id')})\n"
+        "  mode=os.environ.get('FAKE_UNMANAGED_HOOK_MODE','ok') if count == 0 else 'ok'\n"
+        "  if mode=='crash': hook=subprocess.CompletedProcess([],9,'','candidate hook crashed')\n"
+        "  elif mode=='blocking': hook=subprocess.CompletedProcess([],0,json.dumps({'hookSpecificOutput':{'hookEventName':'PreToolUse','permissionDecision':'deny','permissionDecisionReason':'blocked'}})+'\\n','')\n"
+        "  elif mode=='malformed': hook=subprocess.CompletedProcess([],0,'not-json\\n','')\n"
+        "  emit_key='FAKE_EMIT_UNMANAGED_HOOK_RESPONSE' if count == 0 else 'FAKE_EMIT_MANAGED_HOOK_RESPONSES'\n"
+        "  hook_id=str(uuid.uuid4())\n"
+        "  observed.append({'type':'system','subtype':'hook_started','hook_id':hook_id,'hook_name':'PreToolUse:Agent','hook_event':'PreToolUse','session_id':record.get('session_id')})\n"
+        "  response={'type':'system','subtype':'hook_response','hook_id':hook_id,'hook_name':'PreToolUse:Agent','hook_event':'PreToolUse','output':hook.stdout,'stdout':hook.stdout,'stderr':hook.stderr,'exit_code':hook.returncode,'outcome':'success' if hook.returncode==0 else 'error','session_id':record.get('session_id')}\n"
+        "  if os.environ.get(emit_key) == '1':\n"
+        "   if count != 0 and os.environ.get('FAKE_DELAY_MANAGED_HOOK_RESPONSE') == '1' and item.get('input',{}).get('name') == 'canary-child-2': pending=response\n"
+        "   else: observed.append(response)\n"
+        "  if pending is not None and item.get('input',{}).get('name') == 'canary-child-3': observed.append(pending); pending=None\n"
+        " if pending is not None: observed.append(pending)\n"
         " records=observed\n"
         "sys.stdout.write(''.join(json.dumps(record)+'\\n' for record in records))\n",
         encoding="utf-8",
@@ -361,8 +374,12 @@ def run_canary(
     init_target: str = "managed",
     relative_paths: bool = False,
     claude_path_mode: str = "absolute",
-    invoke_agent_hooks: bool = True,
-    emit_hook_responses: bool = True,
+    invoke_unmanaged_hook: bool = True,
+    invoke_managed_hooks: bool = True,
+    emit_unmanaged_hook_response: bool = True,
+    emit_managed_hook_responses: bool = True,
+    unmanaged_hook_mode: str = "ok",
+    delay_managed_hook_response: bool = False,
 ):
     assert CANARY.is_file(), "delegation canary is not implemented"
     unmanaged = tmp_path / "unmanaged.jsonl"
@@ -422,8 +439,20 @@ def run_canary(
             "FAKE_CLAUDE_AUDIT": str(tmp_path / "claude-audit.jsonl"),
             "FAKE_UNMANAGED_STREAM": str(unmanaged),
             "FAKE_MANAGED_STREAM": str(managed),
-            "FAKE_INVOKE_AGENT_HOOKS": "1" if invoke_agent_hooks else "0",
-            "FAKE_EMIT_HOOK_RESPONSES": "1" if emit_hook_responses else "0",
+            "FAKE_INVOKE_UNMANAGED_AGENT_HOOK": (
+                "1" if invoke_unmanaged_hook else "0"
+            ),
+            "FAKE_INVOKE_MANAGED_AGENT_HOOKS": "1" if invoke_managed_hooks else "0",
+            "FAKE_EMIT_UNMANAGED_HOOK_RESPONSE": (
+                "1" if emit_unmanaged_hook_response else "0"
+            ),
+            "FAKE_EMIT_MANAGED_HOOK_RESPONSES": (
+                "1" if emit_managed_hook_responses else "0"
+            ),
+            "FAKE_UNMANAGED_HOOK_MODE": unmanaged_hook_mode,
+            "FAKE_DELAY_MANAGED_HOOK_RESPONSE": (
+                "1" if delay_managed_hook_response else "0"
+            ),
             "PATH": child_path,
         },
         capture_output=True,
@@ -460,17 +489,29 @@ def test_isolated_canary_proves_unmanaged_and_managed_public_outcomes(tmp_path) 
 
 
 def test_canary_rejects_valid_transcript_without_automatic_hook_ledger(tmp_path) -> None:
-    result, output = run_canary(tmp_path, invoke_agent_hooks=False)
+    result, output = run_canary(tmp_path, invoke_managed_hooks=False)
 
     assert result.returncode != 0
     assert output == {"status": "fail", "reason": "managed_completion_unresolved"}
 
 
 def test_canary_rejects_hook_ledger_without_structured_host_response(tmp_path) -> None:
-    result, output = run_canary(tmp_path, emit_hook_responses=False)
+    result, output = run_canary(tmp_path, emit_managed_hook_responses=False)
 
     assert result.returncode != 0
     assert output == {"status": "fail", "reason": "managed_completion_unresolved"}
+
+
+@pytest.mark.parametrize("mode", ["missing", "crash", "blocking", "malformed"])
+def test_canary_rejects_unproven_unmanaged_candidate_hook(tmp_path, mode) -> None:
+    result, output = run_canary(
+        tmp_path,
+        emit_unmanaged_hook_response=mode != "missing",
+        unmanaged_hook_mode=mode,
+    )
+
+    assert result.returncode != 0
+    assert output == {"status": "fail", "reason": "native_agent_first_attempt_failed"}
 
 
 def test_canary_has_no_post_hoc_dispatch_registration_authority() -> None:
@@ -484,6 +525,16 @@ def test_canary_accepts_acknowledged_child_to_child_dependency(tmp_path) -> None
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert output["managed"]["peer_dependency_proven"] is True
+
+
+def test_canary_accepts_delayed_hook_response_bound_to_earlier_dispatch(tmp_path) -> None:
+    result, output = run_canary(tmp_path, delay_managed_hook_response=True)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert output["managed"]["completion_decision"] == [
+        "allow",
+        "delegated_outcome_complete",
+    ]
 
 
 def test_result_release_rejects_cross_swapped_terminal_evidence(tmp_path) -> None:

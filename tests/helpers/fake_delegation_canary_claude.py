@@ -14,6 +14,17 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 CONTRACT_PATH = ROOT / "tests" / "test_delegation_canary.py"
 VERSION = "2.1.248"
+PLUGIN_ID = "escapement@escapement"
+AUDIT_CHECKS = {
+    "journal_armed",
+    "registry_live",
+    "bin_wrapper_live",
+    "schemas_wrapper_live",
+    "plugin_setting_restored",
+    "supervisor_marker_live",
+    "supervisor_plist_live",
+    "supervisor_loaded",
+}
 
 
 def _contract():
@@ -25,19 +36,21 @@ def _contract():
     return module
 
 
-def _plugin_command(args: list[str]) -> bool:
-    if not args or args[0] != "plugin":
-        return False
+def _plugin_command(args: list[str]) -> int:
+    supported = {
+        ("plugin", "update", PLUGIN_ID): True,
+        ("plugin", "disable", PLUGIN_ID): False,
+    }
+    enabled = supported.get(tuple(args))
+    if enabled is None:
+        return 2
     settings_path = Path.home() / ".claude" / "settings.json"
     settings = json.loads(settings_path.read_text(encoding="utf-8"))
-    action = args[1] if len(args) > 1 else ""
-    if action in {"update", "install"}:
-        settings.setdefault("enabledPlugins", {})["escapement@escapement"] = True
+    settings.setdefault("enabledPlugins", {})[PLUGIN_ID] = enabled
+    if enabled:
         settings.pop("model", None)
-    elif action == "disable":
-        settings.setdefault("enabledPlugins", {})["escapement@escapement"] = False
     settings_path.write_text(json.dumps(settings, indent=2), encoding="utf-8")
-    return True
+    return 0
 
 
 def _candidate_audit(candidate: Path, phase: str) -> None:
@@ -98,16 +111,12 @@ def _assert_audit(path: Path) -> int:
         if path.is_file()
         else []
     )
+    expected_keys = AUDIT_CHECKS | {"phase"}
     if [record.get("phase") for record in records] != ["unmanaged", "managed"]:
         return 1
-    return int(
-        not all(
-            value
-            for record in records
-            for key, value in record.items()
-            if key != "phase"
-        )
-    )
+    if any(set(record) != expected_keys for record in records):
+        return 1
+    return int(any(record[key] is not True for record in records for key in AUDIT_CHECKS))
 
 
 def _host_stream(args: list[str]) -> int:
@@ -179,8 +188,8 @@ def main() -> int:
     if args == ["--version"]:
         print(f"{VERSION} (Claude Code)")
         return 0
-    if _plugin_command(args):
-        return 0
+    if args and args[0] == "plugin":
+        return _plugin_command(args)
     if "--plugin-dir" in args and "--session-id" in args:
         return _host_stream(args)
     return 0

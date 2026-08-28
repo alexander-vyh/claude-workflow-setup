@@ -103,6 +103,42 @@ def verify_dispatch_hook_responses(records: list[dict]) -> None:
             raise CanaryFailure("managed_completion_unresolved")
 
 
+def verify_unmanaged_hook_response(
+    records: list[dict], dispatch_index: int, dispatch_record: dict, start_index: int
+) -> None:
+    """Require the candidate hook's exact native fail-open response before spawn."""
+    expected_output = {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "allow",
+            "permissionDecisionReason": "unmanaged_native_agent",
+        }
+    }
+    matches = []
+    for record in records[dispatch_index + 1 : start_index]:
+        stdout = record.get("stdout") if isinstance(record, dict) else None
+        try:
+            parsed = json.loads(stdout) if isinstance(stdout, str) else None
+        except json.JSONDecodeError:
+            parsed = None
+        if parsed != expected_output:
+            continue
+        if (
+            record.get("type") == "system"
+            and record.get("subtype") == "hook_response"
+            and record.get("hook_event") == "PreToolUse"
+            and record.get("hook_name") == "PreToolUse:Agent"
+            and record.get("session_id") == dispatch_record.get("session_id")
+            and record.get("output") == stdout
+            and record.get("stderr") == ""
+            and record.get("exit_code") == 0
+            and record.get("outcome") == "success"
+        ):
+            matches.append(record)
+    if len(matches) != 1:
+        raise CanaryFailure("native_agent_first_attempt_failed")
+
+
 def session_and_version(records: list[dict]) -> tuple[str, str]:
     init = next(
         (
@@ -183,8 +219,10 @@ def verify_unmanaged(
     found = dispatches(records)
     if stream_version != version or not found:
         raise CanaryFailure("native_agent_first_attempt_failed")
-    if spawn_witness(records, found[0][2]["id"]) is None:
+    witness = spawn_witness(records, found[0][2]["id"])
+    if witness is None:
         raise CanaryFailure("native_agent_first_attempt_failed")
+    verify_unmanaged_hook_response(records, found[0][0], found[0][1], witness[1])
     if "UNMANAGED_OK" not in root_result(records):
         raise CanaryFailure("native_agent_first_attempt_failed")
     if any(harness.rglob("executions.json")):
