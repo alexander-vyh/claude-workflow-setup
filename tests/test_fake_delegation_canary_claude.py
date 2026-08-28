@@ -78,6 +78,7 @@ def test_fake_host_accepts_only_supported_plugin_operations(
         ("plugin", "update"),
         ("plugin", "update", "other@marketplace"),
         ("plugin", "update", PLUGIN_ID, "surplus"),
+        ("plugin", PLUGIN_ID, "update"),
         ("plugin", "uninstall", PLUGIN_ID),
     ],
 )
@@ -150,14 +151,20 @@ def test_fake_host_executes_the_supplied_candidate_hook(tmp_path) -> None:
     hook.parent.mkdir(parents=True)
     schemas.mkdir(parents=True)
     sentinel = tmp_path / "candidate-hook.jsonl"
+    expected_hook_output = {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": "candidate-specific-denial",
+        }
+    }
+    expected_stdout = json.dumps(expected_hook_output) + "\n"
     hook.write_text(
         "import json, os, pathlib, sys\n"
         "payload=json.load(sys.stdin)\n"
         "with pathlib.Path(os.environ['CANDIDATE_HOOK_SENTINEL']).open('a') as out:\n"
         " out.write(json.dumps(payload)+'\\n')\n"
-        "print(json.dumps({'hookSpecificOutput':{'hookEventName':'PreToolUse',"
-        "'permissionDecision':'allow','permissionDecisionReason':"
-        "'unmanaged_native_agent'}}))\n",
+        f"print({expected_stdout.rstrip()!r})\n",
         encoding="utf-8",
     )
     claude = tmp_path / ".claude"
@@ -210,6 +217,16 @@ def test_fake_host_executes_the_supplied_candidate_hook(tmp_path) -> None:
     assert payloads[0]["session_id"] == session_id
     assert payloads[0]["tool_input"]["run_in_background"] is True
     assert payloads[0]["tool_use_id"]
+    responses = [
+        record
+        for record in (json.loads(line) for line in result.stdout.splitlines())
+        if record.get("type") == "system"
+        and record.get("subtype") == "hook_response"
+    ]
+    assert len(responses) == 1
+    assert responses[0]["stdout"] == expected_stdout
+    assert responses[0]["output"] == expected_stdout
+    assert json.loads(responses[0]["stdout"]) == expected_hook_output
     sentinel_before = sentinel.read_bytes()
     settings_before = settings.read_bytes()
 
@@ -226,6 +243,20 @@ def test_fake_host_executes_the_supplied_candidate_hook(tmp_path) -> None:
     assert invalid.returncode != 0
     assert sentinel.read_bytes() == sentinel_before
     assert settings.read_bytes() == settings_before
+
+
+def test_fake_host_rejects_reordered_complete_host_invocation(tmp_path) -> None:
+    candidate = tmp_path / "candidate"
+    candidate.mkdir()
+    settings = settings_fixture(tmp_path)
+    args = list(exact_host_args(candidate, settings, "reordered-session"))
+    args[0], args[1] = args[1], args[0]
+    before = settings.read_bytes()
+
+    result = run_helper(tmp_path, *args)
+
+    assert result.returncode != 0
+    assert settings.read_bytes() == before
 
 
 def audit_record(phase: str) -> dict:
