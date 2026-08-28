@@ -20,4 +20,4 @@
 
 - [x] 4.1 Run focused behavioral, mutation, generated-surface, and full repository verification
 - [x] 4.2 Exercise the public command against a disposable real remote and primary checkout
-- [ ] 4.3 Push the feature branch, merge the green pull request, refresh both installed plugins, and verify the installed outcome
+- [x] 4.3 Push the feature branch, merge the green pull request, refresh both installed plugins, and verify the installed outcome
