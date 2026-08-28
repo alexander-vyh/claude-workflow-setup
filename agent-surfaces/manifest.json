@@ -150,7 +150,7 @@
     },
     {
       "id": "review_gate",
-      "description": "Require an independent, bead-bound, non-stale review before a bead can be closed. On Claude the reviewer's own returned text is captured at Agent PostToolUse and stored as the verdict, so recorded findings are the reviewer's rather than the implementer's, and a verdict naming unresolved blocking findings refuses the close until the work changes and is re-reviewed. CAPABILITY NOTE: verdict capture is conditional on _review_verdict.VERDICT_CAPTURE_SUPPORTED, which is currently False because whether a hook can observe a subagent's final text is still UNPROVEN (escapement-g27c holds the open probe; the only evidence is binary-string inference, not a captured payload). Until it is True the traceability rule is inert and only the dispatch-level corroboration, the blocking rule, and the reviewer allowlist are enforced.",
+      "description": "Require an independent, bead-bound, non-stale review before a bead can be closed. On Claude the reviewer's own returned text is captured from SubagentStop.last_assistant_message and joined to its dispatch by tool_response.agentId (escapement-g27c proved both by observation), so the recorded findings are the reviewer's rather than the implementer's. CAPABILITY NOTE: capture, blocking classification, and the blocking deny are one feature gated by _review_verdict.VERDICT_CAPTURE_SUPPORTED, which is False pending escapement-1nzm \u2014 the classifier currently returns blocking for a clean PASS, so enabling it would deny honest closes. Until it flips, an agent that dispatches a reviewer and ignores it can still close the bead.",
       "source": "claude/hooks/review_gate.py",
       "hosts": {
         "codex": {
@@ -180,6 +180,10 @@
             {
               "event": "PostToolUse",
               "matcher": "Agent",
+              "command": "python3 -B ~/.claude/hooks/review_gate.py"
+            },
+            {
+              "event": "SubagentStop",
               "command": "python3 -B ~/.claude/hooks/review_gate.py"
             }
           ],

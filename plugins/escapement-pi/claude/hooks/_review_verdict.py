@@ -64,15 +64,15 @@ VERDICT_CAPTURE_SUPPORTED = False
 #: test_review_verdict.py so that flipping the flag is a documented claim rather
 #: than a silent tightening or a silent surrender.
 CAPTURE_EVIDENCE = (
-    "UNPROVEN as of 2026-08-27. escapement-g27c holds the open probe of whether "
-    "a PostToolUse hook with matcher 'Agent' receives the subagent's final text. "
-    "The only evidence today is inference from Claude Code binary strings — "
-    "HOOK_EVENT_REGISTRY lists 'Agent' among the PostToolUse tools and the "
-    "embedded docs say tool_response is populated there — and inference is not "
-    "a captured payload. Because an over-claimed True would deny every close on "
-    "this host, the conservative value is the honest one until the probe "
-    "returns. Flip to True only when a real captured payload is pasted into "
-    "escapement-g27c, and rewrite this string to cite it."
+    "CAPABILITY PROVEN, FEATURE STILL GATED. escapement-g27c (PR #183) "
+    "established by observation, not inference, that a reviewer subagent's "
+    "final text is SubagentStop.last_assistant_message, joined to its dispatch "
+    "by tool_response.agentId == SubagentStop.agent_id; review_gate reads "
+    "exactly those fields. This flag is False because of escapement-1nzm, not "
+    "because of the host: classify_blocking returns blocking for a clean PASS "
+    "on the format adversarial-reviewer.md mandates, so enabling capture would "
+    "deny honest closes with a denial whose own remedy cannot clear it. Flip "
+    "to True when 1nzm lands and the classifier separates its two classes."
 )
 
 #: Beads metadata is not a document store, so a long verdict is stored clipped.

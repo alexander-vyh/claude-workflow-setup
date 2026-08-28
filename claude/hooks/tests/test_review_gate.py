@@ -707,6 +707,18 @@ class TestVerdictChainEndToEnd:
         "comparison rejects a reviewer that read an earlier state."
     )
 
+    _agent_counter = 0
+
+    def _next_agent_id(self):
+        type(self)._agent_counter += 1
+        return type(self)._agent_counter
+
+    @staticmethod
+    def _event(payload):
+        with patch("sys.stdin", io.StringIO(json.dumps(payload))), \
+             patch("sys.stdout", io.StringIO()):
+            review_gate.main()
+
     def _run_chain(self, verdict, *, capture=True, bead="escapement-abc1",
                    fingerprint=FINGERPRINT):
         """Dispatch a reviewer, optionally let it answer, then record.
@@ -720,20 +732,34 @@ class TestVerdictChainEndToEnd:
             "description": f"review {bead}",
             "prompt": f"Review the implementation of {bead}.",
         }
+        agent_id = f"agent-{self._next_agent_id()}"
         _dispatch(tool_input, fingerprint=fingerprint)
 
         if capture and verdict is not None:
-            payload = {
+            # The REAL two-event sequence escapement-g27c established.
+            # PostToolUse supplies the join key only — for a background
+            # dispatch its tool_response carries no reply at all, and its
+            # `prompt` field echoes the dispatcher's own text. The verdict
+            # arrives on SubagentStop, which carries no tool_input and so
+            # cannot name the bead itself.
+            self._event({
                 "hook_event_name": "PostToolUse",
                 "tool_name": "Agent",
                 "session_id": "s1",
                 "tool_input": tool_input,
-                "tool_response": {"content": [{"type": "text", "text": verdict}]},
+                "tool_response": {
+                    "agentId": agent_id,
+                    "prompt": tool_input["prompt"],
+                },
                 "cwd": "/tmp",
-            }
-            with patch("sys.stdin", io.StringIO(json.dumps(payload))), \
-                 patch("sys.stdout", io.StringIO()):
-                review_gate.main()
+            })
+            self._event({
+                "hook_event_name": "SubagentStop",
+                "session_id": "s1",
+                "agent_id": agent_id,
+                "last_assistant_message": verdict,
+                "cwd": "/tmp",
+            })
 
         written = []
         with patch.object(cli, "write_record",
