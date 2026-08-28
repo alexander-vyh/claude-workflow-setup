@@ -276,7 +276,7 @@ def execution_stop_decision(
     active = [
         execution
         for execution in ledger["executions"]
-        if execution["state"] not in {"terminal", "cancelled"}
+        if execution["state"] not in {"terminal", "cancelled", "aborted"}
     ]
     if not active:
         if root_status == "closed":
@@ -288,6 +288,19 @@ def execution_stop_decision(
                 return ("block", "delegated_execution_unresolved")
             return ("allow", "delegated_outcome_complete")
         return ("block", "parent_outcome_unresolved")
+
+    # Without supervisor/wakeup evidence, an unbound queued dispatch has no
+    # trusted native identity.  Even after its timer elapses it remains
+    # unresolved rather than becoming an observed overdue child.
+    if (
+        not scheduled
+        and health is None
+        and any(
+            execution["state"] == "queued" and execution["native_child_id"] is None
+            for execution in active
+        )
+    ):
+        return ("block", "delegated_execution_unresolved")
 
     if any(_deadline_due(execution, now) for execution in active):
         return ("block", "delegated_execution_overdue")

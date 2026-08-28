@@ -482,3 +482,26 @@ def test_terminal_requires_exact_tool_and_bound_task_identity(tmp_path) -> None:
         assert adapter.observe_transcript(terminal, ledger) == []
         assert ledger == before
         assert item(ledger)["state"] == "running"
+
+
+def test_replayed_spawn_prefix_does_not_mask_later_terminal_in_same_transcript(
+    tmp_path,
+) -> None:
+    adapter = load_adapter()
+    captured = fixtures()
+    ledger = background_ledger()
+    transcript = write_transcript(
+        tmp_path / "complete-transcript.jsonl",
+        captured["background_agent_tool_use"],
+        captured["background_task_started"],
+        captured["background_async_result"],
+        captured["background_task_terminal"],
+    )
+
+    apply_events(ledger, adapter.observe_transcript(transcript, ledger), "2026-08-27T22:10:08Z")
+
+    events = adapter.observe_transcript(transcript, ledger)
+
+    assert [event["kind"] for event in events] == ["child_terminal"]
+    apply_events(ledger, events, "2026-08-27T22:10:12Z")
+    assert item(ledger)["state"] == "terminal"

@@ -7,6 +7,7 @@ import datetime as dt
 import json
 import pathlib
 import sys
+import types
 
 BIN = pathlib.Path(__file__).resolve().parent.parent / "bin"
 FIXTURE = (
@@ -81,6 +82,28 @@ def test_public_posttool_durably_applies_captured_interactive_spawn_prefix(
 def test_public_posttool_store_failure_never_denies_claude_capacity(tmp_path) -> None:
     path = tmp_path / "executions.json"
     path.mkdir()
+
+    observed = delegation_hook.post_tool(interactive_spawn(), path)
+
+    assert observed == {
+        "status": "unresolved",
+        "reason": "lifecycle_observation_persistence_failed",
+    }
+    assert observed.get("decision") != "deny"
+
+
+def test_public_posttool_adapter_failure_never_denies_claude_capacity(
+    tmp_path, monkeypatch
+) -> None:
+    path = tmp_path / "executions.json"
+    path.write_text(json.dumps(registered(interactive_spawn())), encoding="utf-8")
+    path.chmod(0o600)
+    adapter = types.SimpleNamespace(
+        observe_post_tool=lambda _payload, _ledger: (_ for _ in ()).throw(
+            RuntimeError("adapter drift")
+        )
+    )
+    monkeypatch.setitem(sys.modules, "claude_agent_lifecycle", adapter)
 
     observed = delegation_hook.post_tool(interactive_spawn(), path)
 

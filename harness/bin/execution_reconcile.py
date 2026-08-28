@@ -64,6 +64,16 @@ def _apply_normalized_events(
             "to the active attempt.",
         )
         return
+    transcript_path = payload.get("transcript_path")
+    if isinstance(transcript_path, str) and transcript_path:
+        try:
+            from claude_agent_lifecycle import observe_transcript
+
+            events = [*events, *observe_transcript(pathlib.Path(transcript_path), ledger)]
+        except (OSError, TypeError, ValueError):
+            # Host observation is deliberately fail-open.  Its missing evidence
+            # remains visible through the managed ledger/completion boundary.
+            pass
     for event in events:
         if not isinstance(event, dict) or not isinstance(event.get("generation"), int):
             _append_once(
