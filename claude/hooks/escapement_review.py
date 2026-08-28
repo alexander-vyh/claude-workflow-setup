@@ -34,7 +34,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from _review_ledger import has_dispatch  # noqa: E402
+from _review_ledger import find_dispatch  # noqa: E402
 from _review_record import (  # noqa: E402
     INDEPENDENT_REVIEWER_TYPES,
     build_record,
@@ -42,6 +42,44 @@ from _review_record import (  # noqa: E402
     work_fingerprint,
     write_record,
 )
+
+
+def has_dispatch(bead_id, session_id=None, fingerprint=None) -> bool:
+    """Kept as a named seam so callers and tests can ask the boolean question."""
+    return find_dispatch(bead_id, session_id, fingerprint) is not None
+
+
+def resolve_reviewer(supplied: str | None, dispatch: dict | None) -> tuple[str | None, str | None]:
+    """Return (reviewer, error) for the record's `reviewer` field.
+
+    `--reviewer` used to default to `"unspecified"` and was never checked
+    against the allowlist, even on a record that went on to claim
+    `independent: true` — so the field that names who reviewed the work could
+    say nothing at all while the record asserted the work had been reviewed.
+
+    Two rules now. When a dispatch was observed, the ledger knows which agent
+    actually ran, and that wins: the authoritative answer must not come from a
+    flag the implementer types. When it was not (Codex, or no reviewer at all),
+    a supplied value has to name a real dispatchable reviewer — validating the
+    value rather than its presence, per gate-design.md Rule 3.
+    """
+    if dispatch is not None:
+        observed = (dispatch.get("subagent_type") or "").strip()
+        if observed:
+            return observed, None
+
+    named = (supplied or "").strip()
+    if not named:
+        return "unspecified", None
+    if named not in INDEPENDENT_REVIEWER_TYPES:
+        return None, (
+            f"--reviewer {named!r} does not name a structurally independent "
+            "reviewer. Use one of: "
+            f"{', '.join(sorted(INDEPENDENT_REVIEWER_TYPES))} — or omit the "
+            "flag, which records the reviewer as unspecified rather than "
+            "claiming an independence that was never established."
+        )
+    return named, None
 
 
 def _read_findings(args: argparse.Namespace) -> tuple[str | None, str | None]:
@@ -63,10 +101,42 @@ def cmd_record(args: argparse.Namespace) -> int:
         print("error: --bead is required", file=sys.stderr)
         return 2
 
-    findings, err = _read_findings(args)
+    supplied, err = _read_findings(args)
     if err:
         print(f"error: {err}", file=sys.stderr)
         return 2
+
+    # Corroboration is only claimable where the host can observe a dispatch,
+    # AND only for a dispatch that read THIS state of the work. Passing the
+    # fingerprint is what binds review->record: without it, an implementer
+    # could have a reviewer read state A, rewrite everything, and record at
+    # state B with the reviewer's blessing still attached.
+    fingerprint = work_fingerprint(args.cwd)
+    dispatch = find_dispatch(
+        bead_id, os.environ.get("CLAUDE_SESSION_ID"), fingerprint
+    )
+    independent: object = True if dispatch is not None else "unverified"
+
+    reviewer, rerr = resolve_reviewer(args.reviewer, dispatch)
+    if rerr:
+        print(f"error: {rerr}", file=sys.stderr)
+        return 2
+
+    # THE POINT OF escapement-1l04. When the host let us capture what the
+    # reviewer actually returned, those bytes ARE the findings, and the text
+    # the implementer typed becomes `response` — kept for a human reader,
+    # never read by the gate. Letting the implementer author the verdict while
+    # the gate checks whether it *resembles* the reviewer's is a threshold
+    # applied to text the constrained party controls, and every such threshold
+    # is satisfiable while dropping the findings that matter.
+    captured = (dispatch or {}).get("verdict")
+    if captured:
+        findings, response, verdict_source = captured, supplied, "captured"
+        blocking = bool((dispatch or {}).get("blocking"))
+        verdict_digest = (dispatch or {}).get("verdict_digest")
+    else:
+        findings, response, verdict_source = supplied, None, None
+        blocking, verdict_digest = False, None
 
     ok, verr = validate_findings(findings, bead_id)
     if not ok:
@@ -76,19 +146,6 @@ def cmd_record(args: argparse.Namespace) -> int:
         )
         return 1
 
-    reviewer = (args.reviewer or "").strip() or "unspecified"
-
-    # Corroboration is only claimable where the host can observe a dispatch,
-    # AND only for a dispatch that read THIS state of the work. Passing the
-    # fingerprint is what binds review->record: without it, an implementer
-    # could have a reviewer read state A, rewrite everything, and record at
-    # state B with the reviewer's blessing still attached.
-    fingerprint = work_fingerprint(args.cwd)
-    if has_dispatch(bead_id, os.environ.get("CLAUDE_SESSION_ID"), fingerprint):
-        independent: object = True
-    else:
-        independent = "unverified"
-
     record = build_record(
         bead_id=bead_id,
         findings=findings or "",
@@ -96,6 +153,10 @@ def cmd_record(args: argparse.Namespace) -> int:
         fingerprint=fingerprint,
         recorded_at=dt.datetime.now(dt.timezone.utc).isoformat(),
         host=args.host,
+        verdict_source=verdict_source,
+        verdict_digest=verdict_digest,
+        blocking=blocking,
+        response=response,
     )
     record["independent"] = independent
 
@@ -108,6 +169,18 @@ def cmd_record(args: argparse.Namespace) -> int:
         return 1
 
     print(f"Recorded independent review of {bead_id} (reviewer={reviewer}).")
+    if verdict_source == "captured":
+        print(
+            "  verdict: captured from the reviewer's own output; your "
+            "--findings text was stored as `response` and is not what the "
+            "gate reads."
+        )
+    if blocking:
+        print(
+            f"  blocking: the reviewer's verdict names an unresolved blocking "
+            f"finding, so {bead_id} will not close until the work changes and "
+            "a fresh review is recorded against it."
+        )
     if independent is not True:
         print(
             "  independence: unverified — no isolated reviewer dispatch matching "
@@ -133,11 +206,17 @@ def build_parser() -> argparse.ArgumentParser:
     rec = sub.add_parser("record", help="record a review verdict")
     rec.add_argument("--bead", required=True, help="bead id under review")
     source = rec.add_mutually_exclusive_group(required=True)
-    source.add_argument("--findings-file", help="path to the reviewer's verdict")
+    source.add_argument(
+        "--findings-file",
+        help="path to the reviewer's verdict (ignored when the host captured "
+             "the reviewer's own output, which always wins)",
+    )
     source.add_argument("--findings", help="the reviewer's verdict as text")
     rec.add_argument(
         "--reviewer",
-        help="reviewer identity, e.g. adversarial-reviewer",
+        help="reviewer identity; must name a structurally independent reviewer "
+             "when supplied. Overridden by the observed dispatch when there "
+             "is one.",
     )
     rec.add_argument("--cwd", help="work tree to fingerprint (default: cwd)")
     rec.add_argument("--host", default="cli", help="recording host label")

@@ -177,12 +177,18 @@ def _entry_corroborates(entry: object, bead_id: str, fingerprint: str | None) ->
     return entry.get("fingerprint") == fingerprint
 
 
-def has_dispatch(
+def find_dispatch(
     bead_id: str,
     session_id: str | None = None,
     fingerprint: str | None = None,
-) -> bool:
-    """True when an isolated reviewer read THIS bead at THIS state of the work.
+) -> dict | None:
+    """Return the corroborating dispatch entry, or None.
+
+    Returns the entry rather than a bool because the caller needs two things
+    out of it that a bool throws away: the reviewer's actual `subagent_type`
+    (so the recorded `reviewer` field names the agent that really ran, instead
+    of whatever the implementer typed after `--reviewer`), and the captured
+    verdict, if the host let us observe one.
 
     `fingerprint` is the caller's current work fingerprint. Requiring the
     dispatch to carry the same one is what binds review→record: a reviewer that
@@ -191,27 +197,112 @@ def has_dispatch(
     Prefers the caller's own session ledger; falls back to scanning recent,
     trusted ledgers because the recording CLI runs as a subprocess that may
     have no resolvable session id.
-    """
-    if session_id:
-        return any(
-            _entry_corroborates(e, bead_id, fingerprint)
-            for e in _load(ledger_path(session_id))
-        )
 
+    SELECTION AMONG SEVERAL MATCHES. Newest-wins alone is wrong, and mutation
+    testing is what surfaced it: two reviewers dispatched in parallel against
+    the same bead and the same tree state produce two entries whose relative
+    order is arbitrary, so "dispatch two reviewers and record whichever one
+    liked it" would have become the next bypass. A blocking verdict therefore
+    outranks a clean one regardless of timing — a reviewer that said BLOCK is
+    not overruled by a second opinion that arrived a second later. Only among
+    equally-blocking entries does the newest win, which is what makes a
+    re-review after repair count.
+    """
+    matches: list[dict] = []
+    for path in _candidate_paths(session_id):
+        matches.extend(
+            e for e in _load(path) if _entry_corroborates(e, bead_id, fingerprint)
+        )
+    if not matches:
+        return None
+    return max(matches, key=lambda e: (bool(e.get("blocking")), e.get("at") or 0))
+
+
+def _candidate_paths(session_id: str | None) -> list[Path]:
+    if session_id:
+        return [ledger_path(session_id)]
     if not _dir_is_trusted(LEDGER_DIR):
-        return False
+        return []
     try:
         candidates = sorted(LEDGER_DIR.glob("*.json"))
     except OSError:
-        return False
-
+        return []
     now = time.time()
+    fresh: list[Path] = []
     for path in candidates:
         try:
-            if now - path.stat().st_mtime > MAX_DISPATCH_AGE_SECONDS:
-                continue
+            if now - path.stat().st_mtime <= MAX_DISPATCH_AGE_SECONDS:
+                fresh.append(path)
         except OSError:
             continue
-        if any(_entry_corroborates(e, bead_id, fingerprint) for e in _load(path)):
-            return True
-    return False
+    return fresh
+
+
+def has_dispatch(
+    bead_id: str,
+    session_id: str | None = None,
+    fingerprint: str | None = None,
+) -> bool:
+    """True when an isolated reviewer read THIS bead at THIS state of the work."""
+    return find_dispatch(bead_id, session_id, fingerprint) is not None
+
+
+def record_verdict(
+    session_id: str,
+    bead_ids: list[str],
+    subagent_type: str,
+    verdict: str,
+) -> bool:
+    """Attach a reviewer's returned text to its own dispatch entry.
+
+    Called from `Agent` **PostToolUse**, which is the only moment the subagent's
+    output exists. The PreToolUse entry it updates was written before the
+    reviewer emitted a token, which is precisely why a dispatch on its own was
+    never evidence that a review happened.
+
+    Binds to the newest entry for this bead and reviewer type that has no
+    verdict yet, so two reviews in one session do not overwrite each other.
+    Returns True when an entry was updated.
+    """
+    if not verdict or subagent_type not in INDEPENDENT_REVIEWER_TYPES:
+        return False
+    path = ledger_path(session_id)
+    entries = _load(path)
+
+    open_entries = [
+        e for e in entries
+        if isinstance(e, dict)
+        and not e.get("verdict")
+        and e.get("subagent_type") == subagent_type
+        and any(b in (e.get("beads") or []) for b in bead_ids)
+    ]
+    if not open_entries:
+        return False
+
+    target = max(open_entries, key=lambda e: e.get("at") or 0)
+    target["verdict"] = _verdict_module().clip_verdict(verdict)
+    target["verdict_digest"] = _verdict_module().verdict_digest(verdict)
+    target["blocking"] = _verdict_module().classify_blocking(verdict)
+    target["verdict_at"] = time.time()
+
+    try:
+        LEDGER_DIR.mkdir(parents=True, exist_ok=True, mode=_DIR_MODE)
+        os.chmod(LEDGER_DIR, _DIR_MODE)
+        path.write_text(json.dumps({"dispatches": entries}))
+        os.chmod(path, _FILE_MODE)
+    except OSError:
+        return False
+    return True
+
+
+def _verdict_module():
+    """Imported lazily so a missing sibling degrades capture, not the gate.
+
+    `review_gate` is a `PreToolUse` hook on `bd close`; if this module failed to
+    import, every close in the repository would stop. Verdict capture is the
+    newer, more optional half — it must never be able to take the load-bearing
+    half down with it.
+    """
+    import _review_verdict
+
+    return _review_verdict

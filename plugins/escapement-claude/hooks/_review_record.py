@@ -41,9 +41,23 @@ from typing import Any
 # collide with a repository's own metadata conventions.
 METADATA_KEY = "escapement_review"
 
-# Record schema version. Bumped when the shape changes; an unknown version is
-# treated as "no usable record" rather than being guessed at.
-RECORD_VERSION = 1
+# Record schema version. Bumped when the shape changes.
+#
+# v2 (escapement-1l04) adds `verdict_source`, `verdict_digest`, `blocking`, and
+# `response`. v1 records were written under an oracle that never looked at the
+# reviewer's output at all, so the gate refuses them — honouring them would
+# grandfather in exactly the evidence v2 exists to stop accepting, and since the
+# recording CLI only ever writes the current version and hand-writing the
+# metadata key is denied outright, there is no door here to leave open.
+RECORD_VERSION = 2
+
+# Versions we can still *parse*. A v1 record must come back as a record rather
+# than as None, so the gate can say "this review predates the current schema,
+# re-record it" instead of "no review is on record". Telling an agent that no
+# review exists when one plainly does sends it to re-run a reviewer without ever
+# explaining why the first one stopped counting — a denial that misdescribes its
+# own cause fails Internal Transparency (gate-design.md).
+READABLE_RECORD_VERSIONS = {1, 2}
 
 _SUBPROCESS_TIMEOUT = 5
 
@@ -315,7 +329,7 @@ def read_record(bead_id: str, cwd: str | None = None) -> dict[str, Any] | None |
 
     if not isinstance(record, dict):
         return None
-    if record.get("v") != RECORD_VERSION:
+    if record.get("v") not in READABLE_RECORD_VERSIONS:
         return None
     return record
 
@@ -337,8 +351,19 @@ def build_record(
     fingerprint: str | None,
     recorded_at: str,
     host: str = "cli",
+    verdict_source: str | None = None,
+    verdict_digest: str | None = None,
+    blocking: bool = False,
+    response: str | None = None,
 ) -> dict[str, Any]:
-    """Assemble a well-formed review record."""
+    """Assemble a well-formed review record.
+
+    `findings` is the authoritative verdict. When `verdict_source` is
+    `"captured"` those are the reviewer's own bytes; `response` then holds the
+    implementer's account of the work, which is kept because it is useful to a
+    human reader and ignored by the gate because a check that reads text
+    authored by the party it constrains is not a check.
+    """
     return {
         "v": RECORD_VERSION,
         "bead": bead_id,
@@ -346,6 +371,10 @@ def build_record(
         "fingerprint": fingerprint,
         "recorded_at": recorded_at,
         "findings": findings.strip(),
+        "verdict_source": verdict_source,
+        "verdict_digest": verdict_digest,
+        "blocking": blocking,
+        "response": (response or "").strip() or None,
         "host": host,
     }
 

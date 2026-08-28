@@ -4,6 +4,15 @@
       {
         "hooks": [
           {
+            "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/hooks/review_gate.py\"",
+            "type": "command"
+          }
+        ],
+        "matcher": "Agent"
+      },
+      {
+        "hooks": [
+          {
             "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/hooks/design_doc_location_guard.py\"",
             "type": "command"
           }

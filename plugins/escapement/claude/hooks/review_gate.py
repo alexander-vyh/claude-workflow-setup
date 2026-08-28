@@ -39,6 +39,40 @@ test_codex_discovery_close_gate.py), an absent `session_id` identifies the
 Codex shape, where the corroboration is skipped rather than failed — a check
 we cannot run must not read as a check that failed.
 
+WHAT THE VERDICT IS BOUND TO, AND WHAT IS NOT YET ENFORCED (escapement-1l04)
+-----------------------------------------------------------------------------
+The dispatch ledger is written at `Agent` **PreToolUse**, before the subagent
+emits a token. So for its first two versions this gate certified that a reviewer
+had been *summoned*, never that one had been *read*: dispatch a genuinely
+isolated reviewer naming the bead, ignore its answer, write your own
+>=120-character verdict, close. Every check passed.
+
+Three things changed, and they are enforced to different degrees. Saying so
+precisely is the point — this repo's standing rule is that nothing may be
+described as mechanically enforced when it is not:
+
+  ENFORCED NOW. A verdict that names unresolved blocking findings refuses the
+    close while the tree is unchanged, which together with the pre-existing
+    staleness rule means a blocker requires both a repair and a fresh review.
+    `--reviewer` must name a real dispatchable reviewer, and when a dispatch was
+    observed the reviewer identity is taken from the ledger rather than from the
+    flag. Records written under schema v1 — whose oracle never looked at the
+    reviewer's output — are refused, and refused with an accurate reason.
+
+  NOT ENFORCED YET. Requiring the recorded findings to BE the reviewer's own
+    returned text depends on a hook being able to observe a subagent's final
+    output, which `_review_verdict.VERDICT_CAPTURE_SUPPORTED` currently reports
+    as unavailable. The capture path below is written and tested, and the deny
+    branch is conditional on that flag, so the rule switches on the moment
+    escapement-g27c produces a real captured payload. Until then an implementer
+    who dispatches a reviewer and ignores it can still close the bead, and this
+    docstring must keep saying so.
+
+  A COROLLARY. While capture is unavailable, `blocking` is derived from
+    implementer-authored text. It catches an agent that records the reviewer's
+    findings faithfully and then closes anyway; it does not catch one that
+    simply omits them. That is a real reduction in scope, not a hedge.
+
 GATE-DESIGN COMPLIANCE (claude/rules/gate-design.md)
 ----------------------------------------------------
 Rule 1 — escape path, named in the denial itself:
@@ -86,10 +120,11 @@ from _review_command import (  # noqa: E402
     waiver_reason,
     writes_reserved_metadata,
 )
-from _review_ledger import record_dispatch  # noqa: E402
+from _review_ledger import record_dispatch, record_verdict  # noqa: E402
 from _review_record import (  # noqa: E402
     INDEPENDENT_REVIEWER_TYPES,
     METADATA_KEY,
+    RECORD_VERSION,
     UNAVAILABLE,
     changed_paths_since,
     extract_bead_ids,
@@ -97,6 +132,10 @@ from _review_record import (  # noqa: E402
     validate_findings,
     validate_waiver_reason,
     work_fingerprint,
+)
+from _review_verdict import (  # noqa: E402
+    VERDICT_CAPTURE_SUPPORTED,
+    extract_verdict,
 )
 
 _RECORD_CLI = str(Path(__file__).resolve().parent / "escapement_review.py")
@@ -282,6 +321,21 @@ def evaluate_close(command: str, bead_id: str, cwd: str | None,
             record_bead=record.get("bead"),
         )
 
+    if record.get("v") != RECORD_VERSION:
+        # A review IS on record — it was just written under an older oracle,
+        # one that never looked at what the reviewer returned. Saying "no
+        # review is on record" here would send the agent to re-run a reviewer
+        # without ever explaining why the first one stopped counting.
+        return _deny(
+            f"The review on record for {bead_id} was written under review "
+            f"schema v{record.get('v')}, which recorded only that a reviewer "
+            "was dispatched — not what it found. Re-record the verdict so it "
+            "carries the reviewer's actual output.",
+            bead_id,
+            "deny:outdated-schema",
+            record_version=record.get("v"),
+        )
+
     ok, err = validate_findings(record.get("findings"), bead_id)
     if not ok:
         return _deny(
@@ -321,6 +375,42 @@ def evaluate_close(command: str, bead_id: str, cwd: str | None,
             changed_count=len(changed),
         )
 
+    # Re-review after repair, expressed through the fingerprint that already
+    # exists rather than through a second staleness mechanism. Reaching here
+    # means the record's fingerprint matches the current tree, so nothing has
+    # changed since the reviewer said "blocked" — the blockers cannot have been
+    # addressed. The complementary case (the code DID change) is already
+    # refused above as stale. Between the two, a blocking verdict requires both
+    # a repair and a fresh review, and neither alone will do.
+    if record.get("blocking") is True:
+        return _deny(
+            f"The review on record for {bead_id} reported blocking findings, "
+            "and the work has not changed since — so they are still open. Fix "
+            "what the reviewer flagged, then record a fresh verdict against "
+            "the repaired work.",
+            bead_id,
+            "deny:blocking-findings",
+            reviewer=record.get("reviewer"),
+        )
+
+    # THE POINT OF escapement-1l04. Everything above this line is satisfied by
+    # dispatching a reviewer and ignoring it: the dispatch ledger is written at
+    # `Agent` PreToolUse, before the subagent emits a token, so `independent`
+    # certifies that a reviewer was summoned, never that one was read.
+    if claude_shape and VERDICT_CAPTURE_SUPPORTED and (
+        record.get("verdict_source") != "captured"
+    ):
+        return _deny(
+            f"The findings on record for {bead_id} are not the reviewer's own "
+            "output. A reviewer was dispatched, but its verdict was never "
+            "captured — so this record says the author of the code approves "
+            "of it. Re-record so the reviewer's returned text is what gets "
+            "stored.",
+            bead_id,
+            "deny:unbound-verdict",
+            verdict_source=record.get("verdict_source"),
+        )
+
     # Corroboration: only meaningful where Agent dispatches are observable.
     if claude_shape and record.get("independent") is not True:
         return _deny(
@@ -338,6 +428,30 @@ def evaluate_close(command: str, bead_id: str, cwd: str | None,
         reviewer=record.get("reviewer"),
         independent=record.get("independent"),
     )
+
+
+def _handle_agent_event(data: dict, tool_input: dict, beads: list[str],
+                        session_id: str, cwd: str | None) -> None:
+    """Ledger the dispatch (PreToolUse) or its verdict (PostToolUse).
+
+    The same hook serves both events because they are two halves of one fact.
+    PreToolUse establishes *which bead a reviewer was sent to read, and at what
+    state of the work*; only PostToolUse can establish *what it said*, because
+    at PreToolUse the subagent has not run yet. Recording the first and calling
+    it a review is the bug escapement-1l04 exists to fix.
+    """
+    subagent_type = (tool_input.get("subagent_type") or "").strip()
+
+    if data.get("hook_event_name") == "PostToolUse":
+        verdict = extract_verdict(data.get("tool_response"))
+        if verdict:
+            record_verdict(session_id, beads, subagent_type, verdict)
+        # A reviewer that returned nothing usable leaves its PreToolUse entry
+        # without a verdict, which is the honest state: a dispatch happened and
+        # no findings came back. It must not be upgraded into a review.
+        return
+
+    record_dispatch(session_id, beads, subagent_type, work_fingerprint(cwd))
 
 
 def main() -> int:
@@ -363,12 +477,7 @@ def main() -> int:
                 tool_input.get("prompt"),
             )
             if beads:
-                record_dispatch(
-                    session_id,
-                    beads,
-                    (tool_input.get("subagent_type") or "").strip(),
-                    work_fingerprint(cwd),
-                )
+                _handle_agent_event(data, tool_input, beads, session_id, cwd)
         return 0
 
     if tool_name != "Bash":
