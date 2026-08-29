@@ -21,6 +21,16 @@
           }
         ],
         "matcher": "Bash"
+      },
+      {
+        "hooks": [
+          {
+            "command": "python3 -B \"${PLUGIN_ROOT}/claude/hooks/file_complexity_gate.py\"",
+            "timeout": 10,
+            "type": "command"
+          }
+        ],
+        "matcher": "apply_patch"
       }
     ],
     "SessionStart": [

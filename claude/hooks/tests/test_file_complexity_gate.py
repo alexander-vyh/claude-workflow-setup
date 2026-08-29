@@ -26,7 +26,9 @@ Fragile implementations this suite rejects
 - Over-blocking at the soft boundary -> ``test_write_exactly_at_soft_limit_allows``
 - Presence-only waiver (empty reason bypasses) -> ``test_empty_waiver_reason_still_denies``
 - Ignoring exemptions -> ``test_exempt_suffix_allows`` / ``test_new_data_exemptions``
-- Soft message that names only one audience -> ``test_soft_message_names_both_audiences``
+- Message the reader cannot act on -> ``test_soft_message_is_actionable``
+- Message so long nobody reads it -> ``test_messages_stay_short_enough_to_read``
+- Codex apply_patch writes ungated -> ``test_codex_file_complexity_gate.py``
 """
 
 import importlib.util
@@ -194,37 +196,40 @@ def test_ordinary_source_over_hard_is_not_exempt():
     assert _is_hard(code, decision)
 
 
-# --- Message framing: human AND agent goals at both tiers -----------------
+# --- Message framing: enabling, not explanatory ---------------------------
+#
+# These assertions used to pin the message's vocabulary — "proxy", "duplicat",
+# "24"/"100" — which forced a ~17-line essay at every firing and made it
+# grow whenever someone added a rationale. What actually makes a gate
+# enabling (per claude/rules/gate-design.md) is that the reader can act: which
+# file, how big, which limit, what to do, how to override. Assert that instead,
+# and let the wording stay short.
 
-def test_soft_message_names_both_audiences_and_nonloc_complexity():
+def _is_actionable(text: str, projected: int, limit: int) -> None:
+    lower = text.lower()
+    assert "big.py" in lower, "names the file"
+    assert str(projected) in lower, "states the measured size"
+    assert str(limit) in lower, "states the limit crossed"
+    assert "sibling module" in lower or "extract" in lower, "names the repair"
+    assert "file-complexity-waiver" in lower, "names the escape"
+
+
+def test_soft_message_is_actionable():
     _, decision = run_hook(_write_payload("/repo/src/big.py", 700))
-    msg = decision["systemMessage"].lower()
-    # both audiences
-    assert "human" in msg or "review" in msg
-    assert "agent" in msg
-    # proxy framing + thresholds (the "why")
-    assert "proxy" in msg
-    assert "1000" in msg   # where the hard stop is
-    assert "700" in msg    # the actual projected size
-    # non-LOC complexity signals the message must call out
-    assert "complexity" in msg
-    assert "function" in msg                 # function size / nesting
-    assert "duplicat" in msg                 # near-duplicate / edit-target ambiguity
-    assert "24" in msg and "100" in msg      # human vs agent function-length thresholds
+    _is_actionable(decision["systemMessage"], 700, 1000)
 
 
-def test_hard_denial_names_both_audiences_override_and_nonloc_complexity():
+def test_hard_denial_is_actionable():
     _, decision = run_hook(_write_payload("/repo/src/big.py", 1300))
-    reason = decision["denyReason"].lower()
-    assert "agent" in reason and ("human" in reason or "review" in reason)
-    assert "1000" in reason    # the limit crossed
-    assert "waiver" in reason  # the human override path
-    # proxy framing + non-LOC complexity signals
-    assert "proxy" in reason
-    assert "complexity" in reason
-    assert "function" in reason
-    assert "duplicat" in reason
-    assert "24" in reason and "100" in reason
+    _is_actionable(decision["denyReason"], 1300, 1000)
+
+
+def test_messages_stay_short_enough_to_read():
+    """A gate nobody reads is not enabling. Cap both tiers at six lines."""
+    _, soft = run_hook(_write_payload("/repo/src/big.py", 700))
+    _, hard = run_hook(_write_payload("/repo/src/big.py", 1300))
+    assert len(soft["systemMessage"].splitlines()) <= 6
+    assert len(hard["denyReason"].splitlines()) <= 6
 
 
 # --- Non-target tools and malformed input fail open -----------------------

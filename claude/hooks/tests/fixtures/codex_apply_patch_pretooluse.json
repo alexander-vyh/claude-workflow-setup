@@ -1,0 +1,28 @@
+{
+  "capture": {
+    "captured_at": "2026-08-28T18:20:00-07:00",
+    "codex_cli": "codex exec --skip-git-repo-check -s workspace-write --dangerously-bypass-hook-trust",
+    "how": "A probe hook registered at PreToolUse with matcher '.*' in a scratch project's .codex/hooks.json, dumping the raw payload. The session was asked to create one small file.",
+    "why": "Codex's generated schema (codex-rs/hooks/schema/generated/pre-tool-use.command.input.schema.json) types tool_name as a free string and does not enumerate tools, so which tools emit PreToolUse — and what tool_input looks like for each — can only be established by capture. An earlier gate in this repo guessed tool_input['input'] and would have been silently dead.",
+    "observed_tool_names": ["Bash", "apply_patch"],
+    "note": "Hooks did not load at all until hook trust was bypassed; a project-local .codex/hooks.json is ignored silently while untrusted."
+  },
+  "payloads": {
+    "apply_patch_add_file": {
+      "tool_name": "apply_patch",
+      "tool_input": {
+        "command": "*** Begin Patch\n*** Add File: hello2.py\n+print(2)\n*** End Patch"
+      },
+      "cwd": "/private/tmp/scratch/codex-probe",
+      "permission_mode": "bypassPermissions"
+    },
+    "bash": {
+      "tool_name": "Bash",
+      "tool_input": {
+        "command": "ls -la"
+      },
+      "cwd": "/private/tmp/scratch/codex-probe",
+      "permission_mode": "bypassPermissions"
+    }
+  }
+}
