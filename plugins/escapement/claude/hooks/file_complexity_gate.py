@@ -198,8 +198,30 @@ def deny_response(file_path: str, projected: int) -> dict:
     }
 
 
-def _respond(decision: str, file_path: str, projected: int) -> int:
-    """Emit the decision. Shared by every host so the verdict cannot drift."""
+def codex_deny_response(file_path: str, projected: int) -> dict:
+    """The same denial, in the envelope Codex actually honors.
+
+    Claude Code blocks on exit status 2. Codex does not: it reads a
+    `hookSpecificOutput` object off stdout and expects status 0, exactly as
+    `codex_pretool_dispatch.py` composes when it aggregates gates. Emitting the
+    flat Claude shape with status 2 let a live Codex session append to a
+    1050-line file with the hook firing and its verdict discarded.
+    """
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": deny_response(file_path, projected)["denyReason"],
+        }
+    }
+
+
+def _respond(decision: str, file_path: str, projected: int, *, codex: bool = False) -> int:
+    """Emit the decision in the calling host's contract.
+
+    The verdict itself is shared — only the wire shape differs, so a gate can
+    never allow on one host what it denies on the other.
+    """
     if decision in ("exempt", "pass"):
         return 0
     if decision == "waiver":
@@ -210,6 +232,9 @@ def _respond(decision: str, file_path: str, projected: int) -> int:
         json.dump({"systemMessage": build_soft_message(file_path, projected)}, sys.stdout)
         return 0
     _emit_signal("deny", file_path, projected)
+    if codex:
+        json.dump(codex_deny_response(file_path, projected), sys.stdout)
+        return 0
     json.dump(deny_response(file_path, projected), sys.stdout)
     return 2
 
@@ -290,7 +315,9 @@ def main() -> int:
         file_path, projected, first_lines = projection
         if _is_exempt(file_path):
             return 0
-        return _respond(decide(projected, file_path, first_lines), file_path, projected)
+        return _respond(
+            decide(projected, file_path, first_lines), file_path, projected, codex=True
+        )
 
     file_path = tool_input.get("file_path", "")
     if not file_path or _is_exempt(file_path):

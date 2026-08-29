@@ -29,6 +29,23 @@ FIXTURE = json.loads(
     (TEST_DIR / "fixtures" / "codex_apply_patch_pretooluse.json").read_text()
 )
 
+def _load(name: str):
+    path = TEST_DIR.parent / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+# The independent reader of Codex's PreToolUse contract. It was written against
+# Codex and is what escapement already ships to aggregate gates there, so
+# routing this gate's output through it checks the wire shape against something
+# this test did not author.
+dispatch = _load("codex_pretool_dispatch")
+
+
 HOOK_PATH = TEST_DIR.parent / "file_complexity_gate.py"
 _spec = importlib.util.spec_from_file_location("file_complexity_gate", HOOK_PATH)
 gate = importlib.util.module_from_spec(_spec)
@@ -45,6 +62,25 @@ def run_hook(payload: dict) -> tuple[int, dict | None]:
         code = gate.main()
     text = out.getvalue().strip()
     return code, (json.loads(text) if text else None)
+
+
+def assert_codex_denies(code: int, decision: dict | None, *, naming: str) -> None:
+    """Codex blocks on a stdout envelope and status 0 -- never on status 2.
+
+    Status 2 is how Claude Code blocks; Codex treats a non-zero gate as failed
+    and drops its verdict. A live Codex session appended to a 1050-line file
+    while this hook fired and "denied" in the Claude shape, which is why the
+    check below goes through the dispatcher rather than reading the keys this
+    module happens to emit.
+    """
+    assert code == 0, "Codex discards a gate that exits non-zero"
+    assert decision is not None
+    aggregated = dispatch._aggregate([decision], [])
+    hook_output = aggregated.get("hookSpecificOutput", {})
+    assert hook_output.get("permissionDecision") == "deny", (
+        f"dispatcher did not read a deny out of {decision!r}"
+    )
+    assert naming in hook_output.get("permissionDecisionReason", "")
 
 
 def _patch_payload(patch_text: str, cwd: str) -> dict:
@@ -71,9 +107,7 @@ def test_codex_add_file_over_hard_limit_is_denied(tmp_path):
     body = "".join(f"+line {i}\n" for i in range(1200))
     text = f"*** Begin Patch\n*** Add File: huge.py\n{body}*** End Patch"
     code, decision = run_hook(_patch_payload(text, str(tmp_path)))
-    assert code == 2
-    assert decision["permissionDecision"] == "deny"
-    assert "huge.py" in decision["denyReason"]
+    assert_codex_denies(code, decision, naming="huge.py")
 
 
 def test_codex_add_file_in_soft_band_nudges(tmp_path):
@@ -98,8 +132,7 @@ def test_codex_update_file_projects_against_the_file_on_disk(tmp_path):
     target.write_text("".join(f"line {i}\n" for i in range(1100)))
     text = "*** Begin Patch\n*** Update File: grown.py\n@@\n+one more\n*** End Patch"
     code, decision = run_hook(_patch_payload(text, str(tmp_path)))
-    assert code == 2, "1100 existing + 1 added is over the hard limit"
-    assert decision["permissionDecision"] == "deny"
+    assert_codex_denies(code, decision, naming="grown.py")
 
 
 def test_codex_update_of_a_small_file_passes(tmp_path):
