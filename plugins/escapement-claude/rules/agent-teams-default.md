@@ -41,6 +41,8 @@ Agent(prompt="Investigate OAuth patterns...")
 
 
 <!-- escapement:detail:end -->
+<!-- escapement:detail:start -->
+
 ### Shared terminology before a design fan-out (gated)
 
 **Most research does NOT need this.** But before a multi-agent **design** effort
@@ -74,6 +76,8 @@ guidance, not a gate.
 
 **"Roundtable" NEVER means writing simulated dialogue in your output.** It ALWAYS means dispatching real named agents on a team that independently analyze and communicate via SendMessage.
 
+
+<!-- escapement:detail:end -->
 ### Works With Beads
 
 Named agents and beads are complementary. Beads tracks *what* to do (`bd ready`, `bd close`), named agents handle *how* they coordinate while doing it. When dispatching agents for beads-tracked work, give each agent a `name` — beads adds tracking, naming enables coordination.

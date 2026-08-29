@@ -164,7 +164,7 @@ INJECT_RULES_SH = r'''#!/usr/bin/env bash
 set -uo pipefail
 RULES_DIR="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}/rules"
 python3 - "$RULES_DIR" <<'PY'
-import glob, json, os, sys
+import glob, json, os, re, sys
 
 DETAIL_START = "<!-- escapement:detail:start -->"
 DETAIL_END = "<!-- escapement:detail:end -->"
@@ -182,8 +182,8 @@ else:
         "IMPORTANT — Escapement workflow rules (always-on, injected at session "
         "start). These instructions OVERRIDE default behavior and you MUST follow "
         "them exactly. Where a rule ends with a pointer to its own file, the rest "
-        "of that rule is reference detail — read the file when you reach the "
-        "situation it covers:\n"
+        "of that rule is reference detail — read %s/<file> when you reach the "
+        "situation it covers:\n" % rules_dir
     ]
     for f in files:
         try:
@@ -197,11 +197,15 @@ else:
             _, tail = rest.split(DETAIL_END, 1)
             text = head.rstrip() + "\n\n" + tail.lstrip()
             stripped += 1
+        # HTML comments are markup for the renderer and its tests -- the
+        # support-claims blocks, for instance -- not instructions. Injecting
+        # them spends context presenting key=value metadata as though it were
+        # a rule.
+        text = re.sub(r"<!--.*?-->", "", text, flags=re.S)
         if stripped:
             text = text.rstrip() + (
-                "\n\nThis rule has %d reference section(s) held back — worked "
-                "examples, exemptions, and step-by-step repair. Read %s when you "
-                "reach a situation it covers." % (stripped, f)
+                "\n\n(%d reference section(s) held back — read %s for them.)"
+                % (stripped, os.path.basename(f))
             )
         parts.append(text)
     ctx = "\n\n".join(parts)

@@ -98,6 +98,8 @@ If multiple molecules are active, present the highest-priority one first and men
 - "Continuing the higher-priority Validate work (dark-mode); auth-refactor remains in Design."
 - Ask for priority only when the alternatives encode a real unresolved outcome trade-off
 
+<!-- escapement:detail:start -->
+
 ## Creating New Molecules
 
 When the user delegates new feature work, create the standard molecule when that is the
@@ -131,6 +133,8 @@ Use `bd formula list` to see available formulas and `bd formula show <name>` for
 
 **Variable naming:** The `name` var should be kebab-case (e.g., "zoom-data-expansion"). The `problem` var is a one-sentence problem statement.
 
+
+<!-- escapement:detail:end -->
 ## Scope Change Detection
 
 During any conversation with an active molecule, listen for scope-change language:

@@ -144,7 +144,7 @@ def test_marked_rules_are_actually_shortened(injected):
 # bundle cost more than the code it governs. Holding back reference material
 # buys roughly a fifth; trimming the prose itself is what closes the rest, and
 # each trim should lower this number rather than bank the slack.
-INJECTED_BUDGET = 70_000
+INJECTED_BUDGET = 60_000
 
 
 def test_injected_bundle_stays_within_budget(injected):
