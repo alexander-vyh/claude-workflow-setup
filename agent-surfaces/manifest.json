@@ -1483,39 +1483,6 @@
           ]
         }
       }
-    },
-    {
-      "id": "shared_tmp_artifact_gate",
-      "description": "Keep durable executable source out of shared temp roots; allow audit output and per-session scratch.",
-      "source": "claude/hooks/shared_tmp_artifact_gate.py",
-      "hosts": {
-        "codex": {
-          "status": "ready",
-          "events": [
-            {
-              "event": "PreToolUse",
-              "matcher": "Bash",
-              "command": "python3 -B claude/hooks/shared_tmp_artifact_gate.py",
-              "timeout_seconds": 5
-            },
-            {
-              "event": "PreToolUse",
-              "matcher": "apply_patch",
-              "command": "python3 -B claude/hooks/shared_tmp_artifact_gate.py",
-              "timeout_seconds": 5
-            }
-          ],
-          "fixtures": [
-            "claude/hooks/tests/test_codex_shared_tmp_artifact_gate.py::test_codex_dispatcher_denies_source_into_shared_temp",
-            "claude/hooks/tests/test_codex_shared_tmp_artifact_gate.py::test_codex_dispatcher_allows_fleet_audit_output",
-            "claude/hooks/tests/test_codex_shared_tmp_artifact_gate.py::test_codex_apply_patch_add_file_is_denied"
-          ]
-        },
-        "claude": {
-          "status": "unsupported",
-          "unsupported_reason": "Codex-first rollout; Claude surface parity tracked separately"
-        }
-      }
     }
   ],
   "distribution": {
