@@ -114,9 +114,14 @@ def test_generated_gate_inventory_exactly_matches_pi_ready_manifest_gates() -> N
         "on file growth, which is the gap this inventory key exists to close"
     )
     assert inventory["gates"], "Pi must ship at least one behavioral gate"
-    sources = [gate["source"] for gate in inventory["gates"]]
-    assert len(sources) == len(set(sources)), "Pi gate inventory must not duplicate gates"
-    assert all((PI_ROOT / source).is_file() for source in sources)
+    # Every gate named must also be SHIPPED. gates.json names a gate by path and
+    # the dispatcher opens it from the plugin root, so a gate listed but not
+    # vendored reads as a healthy inventory with the brake missing.
+    for key in ("gates", "file_gates"):
+        sources = [gate["source"] for gate in inventory[key]]
+        assert len(sources) == len(set(sources)), f"Pi {key} must not duplicate gates"
+        missing = [s for s in sources if not (PI_ROOT / s).is_file()]
+        assert not missing, f"Pi {key} names gates it does not ship: {missing}"
 
 
 def test_renderer_recomputes_pi_inventory_when_shared_manifest_changes() -> None:
