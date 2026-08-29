@@ -117,21 +117,7 @@ CODEX_HOOK_SUPPORT = {
     # path. Without it, an explicitly authorized Codex repository is denied
     # fail-closed because the policy reader cannot be imported.
     "harness/bin/repo_outcome.py",
-    # execution_reconcile.py remains bundled while its unconditional
-    # SessionStart registration is partial and disabled.
-    "harness/bin/execution_reconcile.py",
-    # Retain the complete trusted-ledger closure used by isolated reconciliation.
-    "harness/bin/execution_ledger.py",
-    "harness/bin/execution_store.py",
-    "harness/bin/execution_validation.py",
-    # execution_reconcile's `cancel` escape and its gate-signal write; without
-    # these the bundled reconciler cannot import and the Stop denial names a
-    # command that is not installed.
-    # delegation_hook routes Agent completion events into this sibling; without
-    # it the bundled dispatch hook cannot import at all.
-    "harness/bin/execution_supervisor.py",
     "harness/bin/schedule_store.py",
-    "harness/bin/supervisor_health.py",
     "harness/bin/thread_identity.py",
     "harness/bin/trusted_source.py",
     "harness/bin/wakeup_dispatch.py",

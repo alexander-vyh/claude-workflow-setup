@@ -203,45 +203,6 @@
       }
     },
     {
-      "id": "delegation_hook",
-      "description": "Use automatic, non-blocking observation for managed Claude Agent dispatch without removing native Agent capacity.",
-      "source": "harness/bin/delegation_hook.py",
-      "hosts": {
-        "codex": {
-          "status": "unsupported",
-          "unsupported_reason": "Codex does not expose the verified Claude Agent PreToolUse payload and matcher contract used by this adapter."
-        },
-        "claude": {
-          "status": "ready",
-          "events": [
-            {
-              "event": "PreToolUse",
-              "matcher": "Agent",
-              "command": "python3 -B ~/.claude/harness/bin/delegation_hook.py"
-            }
-          ],
-          "fixtures": [
-            "harness/tests/test_delegation_hook.py::test_managed_first_attempt_registers_without_prepare_or_child_bead"
-          ]
-        }
-      }
-    },
-    {
-      "id": "execution_reconcile",
-      "description": "Surface unresolved delegated Beads work and due execution attempts at SessionStart.",
-      "source": "harness/bin/execution_reconcile.py",
-      "hosts": {
-        "codex": {
-          "status": "partial",
-          "unsupported_reason": "Expectation-aware SessionStart reconciliation is not verified; a missing ledger is normal without a trusted managed dispatch expectation."
-        },
-        "claude": {
-          "status": "partial",
-          "unsupported_reason": "Expectation-aware SessionStart reconciliation is not verified; a missing ledger is normal without a trusted managed dispatch expectation."
-        }
-      }
-    },
-    {
       "id": "beads_worktree_guard",
       "description": "Route literal Git and Beads worktree creation through Escapement-owned worktree policy.",
       "source": "claude/hooks/beads_worktree_guard.py",

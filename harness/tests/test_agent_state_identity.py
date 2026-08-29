@@ -518,9 +518,9 @@ def test_waker_fires_only_due_actor_schedule_and_ignores_arbitrary_depth(
     spawned: list[tuple[list[str], pathlib.Path]] = []
     monkeypatch.setattr(waker.ts, "is_trusted_file", lambda _path: True)
     monkeypatch.setattr(
-        waker.es,
-        "launch_in_repo",
-        lambda argv, cwd: spawned.append((argv, cwd)),
+        waker.subprocess,
+        "Popen",
+        lambda argv, cwd=None: spawned.append((argv, cwd)),
     )
 
     assert waker.main(["--fire", "--threads-root", str(root)]) == 0
@@ -580,9 +580,9 @@ def test_actor_due_schedule_without_exact_session_context_fails_closed(
     launched: list[tuple[list[str], pathlib.Path]] = []
     monkeypatch.setattr(waker.ts, "is_trusted_file", lambda _path: True)
     monkeypatch.setattr(
-        waker.es,
-        "launch_in_repo",
-        lambda argv, cwd: launched.append((argv, cwd)),
+        waker.subprocess,
+        "Popen",
+        lambda argv, cwd=None: launched.append((argv, cwd)),
     )
 
     assert waker.main(["--fire", "--threads-root", str(root)]) == 1

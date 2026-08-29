@@ -115,93 +115,6 @@ def test_entry_conforms_to_schema(tmp_path, monkeypatch):
     assert wa > NOW
 
 
-def test_managed_wakeup_persists_exact_execution_and_health_snapshot(
-    tmp_path, monkeypatch
-):
-    """The public producer writes the identity consumed by the Stop policy.
-
-    The health generation is a snapshot, not a success claim: only a later
-    completed generation can prove that the installed supervisor observed this
-    persisted wake.
-    """
-    thread_dir = tmp_path / "threads" / "parent-7"
-    thread_dir.mkdir(parents=True)
-    health = {
-        "reconcile_started_at": "2026-08-09T20:09:55Z",
-        "last_successful_reconcile_started_at": "2026-08-09T20:09:55Z",
-        "last_successful_reconcile_at": "2026-08-09T20:09:56Z",
-        "completed_generation": 11,
-        "installation_id": "installed-supervisor-alpha",
-        "counts": {"successful_passes": 11, "threads": 1, "recoveries": 0},
-    }
-    (tmp_path / "supervisor-health.json").write_text(json.dumps(health))
-    (tmp_path / "supervisor-health.json").chmod(0o600)
-    monkeypatch.setattr(bridge, "_now", lambda: NOW)
-    execution = {
-        "parent_session_id": "parent-7",
-        "watchdog_id": "watch-exec-alpha",
-        "execution_id": "exec-alpha",
-        "attempt": 2,
-        "generation": 4,
-    }
-
-    entry = bridge.persist_managed_wakeup(
-        execution,
-        thread_dir,
-        _dt.datetime(2026, 8, 9, 20, 15, tzinfo=_dt.timezone.utc),
-    )
-
-    persisted = _read(thread_dir)
-    assert persisted == [entry]
-    Draft202012Validator(SCHEMA).validate(persisted)
-    assert {
-        "parent_session_id": entry["parent_session_id"],
-        "watchdog_id": entry["watchdog_id"],
-        "execution_id": entry["execution_id"],
-        "attempt": entry["attempt"],
-        "generation": entry["generation"],
-        "registered_at": entry["registered_at"],
-        "supervisor_installation_id": entry["supervisor_installation_id"],
-        "supervisor_generation": entry["supervisor_generation"],
-    } == {
-        "parent_session_id": "parent-7",
-        "watchdog_id": "watch-exec-alpha",
-        "execution_id": "exec-alpha",
-        "attempt": 2,
-        "generation": 4,
-        "registered_at": NOW.isoformat(),
-        "supervisor_installation_id": "installed-supervisor-alpha",
-        "supervisor_generation": 11,
-    }
-    assert set(_REQUIRED) <= set(entry)
-    assert set(entry) <= set(SCHEMA["items"]["properties"])
-
-
-@pytest.mark.parametrize(
-    "missing",
-    [
-        "parent_session_id",
-        "watchdog_id",
-        "execution_id",
-        "attempt",
-        "generation",
-        "registered_at",
-        "supervisor_installation_id",
-        "supervisor_generation",
-    ],
-)
-def test_schema_requires_every_managed_wakeup_identity_field(missing):
-    """Managed identity is conditional; generic ScheduleWakeup remains valid."""
-    managed_rules = [
-        rule
-        for rule in SCHEMA["items"].get("allOf", [])
-        if rule.get("if", {}).get("properties", {}).get("created_by", {}).get("const")
-        == "execution-supervisor"
-    ]
-    assert len(managed_rules) == 1
-    assert missing in set(managed_rules[0]["then"]["required"])
-
-
 def test_generic_schedulewakeup_schema_does_not_require_execution_identity():
     """Compatibility control: ordinary external-event wakes remain schema-valid."""
     assert not {
@@ -214,202 +127,6 @@ def test_generic_schedulewakeup_schema_does_not_require_execution_identity():
         "supervisor_installation_id",
         "supervisor_generation",
     } & set(SCHEMA["items"]["required"])
-
-
-@pytest.mark.parametrize("missing", ["watchdog_id", "registered_at"])
-def test_actual_draft202012_validator_rejects_missing_managed_identity(
-    tmp_path, missing
-):
-    """The persisted wire contract is executable JSON Schema, not prose/structure."""
-    execution = {
-        "parent_session_id": "parent-7",
-        "watchdog_id": "watch-exec-alpha",
-        "execution_id": "exec-alpha",
-        "attempt": 2,
-        "generation": 4,
-    }
-    entry = {
-        "wake_at": "2026-08-09T20:15:00Z",
-        "registered_at": NOW.isoformat(),
-        "prompt": "reconcile delegated execution",
-        "thread_id": "parent-7",
-        "created_by": "execution-supervisor",
-        "crash_count": 0,
-        **execution,
-        "supervisor_installation_id": "installed-supervisor-alpha",
-        "supervisor_generation": 11,
-    }
-    validator = Draft202012Validator(SCHEMA)
-    validator.validate([entry])
-    broken = dict(entry)
-    broken.pop(missing)
-    with pytest.raises(ValidationError):
-        validator.validate([broken])
-
-
-@pytest.mark.parametrize(
-    "health_case",
-    ["missing", "malformed", "untrusted"],
-)
-def test_managed_wakeup_without_trusted_health_writes_nothing(tmp_path, health_case):
-    thread_dir = tmp_path / "threads" / "parent-7"
-    thread_dir.mkdir(parents=True)
-    health_path = tmp_path / "supervisor-health.json"
-    if health_case == "malformed":
-        health_path.write_text("{malformed", encoding="utf-8")
-        health_path.chmod(0o600)
-    elif health_case == "untrusted":
-        health_path.write_text(
-            json.dumps(
-                {
-                    "reconcile_started_at": "2026-08-09T20:09:55Z",
-                    "last_successful_reconcile_started_at": "2026-08-09T20:09:55Z",
-                    "last_successful_reconcile_at": "2026-08-09T20:09:56Z",
-                    "completed_generation": 11,
-                    "installation_id": "installed-supervisor-alpha",
-                    "counts": {"successful_passes": 11, "threads": 1, "recoveries": 0},
-                }
-            ),
-            encoding="utf-8",
-        )
-        health_path.chmod(0o666)
-    execution = {
-        "parent_session_id": "parent-7",
-        "watchdog_id": "watch-exec-alpha",
-        "execution_id": "exec-alpha",
-        "attempt": 2,
-        "generation": 4,
-    }
-
-    assert (
-        bridge.persist_managed_wakeup(
-            execution,
-            thread_dir,
-            _dt.datetime(2026, 8, 9, 20, 15, tzinfo=_dt.timezone.utc),
-        )
-        is None
-    )
-    assert not (thread_dir / "scheduled.json").exists()
-
-
-@pytest.mark.parametrize(
-    "health",
-    [
-        {
-            "reconcile_started_at": None,
-            "last_successful_reconcile_at": None,
-            "completed_generation": 0,
-            "installation_id": "installed-supervisor-alpha",
-            "counts": {},
-        },
-        {
-            "reconcile_started_at": "2026-08-09T20:09:55Z",
-            "last_successful_reconcile_at": "2026-08-09T20:09:56Z",
-            "completed_generation": "11",
-            "installation_id": "installed-supervisor-alpha",
-            "counts": {},
-        },
-        {
-            "reconcile_started_at": "2026-08-09T20:09:55Z",
-            "last_successful_reconcile_at": "2026-08-09T20:09:56Z",
-            "completed_generation": 11,
-            "installation_id": 17,
-            "counts": {},
-        },
-        {
-            "last_successful_reconcile_at": "2026-08-09T20:09:56Z",
-            "completed_generation": 11,
-            "installation_id": "installed-supervisor-alpha",
-        },
-    ],
-    ids=["zero-generation", "wrong-generation-type", "wrong-install-type", "partial"],
-)
-def test_semantically_invalid_health_cannot_create_managed_proof(tmp_path, health):
-    thread_dir = tmp_path / "threads" / "parent-7"
-    thread_dir.mkdir(parents=True)
-    health_path = tmp_path / "supervisor-health.json"
-    health_path.write_text(json.dumps(health), encoding="utf-8")
-    health_path.chmod(0o600)
-    execution = {
-        "parent_session_id": "parent-7",
-        "watchdog_id": "watch-exec-alpha",
-        "execution_id": "exec-alpha",
-        "attempt": 2,
-        "generation": 4,
-    }
-    assert (
-        bridge.persist_managed_wakeup(
-            execution,
-            thread_dir,
-            _dt.datetime(2026, 8, 9, 20, 15, tzinfo=_dt.timezone.utc),
-        )
-        is None
-    )
-    assert not (thread_dir / "scheduled.json").exists()
-
-
-def test_multiple_managed_proofs_fire_one_parent_resume_and_prune_together():
-    due = (NOW - _dt.timedelta(seconds=1)).isoformat()
-    common = {
-        "wake_at": due,
-        "prompt": "resume all delegated work",
-        "thread_id": "parent-7",
-        "created_by": "execution-supervisor",
-        "crash_count": 0,
-        "parent_session_id": "parent-7",
-        "attempt": 1,
-        "generation": 1,
-        "supervisor_installation_id": "installed-supervisor-alpha",
-        "supervisor_generation": 11,
-    }
-    entries = [
-        {**common, "execution_id": "exec-alpha", "watchdog_id": "watch-alpha"},
-        {**common, "execution_id": "exec-beta", "watchdog_id": "watch-beta"},
-    ]
-    kept, spawns = wakeup_waker.plan(entries, NOW)
-    assert kept == []
-    assert len(spawns) == 1, "proof multiplicity must not multiply parent resumes"
-    assert spawns[0]["type"] == "resume"
-    assert spawns[0]["thread_id"] == "parent-7"
-
-
-def test_verify_prune_removes_generic_and_all_managed_proofs(tmp_path):
-    thread_dir = tmp_path / "threads" / "parent-7"
-    thread_dir.mkdir(parents=True)
-    future = (NOW + _dt.timedelta(hours=1)).isoformat()
-    entries = [
-        {
-            "wake_at": future,
-            "prompt": "generic",
-            "thread_id": "parent-7",
-            "created_by": "ScheduleWakeup",
-            "crash_count": 0,
-        },
-        {
-            "wake_at": future,
-            "prompt": "managed",
-            "thread_id": "parent-7",
-            "created_by": "execution-supervisor",
-            "crash_count": 0,
-            "parent_session_id": "parent-7",
-            "watchdog_id": "watch-alpha",
-            "execution_id": "exec-alpha",
-            "attempt": 1,
-            "generation": 1,
-            "supervisor_installation_id": "installed-supervisor-alpha",
-            "supervisor_generation": 11,
-        },
-        {
-            "wake_at": future,
-            "prompt": "unrelated",
-            "thread_id": "parent-7",
-            "created_by": "external-owner",
-            "crash_count": 0,
-        },
-    ]
-    (thread_dir / "scheduled.json").write_text(json.dumps(entries), encoding="utf-8")
-    remaining = bridge.prune_thread(thread_dir)
-    assert [entry["created_by"] for entry in remaining] == ["external-owner"]
 
 
 def test_wake_at_is_now_plus_clamped_delay(tmp_path, monkeypatch):
@@ -603,6 +320,47 @@ def test_hook_main_via_stdin_writes_entry(tmp_path):
     assert (
         entry["created_by"] == "ScheduleWakeup" and entry["prompt"] == "resume via cli"
     )
+
+
+# --- responsiveness under contention -----------------------------------------
+# Ported from the Task 5 production review when the delegated-execution ledger
+# was removed. A PostToolUse hook that waits on another process's lock stalls the
+# agent's turn, so the bridge must decline rather than block.
+
+
+def test_bridge_returns_promptly_when_the_schedule_lock_is_held(tmp_path):
+    """Fragile implementation this rejects: a blocking LOCK_EX in a hook."""
+    import fcntl
+    import subprocess
+    import time
+
+    thread_dir = tmp_path / "threads" / "sess-contended"
+    thread_dir.mkdir(parents=True)
+    lock_path = thread_dir / "scheduled.json.lock"
+    lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    os.chmod(lock_path, 0o600)
+    env = dict(os.environ)
+    env["HARNESS_ROOT"] = str(tmp_path)
+    env.pop("HARNESS_THREAD_DIR", None)
+
+    with os.fdopen(lock_fd, "a+") as lock_file:
+        fcntl.flock(lock_file, fcntl.LOCK_EX)
+        started = time.monotonic()
+        try:
+            result = subprocess.run(
+                ["python3", str(HARNESS_BIN / "schedule_wakeup_bridge.py")],
+                input=json.dumps(_payload(session_id="sess-contended")),
+                text=True,
+                capture_output=True,
+                env=env,
+                timeout=5.0,
+            )
+        except subprocess.TimeoutExpired:
+            pytest.fail("bridge stalled behind the schedule lock")
+        elapsed = time.monotonic() - started
+
+    assert result.returncode == 0, f"hook must fail open; stderr={result.stderr}"
+    assert elapsed < 5.0
 
 
 if __name__ == "__main__":

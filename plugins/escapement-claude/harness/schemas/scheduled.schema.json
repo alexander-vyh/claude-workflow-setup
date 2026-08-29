@@ -7,36 +7,28 @@
   "items": {
     "type": "object",
     "additionalProperties": false,
-    "required": ["wake_at", "prompt", "thread_id", "created_by", "crash_count"],
+    "required": [
+      "wake_at",
+      "prompt",
+      "thread_id",
+      "created_by",
+      "crash_count"
+    ],
     "allOf": [
       {
         "if": {
           "properties": {
-            "kind": { "const": "check" }
+            "kind": {
+              "const": "check"
+            }
           },
-          "required": ["kind"]
-        },
-        "then": {
-          "required": ["command"]
-        }
-      },
-      {
-        "if": {
-          "properties": {
-            "created_by": { "const": "execution-supervisor" }
-          },
-          "required": ["created_by"]
+          "required": [
+            "kind"
+          ]
         },
         "then": {
           "required": [
-            "parent_session_id",
-            "watchdog_id",
-            "execution_id",
-            "attempt",
-            "generation",
-            "registered_at",
-            "supervisor_installation_id",
-            "supervisor_generation"
+            "command"
           ]
         }
       }
@@ -46,11 +38,6 @@
         "type": "string",
         "format": "date-time",
         "description": "ISO-8601 timestamp; gate counts only future-dated entries."
-      },
-      "registered_at": {
-        "type": "string",
-        "format": "date-time",
-        "description": "Durable managed-proof registration timestamp; a qualifying supervisor pass must start strictly later."
       },
       "prompt": {
         "type": "string",
@@ -74,7 +61,10 @@
       },
       "kind": {
         "type": "string",
-        "enum": ["check", "resume"],
+        "enum": [
+          "check",
+          "resume"
+        ],
         "description": "Dispatch kind. 'resume' (default if absent, for back-compat) re-injects prompt as a same-session resume. 'check' polls command cheaply; exit 0 means the awaited condition is met and the waker should hand off to a fresh cheap session, while non-zero reschedules without spawning Claude."
       },
       "command": {
@@ -103,34 +93,6 @@
         "type": "string",
         "minLength": 1,
         "description": "For kind='check': optional model for the fresh handoff session. Defaults to the harness cheap model."
-      },
-      "parent_session_id": {
-        "type": "string",
-        "minLength": 1
-      },
-      "watchdog_id": {
-        "type": "string",
-        "minLength": 1
-      },
-      "execution_id": {
-        "type": "string",
-        "minLength": 1
-      },
-      "attempt": {
-        "type": "integer",
-        "minimum": 1
-      },
-      "generation": {
-        "type": "integer",
-        "minimum": 1
-      },
-      "supervisor_installation_id": {
-        "type": "string",
-        "minLength": 1
-      },
-      "supervisor_generation": {
-        "type": "integer",
-        "minimum": 1
       }
     }
   }

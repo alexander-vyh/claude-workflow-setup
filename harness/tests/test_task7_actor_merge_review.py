@@ -20,14 +20,11 @@ REPO = pathlib.Path(__file__).resolve().parents[2]
 BIN = REPO / "harness" / "bin"
 sys.path.insert(0, str(BIN))
 
-import execution_ledger  # noqa: E402
-import execution_supervisor  # noqa: E402
 import schedule_wakeup_bridge  # noqa: E402
 import session_isolation  # noqa: E402
 import stop_hook  # noqa: E402
 import thread_identity  # noqa: E402
 import wakeup_waker  # noqa: E402
-from harness.tests import test_execution_stop_gate as stop_oracle  # noqa: E402
 
 UTC = dt.timezone.utc
 SESSION = "actor-merge-parent-73"
@@ -57,10 +54,6 @@ def _mode(state_dir: pathlib.Path, repo: pathlib.Path, session_id: str = SESSION
             "parent_id": ROOT_BEAD,
         },
     )
-
-
-def _empty_ledger(state_dir: pathlib.Path) -> None:
-    _write_json(state_dir / "executions.json", execution_ledger.new_ledger(SESSION))
 
 
 def _health(generation: int, installation: str = "root-health-authority") -> dict:
@@ -127,7 +120,6 @@ def test_due_actor_check_executes_once_in_exact_trusted_repo_and_rearms(tmp_path
     entry = _due_check(f"{sys.executable} -c {shlex.quote(script)}")
     _write_json(state_dir / "scheduled.json", [entry])
     _mode(state_dir, repo)
-    _empty_ledger(state_dir)
 
     result = _run_waker(root, ambient)
 
@@ -137,8 +129,6 @@ def test_due_actor_check_executes_once_in_exact_trusted_repo_and_rearms(tmp_path
     assert len(kept) == 1
     assert kept[0]["command"] == entry["command"]
     assert kept[0]["wake_at"] != entry["wake_at"]
-    health = json.loads((root / "supervisor-health.json").read_text())
-    assert health["completed_generation"] == 1
 
 
 @pytest.mark.parametrize(
@@ -163,7 +153,6 @@ def test_due_actor_check_without_exact_context_is_byte_exact_and_never_runs(
     entry = _due_check(f"{sys.executable} -c {shlex.quote(script)}")
     schedule = state_dir / "scheduled.json"
     _write_json(schedule, [entry], pretty=True)
-    _empty_ledger(state_dir)
     if context == "foreign":
         _mode(state_dir, repo, session_id="foreign-parent-session")
     elif context == "malformed":
@@ -207,61 +196,8 @@ def _seed_poll_state(tmp_path: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path
     entry = _due_check("poll external state")
     _write_json(state_dir / "scheduled.json", [entry])
     _mode(state_dir, repo)
-    _empty_ledger(state_dir)
     _write_json(root / "supervisor-health.json", _health(7))
     return root, state_dir, entry
-
-
-@pytest.mark.parametrize("fault", ["exception", "timeout"], ids=str)
-def test_runner_infrastructure_failure_rearms_but_exits_one_without_health_advance(
-    tmp_path, monkeypatch, fault
-):
-    root, state_dir, entry = _seed_poll_state(tmp_path)
-    health_path = root / "supervisor-health.json"
-    health_before = health_path.read_bytes()
-
-    def failed_runner(_command: str, **_kwargs):
-        if fault == "timeout":
-            raise subprocess.TimeoutExpired("poll external state", 120)
-        raise RuntimeError("runner infrastructure failed")
-
-    monkeypatch.setattr(wakeup_waker.wd, "_default_runner", failed_runner)
-
-    result = wakeup_waker.main(
-        ["--threads-root", str(root / "threads"), "--fire"]
-    )
-
-    kept = json.loads((state_dir / "scheduled.json").read_text())
-    assert result == 1
-    assert len(kept) == 1
-    assert kept[0]["command"] == entry["command"]
-    assert kept[0]["wake_at"] != entry["wake_at"]
-    assert health_path.read_bytes() == health_before
-
-
-def test_ordinary_nonzero_check_is_a_healthy_poll_and_advances_health(
-    tmp_path, monkeypatch
-):
-    root, state_dir, entry = _seed_poll_state(tmp_path)
-    monkeypatch.setattr(
-        wakeup_waker.wd,
-        "_default_runner",
-        lambda _command, **_kwargs: (17, "not ready"),
-    )
-
-    result = wakeup_waker.main(
-        ["--threads-root", str(root / "threads"), "--fire"]
-    )
-
-    kept = json.loads((state_dir / "scheduled.json").read_text())
-    health = json.loads((root / "supervisor-health.json").read_text())
-    assert result == 0
-    assert len(kept) == 1
-    assert kept[0]["command"] == entry["command"]
-    assert kept[0]["wake_at"] != entry["wake_at"]
-    assert health["completed_generation"] == 8
-    assert health["counts"]["successful_passes"] == 8
-    assert health["installation_id"] == "root-health-authority"
 
 
 def _calls_shared_enumerator(function) -> bool:
@@ -357,7 +293,6 @@ def test_one_thread_identity_enumerator_owns_exact_supported_state_depth(tmp_pat
 
     consumers = (
         (wakeup_waker, wakeup_waker.iter_schedule_paths),
-        (execution_supervisor, execution_supervisor.reconcile_all),
         (session_isolation, session_isolation.read_checkouts),
     )
     for module, boundary in consumers:
@@ -376,7 +311,7 @@ def test_consumers_retain_no_private_or_module_qualified_filesystem_walker():
     assert _independently_walks_filesystem(_module_attribute_walker_probe)
     retained = {
         module.__name__: sorted(_module_filesystem_walkers(module))
-        for module in (wakeup_waker, execution_supervisor, session_isolation)
+        for module in (wakeup_waker, session_isolation)
         if _module_filesystem_walkers(module)
     }
     assert retained == {}
@@ -400,12 +335,6 @@ def _consumer_tree(tmp_path: pathlib.Path) -> dict[str, pathlib.Path]:
     _write_json(actor / "checkout.json", {"session_id": "actor-observed"})
     _write_json(deep / "checkout.json", {"session_id": "deep-must-not-appear"})
     _write_json(
-        legacy / "executions.json", execution_ledger.new_ledger(legacy.name)
-    )
-    _write_json(
-        actor / "executions.json", execution_ledger.new_ledger(actor_parent.name)
-    )
-    _write_json(
         actor / "session_mode.json",
         {
             "mode": "task",
@@ -415,15 +344,11 @@ def _consumer_tree(tmp_path: pathlib.Path) -> dict[str, pathlib.Path]:
             "parent_id": "actor-consumer-root",
         },
     )
-    deep_ledger = deep / "executions.json"
-    deep_ledger.write_text("{deep malformed decoy", encoding="utf-8")
-    deep_ledger.chmod(0o600)
     return {
         "root": root,
         "legacy": legacy,
         "actor": actor,
         "deep": deep,
-        "deep_ledger": deep_ledger,
     }
 
 
@@ -467,36 +392,6 @@ def test_checkout_discovery_uses_shared_exact_state_dirs(tmp_path, monkeypatch):
     assert session_isolation.read_checkouts(fixture["root"].parent) == []
 
 
-def test_supervisor_discovery_counts_shared_legacy_and_actor_only(
-    tmp_path, monkeypatch
-):
-    fixture = _consumer_tree(tmp_path)
-    deep_before = fixture["deep_ledger"].read_bytes()
-    now = dt.datetime(2026, 8, 9, 20, 10, tzinfo=UTC)
-
-    result = execution_supervisor.reconcile_all(
-        fixture["root"],
-        now,
-        "actor-merge-review",
-        lambda _descriptor: pytest.fail("empty ledgers must not spawn"),
-    )
-
-    assert result["status"] == "ok"
-    assert result["health"]["counts"]["threads"] == 2
-    assert fixture["deep_ledger"].read_bytes() == deep_before
-
-    _replace_consumer_enumerator(monkeypatch, execution_supervisor, lambda _root: [])
-    second = execution_supervisor.reconcile_all(
-        fixture["root"],
-        now + dt.timedelta(seconds=1),
-        "actor-merge-review",
-        lambda _descriptor: pytest.fail("empty shared output must not spawn"),
-    )
-    assert second["status"] == "ok"
-    assert second["health"]["counts"]["threads"] == 0
-    assert fixture["deep_ledger"].read_bytes() == deep_before
-
-
 def _set_state_variant(monkeypatch, root: pathlib.Path, tmp_path, variant: str):
     monkeypatch.setenv("HARNESS_ROOT", str(root))
     monkeypatch.delenv("HARNESS_THREAD_DIR", raising=False)
@@ -512,57 +407,6 @@ def _set_state_variant(monkeypatch, root: pathlib.Path, tmp_path, variant: str):
     return state_dir
 
 
-def _active_ledger() -> tuple[dict, dict]:
-    execution = stop_oracle._execution("exec-actor-merge-1")
-    execution["bead_id"] = CHILD_BEAD
-    ledger = stop_oracle._ledger(execution)
-    ledger["parent_session_id"] = SESSION
-    return execution, ledger
-
-
-def _seed_managed_state(state_dir: pathlib.Path, repo: pathlib.Path) -> tuple[dict, dict]:
-    execution, ledger = _active_ledger()
-    _mode(state_dir, repo)
-    _write_json(state_dir / "executions.json", ledger)
-    return execution, ledger
-
-
-@pytest.mark.parametrize("variant", ["legacy", "actor", "override"], ids=str)
-def test_public_bridge_uses_configured_root_health_for_every_state_shape(
-    tmp_path, monkeypatch, variant
-):
-    root = tmp_path / "harness"
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    state_dir = _set_state_variant(monkeypatch, root, tmp_path, variant)
-    _seed_managed_state(state_dir, repo)
-    _write_json(root / "supervisor-health.json", _health(11))
-    if variant == "override":
-        _write_json(
-            tmp_path / "external" / "supervisor-health.json",
-            _health(91, installation="adjacent-decoy"),
-        )
-    monkeypatch.setattr(schedule_wakeup_bridge, "_now", lambda: REGISTERED_AT)
-    payload = {
-        "session_id": SESSION,
-        "tool_name": "ScheduleWakeup",
-        "tool_input": {"delaySeconds": 600, "prompt": "continue actor work"},
-        "tool_response": {},
-    }
-
-    monkeypatch.setattr(
-        schedule_wakeup_bridge.sys, "stdin", io.StringIO(json.dumps(payload))
-    )
-    assert schedule_wakeup_bridge.main([]) == 0
-
-    written = state_dir / "scheduled.json"
-    assert written.is_file()
-    entries = json.loads(written.read_text())
-    assert len(entries) == 1
-    assert entries[0]["supervisor_installation_id"] == "root-health-authority"
-    assert entries[0]["supervisor_generation"] == 11
-
-
 def _write_fake_bd(tmp_path: pathlib.Path, monkeypatch) -> None:
     fakebin = tmp_path / "fake-bin"
     fakebin.mkdir(exist_ok=True)
@@ -576,70 +420,3 @@ def _write_fake_bd(tmp_path: pathlib.Path, monkeypatch) -> None:
     bd.chmod(0o755)
     monkeypatch.setenv("PATH", f"{fakebin}{os.pathsep}{os.environ.get('PATH', '')}")
 
-
-@pytest.mark.parametrize("variant", ["legacy", "actor", "override"], ids=str)
-def test_public_stop_uses_configured_root_health_for_every_state_shape(
-    tmp_path, monkeypatch, capsys, variant
-):
-    root = tmp_path / "harness"
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    (repo / ".beads").mkdir()
-    state_dir = _set_state_variant(monkeypatch, root, tmp_path, variant)
-    execution, ledger = _seed_managed_state(state_dir, repo)
-    live_now = dt.datetime.now(UTC)
-    execution.update(
-        {
-            "queued_at": (live_now - dt.timedelta(minutes=10)).isoformat(),
-            "started_at": (live_now - dt.timedelta(minutes=9)).isoformat(),
-            "last_activity_at": (live_now - dt.timedelta(minutes=5)).isoformat(),
-            "start_deadline": (live_now + dt.timedelta(minutes=1)).isoformat(),
-            "idle_deadline": (live_now + dt.timedelta(minutes=10)).isoformat(),
-            "hard_deadline": (live_now + dt.timedelta(hours=1)).isoformat(),
-        }
-    )
-    ledger["updated_at"] = (live_now - dt.timedelta(seconds=1)).isoformat()
-    _write_json(state_dir / "executions.json", ledger)
-    wake = stop_oracle._wake(
-        execution,
-        wake_at=(live_now + dt.timedelta(minutes=5)).isoformat(),
-        registered_at=(live_now - dt.timedelta(seconds=10)).isoformat(),
-        thread_id=SESSION,
-        parent_session_id=SESSION,
-        supervisor_installation_id="root-health-authority",
-        supervisor_generation=11,
-    )
-    _write_json(state_dir / "scheduled.json", [wake])
-    live_health = _health(12)
-    live_health.update(
-        {
-            "reconcile_started_at": (live_now - dt.timedelta(seconds=5)).isoformat(),
-            "last_successful_reconcile_started_at": (
-                live_now - dt.timedelta(seconds=5)
-            ).isoformat(),
-            "last_successful_reconcile_at": (
-                live_now - dt.timedelta(seconds=2)
-            ).isoformat(),
-        }
-    )
-    _write_json(root / "supervisor-health.json", live_health)
-    if variant == "override":
-        _write_json(
-            tmp_path / "external" / "supervisor-health.json",
-            _health(91, installation="adjacent-decoy"),
-        )
-    _write_fake_bd(tmp_path, monkeypatch)
-    monkeypatch.setattr(stop_hook, "HARNESS_ROOT", root)
-    monkeypatch.setattr(stop_hook, "INCIDENTS_LOG", root / "incidents.jsonl")
-    monkeypatch.setattr(stop_hook.session_isolation, "write_checkout", lambda *a: None)
-    monkeypatch.setattr(
-        stop_hook.sys,
-        "stdin",
-        io.StringIO(json.dumps({"session_id": SESSION, "transcript_path": ""})),
-    )
-
-    assert stop_hook.main() == 0
-
-    output = capsys.readouterr().out
-    assert '"decision": "block"' not in output
-    assert "supervisor_health_unresolved" not in output
