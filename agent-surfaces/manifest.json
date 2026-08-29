@@ -1343,8 +1343,20 @@
       "source": "claude/hooks/file_complexity_gate.py",
       "hosts": {
         "codex": {
-          "status": "unsupported",
-          "unsupported_reason": "Not yet ported to Codex; Claude-only PreToolUse gate."
+          "status": "ready",
+          "events": [
+            {
+              "event": "PreToolUse",
+              "matcher": "apply_patch",
+              "command": "python3 -B claude/hooks/file_complexity_gate.py",
+              "timeout_seconds": 10
+            }
+          ],
+          "fixtures": [
+            "claude/hooks/tests/test_codex_file_complexity_gate.py::test_codex_add_file_over_hard_limit_is_denied",
+            "claude/hooks/tests/test_codex_file_complexity_gate.py::test_codex_captured_payload_uses_command_not_input",
+            "claude/hooks/tests/test_codex_file_complexity_gate.py::test_codex_update_file_projects_against_the_file_on_disk"
+          ]
         },
         "claude": {
           "status": "ready",

@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 
 SOFT_LIMIT = 500
@@ -172,22 +173,11 @@ def build_soft_message(file_path: str, projected: int) -> str:
     """
     name = os.path.basename(file_path)
     return (
-        f"{name} is {projected} lines — past the {SOFT_LIMIT}-line guidance threshold "
-        f"(soft nudge, not a block; hard stop is {HARD_LIMIT}).\n"
-        f"Line count is only a PROXY — the real concern is complexity and coupling, not "
-        f"lines. The signals it stands in for:\n"
-        f"  • Responsibilities / coupling: length usually means several concerns have "
-        f"accreted. Split by concern, not by line count.\n"
-        f"  • Function size & nesting: humans lose the thread past ~24 lines per function, "
-        f"LLM edit reliability past ~100. A long or deeply-nested function matters more "
-        f"than total file length — this is where cyclomatic/cognitive complexity lives.\n"
-        f"  • Near-duplicate blocks: repeated similar spans make edits mis-target the "
-        f"wrong instance — the dominant agent edit-failure mode (no line count sees it).\n"
-        f"  • Working set: big files inflate the tokens an agent must hold; edit success "
-        f"correlates with keeping the edited surface small.\n"
-        f"Why a nudge, not a block: LOC is weak evidence — a long but flat, cohesive file "
-        f"can be fine (waiver it). If it is long because it does many things, extract a "
-        f"cohesive responsibility into a sibling module."
+        f"{name}: {projected} lines (nudge at {SOFT_LIMIT}, block at {HARD_LIMIT}).\n"
+        f"Length is a proxy for mixed responsibilities, long functions, and "
+        f"near-duplicate blocks that make edits land on the wrong copy.\n"
+        f"Doing several things? Extract one into a sibling module. Long but flat and "
+        f"cohesive? Waive it: `# file-complexity-waiver: <reason>` in the first 5 lines."
     )
 
 
@@ -197,24 +187,84 @@ def deny_response(file_path: str, projected: int) -> dict:
     return {
         "permissionDecision": "deny",
         "denyReason": (
-            f"{name} would be {projected} lines — past the {HARD_LIMIT}-line hard limit "
-            f"(guidance starts at {SOFT_LIMIT}).\n"
-            f"Line count is a proxy, but at this size the complexity signals it stands in "
-            f"for are almost certainly present:\n"
-            f"  • Multiple responsibilities / high coupling — hard for humans to review "
-            f"atomically.\n"
-            f"  • Long or deeply-nested functions (humans ~24 lines, agents ~100) and "
-            f"near-duplicate blocks that make edits mis-target the wrong instance — the "
-            f"dominant agent edit-failure mode, and where cyclomatic/cognitive complexity "
-            f"actually lives (no line count sees it).\n"
-            f"  • A working set too large for reliable agent edits (line-number errors rise).\n\n"
-            f"Fix: extract a cohesive responsibility into a sibling module before writing here.\n"
-            f"Exempt paths: vendor/, node_modules/, migrations/, generated/, fixtures/, dist/, build/\n"
-            f"Human override (e.g. a long but flat, cohesive, or generated-like file): add "
+            f"{name} would be {projected} lines — past the {HARD_LIMIT}-line limit.\n"
+            f"Extract a cohesive responsibility into a sibling module before writing here.\n"
+            f"If it is genuinely flat, cohesive, or generated, waive it: add "
             f"`# file-complexity-waiver: <reason>` in the first 5 lines, or set "
-            f"FILE_COMPLEXITY_WAIVER=<reason> in the environment."
+            f"FILE_COMPLEXITY_WAIVER=<reason>.\n"
+            f"Already exempt: vendor/, node_modules/, migrations/, generated/, fixtures/, "
+            f"dist/, build/"
         ),
     }
+
+
+def _respond(decision: str, file_path: str, projected: int) -> int:
+    """Emit the decision. Shared by every host so the verdict cannot drift."""
+    if decision in ("exempt", "pass"):
+        return 0
+    if decision == "waiver":
+        _emit_signal("waiver-accepted", file_path, projected)
+        return 0
+    if decision == "soft":
+        _emit_signal("soft-nudge", file_path, projected)
+        json.dump({"systemMessage": build_soft_message(file_path, projected)}, sys.stdout)
+        return 0
+    _emit_signal("deny", file_path, projected)
+    json.dump(deny_response(file_path, projected), sys.stdout)
+    return 2
+
+
+_PATCH_TARGET = re.compile(r"^\*\*\* (Add|Update) File: (.+?)\s*$")
+
+
+def patch_projection(command: str, cwd: str) -> tuple[str, int, list[str]] | None:
+    """Project the post-patch line count for a Codex `apply_patch` payload.
+
+    Codex writes files through `apply_patch`, whose PreToolUse payload carries
+    the whole patch as `tool_input["command"]` — captured from a live session,
+    not assumed:
+
+        {"tool_name": "apply_patch",
+         "tool_input": {"command": "*** Begin Patch\\n*** Add File: hello.py\\n+print(1)\\n*** End Patch"},
+         "cwd": "/abs/dir"}
+
+    Paths inside the patch are relative to `cwd`. Only the first target is
+    projected: this gate reports one file, and a patch touching several is
+    better judged per-file on the next edit than by a summed number that
+    matches no file on disk. Anything unparseable returns None and fails open.
+    """
+    if not command or "*** " not in command:
+        return None
+    added = removed = 0
+    target: str | None = None
+    kind = ""
+    for line in command.splitlines():
+        match = _PATCH_TARGET.match(line)
+        if match:
+            if target is not None:
+                break  # second target — project only the first
+            kind, target = match.group(1), match.group(2).strip()
+            continue
+        if target is None:
+            continue
+        if line.startswith("+++") or line.startswith("---"):
+            continue
+        if line.startswith("+"):
+            added += 1
+        elif line.startswith("-"):
+            removed += 1
+    if not target:
+        return None
+
+    path = target if os.path.isabs(target) else os.path.join(cwd or "", target)
+    if kind == "Add":
+        return path, added, []
+    try:
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            existing = handle.read().splitlines()
+    except OSError:
+        return None  # unreadable — fail open rather than guess a baseline
+    return path, len(existing) + added - removed, existing[:5]
 
 
 def main() -> int:
@@ -224,12 +274,23 @@ def main() -> int:
         return 0
 
     tool_name = data.get("tool_name", "")
-    if tool_name not in ("Write", "Edit"):
+    if tool_name not in ("Write", "Edit", "apply_patch"):
         return 0
 
     tool_input = data.get("tool_input", {})
     if not isinstance(tool_input, dict):
         return 0
+
+    if tool_name == "apply_patch":
+        projection = patch_projection(
+            tool_input.get("command", "") or "", str(data.get("cwd") or "")
+        )
+        if projection is None:
+            return 0
+        file_path, projected, first_lines = projection
+        if _is_exempt(file_path):
+            return 0
+        return _respond(decide(projected, file_path, first_lines), file_path, projected)
 
     file_path = tool_input.get("file_path", "")
     if not file_path or _is_exempt(file_path):
@@ -256,24 +317,7 @@ def main() -> int:
     except Exception:
         return 0  # fail-open on any unexpected error
 
-    decision = decide(projected, file_path, first_lines)
-
-    if decision in ("exempt", "pass"):
-        return 0
-
-    if decision == "waiver":
-        _emit_signal("waiver-accepted", file_path, projected)
-        return 0
-
-    if decision == "soft":
-        _emit_signal("soft-nudge", file_path, projected)
-        json.dump({"systemMessage": build_soft_message(file_path, projected)}, sys.stdout)
-        return 0
-
-    # decision == "hard"
-    _emit_signal("deny", file_path, projected)
-    json.dump(deny_response(file_path, projected), sys.stdout)
-    return 2
+    return _respond(decide(projected, file_path, first_lines), file_path, projected)
 
 
 if __name__ == "__main__":
