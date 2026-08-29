@@ -61,13 +61,13 @@ task-branch pushes, pull requests, causal CI repair, and the repository-declared
 merge, deployment, and verification path. Do not ask the user to reconfirm those.
 
 A host may still show an approval prompt for an authorized action. That is an
-adapter limitation, not new intent — continue other independent work while it
-waits.
+adapter limitation, not new intent — continue other independent authorized work
+while it waits.
 
-Authority follows causal scope. Own a discovered defect when it blocks the
-delegated outcome and its repair stays inside the existing behavior, repository,
-audience, privilege, and ownership boundaries. Record adjacent discoveries
-without executing them.
+Authority follows causal scope. Own a discovered defect when it causally blocks
+the delegated outcome and its repair stays inside the existing behavior,
+repository, audience, privilege, and ownership boundaries. Record adjacent
+discoveries without executing them.
 
 Reserve human attention for consequential choices: changed intent or non-goals, a
 materially different valid outcome, an undelegated repository or audience, new

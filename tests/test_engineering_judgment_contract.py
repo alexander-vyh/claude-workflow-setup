@@ -9,15 +9,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 RENDERER = ROOT / "tools" / "render_agent_surfaces.py"
-MINIMUM_CONTRACT = (
-    "Escapement optimizes for minimum verified delivery: the smallest coherent "
-    "solution that satisfies the current outcome and its constraints, not the "
-    "fewest lines or files."
-)
-DRY_CONTRACT = (
-    "Reuse or extend an existing owner only when its contract matches the invariant. "
-    "Do not force centralization across consumers whose semantics differ."
-)
+ORACLE_DOC = "agent-surfaces/onboarding/outcome-oracle.md"
 SIMPLIFIER_QUESTION = (
     '2. For each change, ask: "Is this the simplest coherent way to achieve the outcome '
     'without weakening contracts, failure handling, or tests?"'
@@ -53,6 +45,28 @@ def markdown_section(path, heading):
     return text.split(marker, 1)[1].split("\n## ", 1)[0]
 
 
+def contract_paragraph(prefix, root=ROOT):
+    """The current wording of the contract paragraph starting with `prefix`.
+
+    Read from the canonical source instead of hard-coded. The mutation tests
+    below need a literal anchor to overwrite, but hard-coding that anchor also
+    pinned the prose: every intentional rewrite of the contract failed CI
+    without changing what the contract means. The claims that must not drift
+    are asserted directly in assert_minimum_contract, which is what actually
+    rejects a weakened contract.
+    """
+    section = markdown_section(root / ORACLE_DOC, "Minimum Verified Delivery")
+    for paragraph in section.split("\n\n"):
+        normalized = " ".join(paragraph.split())
+        if normalized.startswith(prefix):
+            return normalized
+    raise AssertionError(f"{ORACLE_DOC} has no contract paragraph starting {prefix!r}")
+
+
+MINIMUM_CONTRACT = contract_paragraph("Escapement optimizes for minimum verified delivery:")
+DRY_CONTRACT = contract_paragraph("DRY targets duplicated authority")
+
+
 def replace_normalized(text, required, replacement):
     pattern = r"\s+".join(re.escape(token) for token in required.split())
     mutated, count = re.subn(pattern, replacement, text, count=1)
@@ -73,11 +87,29 @@ def assert_no_loc_pressure(text):
 
 
 def assert_minimum_contract(root):
-    for rel_path in ("agent-surfaces/onboarding/outcome-oracle.md", "AGENTS.md", "CLAUDE.md"):
+    """The contract's CLAIMS must survive, in every surface it is rendered into.
+
+    Deliberately not an exact-wording pin. What must hold is that the doc still
+    says: smallest *coherent* solution; the thing being delivered is a user or
+    business outcome and a green run is not one; reuse is about duplicated
+    authority, and centralizing is conditional. Any wording that keeps those
+    claims passes; any that drops one fails.
+    """
+    for rel_path in (ORACLE_DOC, "AGENTS.md", "CLAUDE.md"):
         section = " ".join(markdown_section(root / rel_path, "Minimum Verified Delivery").split())
         lowered = section.lower()
-        assert MINIMUM_CONTRACT in section
-        assert DRY_CONTRACT in section
+
+        assert "smallest coherent" in lowered, f"{rel_path}: smallest, but still coherent"
+        assert re.search(r"\b(?:user|business) outcome\b", lowered), (
+            f"{rel_path}: the outcome must be named as a user/business outcome"
+        )
+        assert re.search(r"\bgreen\b[^.\n]{0,60}\b(?:run|test|check|suite|pipeline)\b", lowered), (
+            f"{rel_path}: must say a green run is not the outcome"
+        )
+        assert "duplicated authority" in lowered, f"{rel_path}: DRY targets authority, not text"
+        assert re.search(r"centraliz\w*\s+(?:when|only|if)\b", lowered), (
+            f"{rel_path}: centralizing must stay conditional"
+        )
         assert_no_loc_pressure(section)
         for contradiction in (
             "prefers fewer files",
@@ -121,6 +153,34 @@ def test_engineering_judgment_contract_is_distributed():
     assert_minimum_contract(ROOT)
     assert_simplifier_contract(ROOT)
     assert_sibling_smell(ROOT)
+
+
+PRE_OUTCOME_WORDING = (
+    "Escapement optimizes for minimum verified delivery: the smallest coherent "
+    "solution that satisfies the current outcome and its constraints, not the "
+    "fewest lines or files. YAGNI forbids speculative structure; it never "
+    "weakens the outcome oracle."
+)
+
+
+def test_outcome_must_be_a_user_outcome_not_a_green_run(tmp_path):
+    """The wording this contract replaced was not sloppy — it was ambiguous.
+
+    "satisfies the current outcome" reads fine and passes every other check
+    here, including the no-LOC-pressure scan. It also lets an agent treat a
+    green test run as the outcome. This is the single mutation that isolates
+    the user/business-outcome claim: everything else about the paragraph stays
+    defensible, and the contract must still be rejected.
+    """
+    temp_root = copy_repo(tmp_path)
+    source = temp_root / ORACLE_DOC
+    source.write_text(
+        replace_normalized(source.read_text(), MINIMUM_CONTRACT, PRE_OUTCOME_WORDING)
+    )
+    result = run_renderer(root=temp_root)
+    assert result.returncode == 0, result.stderr
+    with pytest.raises(AssertionError, match="user/business outcome|green run"):
+        assert_minimum_contract(temp_root)
 
 
 @pytest.mark.parametrize(
