@@ -630,9 +630,15 @@ def test_wrong_capability_to_adapter_mapping_fails_validation(tmp_path: Path):
 
 @pytest.mark.parametrize("surface,fragments", DOCTRINE_REQUIREMENTS.items(), ids=lambda item: str(item))
 def test_delegated_authority_and_action_local_continuation(surface: Path, fragments: tuple[str, ...]):
-    content = _text(ROOT, surface)
+    # Whitespace-normalized: these are prose fragments, and the surfaces are
+    # hard-wrapped markdown. Matching raw text made a fragment "missing" the
+    # moment a reflow moved a line break through the middle of it, which says
+    # nothing about whether the doctrine is still stated.
+    content = " ".join(_text(ROOT, surface).split())
     for fragment in fragments:
-        assert fragment in content, f"{surface} missing doctrine fragment: {fragment}"
+        assert " ".join(fragment.split()) in content, (
+            f"{surface} missing doctrine fragment: {fragment}"
+        )
 
 
 def test_support_claims_match_executed_point_of_effect_controls(tmp_path: Path):

@@ -1,4 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "env": {
+    "HOMEBREW_NO_AUTO_UPDATE": "1"
+  },
   "hooks": {}
 }
