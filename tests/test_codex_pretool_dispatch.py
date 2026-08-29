@@ -56,6 +56,21 @@ def _run(
     )
 
 
+
+def assert_reaches_codex(output: dict, *fragments: str) -> None:
+    """additionalContext is the only advisory channel Codex passes to a model.
+
+    A gate's own additionalContext AND every systemMessage must arrive there.
+    Before this, a warning-only verdict was aggregated into systemMessage and
+    dropped by the host the dispatcher exists for, with nothing to show it.
+    """
+    context = output.get("hookSpecificOutput", {}).get("additionalContext", "")
+    for fragment in fragments:
+        assert fragment in context, (
+            f"{fragment!r} never reaches a Codex model; additionalContext is {context!r}"
+        )
+
+
 def test_dispatcher_preserves_context_and_strongest_public_decision(tmp_path: Path) -> None:
     plugin_root = tmp_path / "plugin"
     workspace = tmp_path / "workspace"
@@ -82,7 +97,7 @@ def test_dispatcher_preserves_context_and_strongest_public_decision(tmp_path: Pa
     hook = output["hookSpecificOutput"]
     assert hook["permissionDecision"] == "deny"
     assert hook["permissionDecisionReason"] == "[ask] ask reason\n\n[deny] deny reason"
-    assert hook["additionalContext"] == "first context: pwd\n\nsecond context"
+    assert_reaches_codex(output, "first context: pwd", "second context")
 
 
 def test_dispatcher_preserves_healthy_messages_and_equal_precedence_reasons(
@@ -120,6 +135,9 @@ def test_dispatcher_preserves_healthy_messages_and_equal_precedence_reasons(
         "[ask] first ask\n\n[ask] second ask\n\n[allow] weaker allow"
     )
     assert output["systemMessage"] == "first message\n\nsecond message"
+    # The same advisories must also ride additionalContext, which is the only
+    # channel Codex passes to the model.
+    assert_reaches_codex(output, "first message", "second message")
 
 
 def test_dispatcher_never_short_circuits_later_deny_or_advisory_output(
@@ -152,7 +170,7 @@ def test_dispatcher_never_short_circuits_later_deny_or_advisory_output(
     output = json.loads(result.stdout)
     hook = output["hookSpecificOutput"]
     assert hook["permissionDecisionReason"] == "[deny] deny A\n\n[deny] deny B"
-    assert hook["additionalContext"] == "middle context"
+    assert_reaches_codex(output, "middle context", "middle message")
     assert output["systemMessage"] == "middle message"
 
 
@@ -173,7 +191,7 @@ def test_dispatcher_reports_one_broken_gate_and_continues_to_later_gate(
 
     assert result.returncode == 0, result.stderr
     output = json.loads(result.stdout)
-    assert output["hookSpecificOutput"]["additionalContext"] == "valid gate ran"
+    assert_reaches_codex(output, "valid gate ran")
     assert "broken.py" in output["systemMessage"]
     assert "poison gate" in output["systemMessage"]
 
@@ -196,7 +214,7 @@ def test_dispatcher_accepts_normal_system_exit_and_reports_nonzero_exit(
 
     assert result.returncode == 0, result.stderr
     output = json.loads(result.stdout)
-    assert output["hookSpecificOutput"]["additionalContext"] == "normal exit", output
+    assert_reaches_codex(output, "normal exit")
     assert "normal.py" not in output["systemMessage"]
     assert "nonzero.py" in output["systemMessage"]
     assert "status 7" in output["systemMessage"]
@@ -402,10 +420,11 @@ def test_dispatcher_bounds_each_gate_and_continues_after_timeout(tmp_path: Path)
 
     assert result.returncode == 0, result.stderr
     output = json.loads(result.stdout)
-    assert output["hookSpecificOutput"]["additionalContext"] == (
-        "first gate ran\n\nlater gate ran"
-    )
+    assert_reaches_codex(output, "first gate ran", "later gate ran")
+    # The timeout warning is advisory, so it must reach the model too -- a
+    # gate that silently stopped running is exactly what an agent needs told.
     assert "slow.py" in output["systemMessage"]
+    assert_reaches_codex(output, "slow.py")
     assert "timed out after 0.05s" in output["systemMessage"]
 
 

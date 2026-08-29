@@ -37,11 +37,44 @@ def ready_bash_gates(manifest: dict[str, Any]) -> list[dict[str, Any]]:
     return gates
 
 
+def ready_file_gates(manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    """Gates that judge a file write, taken from the Codex apply_patch entry.
+
+    Pi has no apply_patch. It has `write` and `edit`, and the extension maps
+    them onto the payload these gates already read, so a gate needs no
+    knowledge of Pi. Reusing the Codex entry keeps one answer to "does this
+    gate apply to writing a file" instead of a second per-host list to drift.
+    """
+    adapter = manifest["adapters"]["pi"]
+    matcher = adapter.get("file_source_matcher")
+    if not matcher:
+        return []
+    gates: list[dict[str, Any]] = []
+    for hook in manifest.get("hooks", []):
+        host = hook.get("hosts", {}).get(adapter["gate_source_host"], {})
+        if host.get("status") != "ready":
+            continue
+        for event in host.get("events", []):
+            if (
+                event.get("event") == adapter["source_event"]
+                and event.get("matcher") == matcher
+            ):
+                gates.append(
+                    {
+                        "id": hook["id"],
+                        "source": hook["source"],
+                        "timeout_seconds": event["timeout_seconds"],
+                    }
+                )
+    return gates
+
+
 def render_gate_inventory(manifest: dict[str, Any]) -> str:
     payload = {
         "version": 1,
         "dispatcher": "claude/hooks/codex_pretool_dispatch.py",
         "gates": ready_bash_gates(manifest),
+        "file_gates": ready_file_gates(manifest),
     }
     return json.dumps(payload, indent=2) + "\n"
 
@@ -68,10 +101,15 @@ def validate_adapter(manifest: dict[str, Any]) -> list[str]:
         "source_matcher": "Bash",
         "target_event": "tool_call",
         "target_matcher": "bash",
+        # Captured, not assumed: `pi --mode json` names its file tools `write`
+        # and `edit`. Pinning them here means inventing a tool name fails the
+        # renderer instead of shipping a gate that silently never matches.
+        "file_source_matcher": "apply_patch",
+        "file_target_matchers": ["write", "edit"],
     }
     errors: list[str] = []
     if manifest.get("adapters", {}).get("pi") != expected:
-        errors.append("Pi adapter mapping must preserve the verified Bash event contract")
+        errors.append("Pi adapter mapping must preserve the verified event contract")
     if not ready_bash_gates(manifest):
         errors.append("Pi adapter must select at least one ready behavioral gate")
     return errors

@@ -5,7 +5,8 @@ Business invariant
 A Write/Edit to a NON-exempt file is graded by projected line count:
   • <= 500           -> PASS, silent (exit 0, no stdout)
   • 501 .. 1000      -> SOFT guidance (exit 0, stdout ``systemMessage``) — allowed
-  • > 1000           -> HARD block (exit 2, ``permissionDecision: deny``) — unless waived
+  • > 1000           -> HARD block (exit 0, ``hookSpecificOutput.permissionDecision:
+                       deny``) — unless waived
 A substantive waiver (``# file-complexity-waiver: <reason>`` in the first 5 lines, or
 ``FILE_COMPLEXITY_WAIVER`` env) suppresses BOTH tiers. Exempt paths/suffixes always
 pass. The gate fails OPEN on malformed input or unreadable targets — never crashes a
@@ -39,6 +40,21 @@ from pathlib import Path
 from unittest.mock import patch
 
 TEST_DIR = Path(__file__).resolve().parent
+
+
+def _load(name: str):
+    path = TEST_DIR.parent / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+# Independent reader of the host contract, used instead of key-picking.
+dispatch = _load("codex_pretool_dispatch")
+
 HOOK_PATH = TEST_DIR / "file_complexity_gate.py"
 if not HOOK_PATH.exists():
     HOOK_PATH = TEST_DIR.parent / "file_complexity_gate.py"
@@ -77,7 +93,18 @@ def _is_soft(code: int, decision: dict | None) -> bool:
 
 
 def _is_hard(code: int, decision: dict | None) -> bool:
-    return code == 2 and decision is not None and decision.get("permissionDecision") == "deny"
+    """A denial rides the stdout envelope, and the exit status stays 0.
+
+    Read through the dispatcher rather than by picking keys out of what this
+    module emits -- codex_pretool_dispatch was written against the host
+    contract, not by this test. Exit 2 is specifically NOT accepted: it blocks
+    on Claude and is discarded as a crash on Codex, which is how the same
+    verdict came to mean two different things in #205.
+    """
+    if code != 0 or decision is None:
+        return False
+    aggregated = dispatch._aggregate([decision], [])
+    return aggregated.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
 
 
 def _is_silent_pass(code: int, decision: dict | None) -> bool:
@@ -221,7 +248,7 @@ def test_soft_message_is_actionable():
 
 def test_hard_denial_is_actionable():
     _, decision = run_hook(_write_payload("/repo/src/big.py", 1300))
-    _is_actionable(decision["denyReason"], 1300, 1000)
+    _is_actionable(decision["hookSpecificOutput"]["permissionDecisionReason"], 1300, 1000)
 
 
 def test_messages_stay_short_enough_to_read():
@@ -229,7 +256,8 @@ def test_messages_stay_short_enough_to_read():
     _, soft = run_hook(_write_payload("/repo/src/big.py", 700))
     _, hard = run_hook(_write_payload("/repo/src/big.py", 1300))
     assert len(soft["systemMessage"].splitlines()) <= 6
-    assert len(hard["denyReason"].splitlines()) <= 6
+    reason = hard["hookSpecificOutput"]["permissionDecisionReason"]
+    assert len(reason.splitlines()) <= 6
 
 
 # --- Non-target tools and malformed input fail open -----------------------

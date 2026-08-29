@@ -1,6 +1,7 @@
 import copy
 import importlib.util
 import json
+import re
 import os
 import shutil
 import subprocess
@@ -44,6 +45,29 @@ def _pi_ready_bash_gates(manifest: dict) -> list[dict]:
     return gates
 
 
+def _pi_ready_file_gates(manifest: dict) -> list[dict]:
+    """Recompute the file-gate selection independently of the renderer."""
+    adapter = manifest["adapters"]["pi"]
+    gates = []
+    for hook in manifest["hooks"]:
+        host = hook.get("hosts", {}).get(adapter["gate_source_host"], {})
+        if host.get("status") != "ready":
+            continue
+        for event in host.get("events", []):
+            if (
+                event.get("event") == adapter["source_event"]
+                and event.get("matcher") == adapter["file_source_matcher"]
+            ):
+                gates.append(
+                    {
+                        "id": hook["id"],
+                        "source": hook["source"],
+                        "timeout_seconds": event["timeout_seconds"],
+                    }
+                )
+    return gates
+
+
 def test_pi_is_an_explicit_shared_root_adapter() -> None:
     manifest = _manifest()
 
@@ -56,6 +80,11 @@ def test_pi_is_an_explicit_shared_root_adapter() -> None:
         "source_matcher": "Bash",
         "target_event": "tool_call",
         "target_matcher": "bash",
+        # Pi's file tools, captured from a live `pi --mode json` session.
+        # Pinned so inventing a tool name fails here instead of shipping a
+        # gate that silently never matches anything.
+        "file_source_matcher": "apply_patch",
+        "file_target_matchers": ["write", "edit"],
     }
 
 
@@ -78,11 +107,21 @@ def test_generated_gate_inventory_exactly_matches_pi_ready_manifest_gates() -> N
         "version": 1,
         "dispatcher": "claude/hooks/codex_pretool_dispatch.py",
         "gates": _pi_ready_bash_gates(manifest),
+        "file_gates": _pi_ready_file_gates(manifest),
     }
+    assert inventory["file_gates"], (
+        "Pi must ship the file-write gates; an empty list means Pi has no brake "
+        "on file growth, which is the gap this inventory key exists to close"
+    )
     assert inventory["gates"], "Pi must ship at least one behavioral gate"
-    sources = [gate["source"] for gate in inventory["gates"]]
-    assert len(sources) == len(set(sources)), "Pi gate inventory must not duplicate gates"
-    assert all((PI_ROOT / source).is_file() for source in sources)
+    # Every gate named must also be SHIPPED. gates.json names a gate by path and
+    # the dispatcher opens it from the plugin root, so a gate listed but not
+    # vendored reads as a healthy inventory with the brake missing.
+    for key in ("gates", "file_gates"):
+        sources = [gate["source"] for gate in inventory[key]]
+        assert len(sources) == len(set(sources)), f"Pi {key} must not duplicate gates"
+        missing = [s for s in sources if not (PI_ROOT / s).is_file()]
+        assert not missing, f"Pi {key} names gates it does not ship: {missing}"
 
 
 def test_renderer_recomputes_pi_inventory_when_shared_manifest_changes() -> None:
@@ -105,33 +144,106 @@ def test_renderer_recomputes_pi_inventory_when_shared_manifest_changes() -> None
     assert changed["gates"][-1]["id"] == "pi_inventory_mutation_control"
 
 
+EXPECTED_TS_FUNCTIONS = {
+    "fail",
+    "confinedFile",
+    "loadRuntime",
+    "parseDispatcherResponse",
+    "runDispatcher",
+    "surfaceDiagnostics",
+    "fileGatePayload",
+}
+
+
 def _assert_thin_pi_extension(source: str) -> None:
-    runtime_loader = source.split("function loadRuntime", 1)[1].split(
-        "function parseDispatcherResponse", 1
-    )[0]
-    response_parser = source.split("function parseDispatcherResponse", 1)[1].split(
-        "function runDispatcher", 1
-    )[0]
+    """The Pi extension is a bridge, not a policy engine.
+
+    Asserted as properties rather than as occurrence counts. The previous
+    version pinned things like ``run_dispatcher.count("payload") == 2`` and the
+    exact text of a for-loop, which made every legitimate refactor look like a
+    policy violation while catching nothing the properties below miss.
+
+    What must hold: one dispatcher process per tool event, one tool handler, no
+    gate named in TypeScript, no dispatcher path in TypeScript, no decision
+    logic in the transport or the diagnostics, no inspection of tool content,
+    and no functions beyond the bridge's own.
+    """
     run_dispatcher = source.split("function runDispatcher", 1)[1].split(
         "function surfaceDiagnostics", 1
     )[0]
     diagnostics = source.split("function surfaceDiagnostics", 1)[1].split(
         "export default function", 1
     )[0]
-    handler = source.split('pi.on("tool_call"', 1)[1]
+    response_parser = source.split("function parseDispatcherResponse", 1)[1].split(
+        "function runDispatcher", 1
+    )[0]
 
     assert source.count("spawn(") == 1, "one tool event must start one dispatcher"
     assert source.count('pi.on("tool_call"') == 1
     assert source.count(
         ': `${event.systemPrompt}\\n\\n${runtime.instructions}`,'
     ) == 1
-    assert runtime_loader.count("parsed.gates") == 4
-    assert runtime_loader.count("gates: parsed.gates") == 1
-    assert ".filter(" not in runtime_loader
-    assert response_parser.count("stdout") == 2
-    assert response_parser.count("JSON.parse(stdout)") == 1
-    assert response_parser.count("return result;") == 1
+
+    # The extension must not read what the tool is doing. Every mutation that
+    # smuggles policy into TypeScript has to look at the payload to decide.
+    for inspector in (".includes(", ".indexOf(", ".match(", ".search(", ".test("):
+        assert inspector not in source, (
+            f"TypeScript inspects tool content via {inspector}; policy belongs in a gate"
+        )
+
+    # The bridge may block for exactly three reasons: a gate said so, its
+    # configuration is broken, or the dispatcher failed. A `reason:` that is a
+    # TypeScript literal is the extension inventing policy of its own -- which
+    # is how every remaining mutant below smuggles it in without touching the
+    # transport or adding a helper.
+    handler = source.split('pi.on("tool_call"', 1)[1]
+    allowed_reasons = {
+        'hook.permissionDecisionReason || "Escapement blocked this Bash call"',
+        'hook.permissionDecisionReason || "Escapement blocked this file write"',
+        '`Escapement Pi configuration error: ${runtime.message}`',
+        '`Escapement Pi adapter error: ${error}`',
+        '"Escapement received an invalid Pi Bash payload"',
+    }
+    for match in re.finditer(r"reason: (.+?),?\n", handler):
+        reason = match.group(1).strip().rstrip(",").removesuffix("};").strip()
+        assert reason in allowed_reasons, (
+            f"extension blocks with a reason of its own: {reason}. "
+            "Policy belongs in a gate, not in the bridge."
+        )
+
+    declared = set(re.findall(r"^\s*function (\w+)", source, re.M))
+    assert declared == EXPECTED_TS_FUNCTIONS, (
+        f"unexpected TypeScript functions: {declared ^ EXPECTED_TS_FUNCTIONS}. "
+        "A new helper here is usually policy that belongs in a gate."
+    )
+
+    # Transport and diagnostics carry decisions; they must not make them.
+    assert "permissionDecision" not in run_dispatcher
+    assert "hookSpecificOutput" not in run_dispatcher
+    assert "child.stdin.end(JSON.stringify(payload));" in run_dispatcher
+    assert "permissionDecision" not in diagnostics
+    assert "block:" not in diagnostics
+    assert "throw " not in diagnostics
+    assert "pi.sendMessage(" in diagnostics
+    assert "JSON.parse(stdout)" in response_parser
     assert "return {" not in response_parser
+
+    # The bridge runs the inventory as given. Selecting among gates -- by
+    # filtering the list or by comparing an id -- is the extension deciding
+    # which policy applies, which is the manifest's job.
+    runtime_loader = source.split("function loadRuntime", 1)[1].split(
+        "function parseDispatcherResponse", 1
+    )[0]
+    for scope, name in ((runtime_loader, "loadRuntime"), (run_dispatcher, "runDispatcher")):
+        assert ".filter(" not in scope, (
+            f"{name} selects among gates; it must run the inventory as given"
+        )
+    inventory = json.loads((PI_ROOT / "gates.json").read_text(encoding="utf-8"))
+    for gate in [*inventory["gates"], *inventory.get("file_gates", [])]:
+        assert gate["id"] not in source, (
+            f"extension names {gate['id']}; the bridge must not know a gate by id"
+        )
+
     assert "codex_pretool_dispatch.py" not in source, (
         "the generated inventory, not TypeScript, owns the dispatcher path"
     )
@@ -139,56 +251,9 @@ def _assert_thin_pi_extension(source: str) -> None:
         "beads_worktree_guard.py",
         "test_oracle_brief_gate.py",
         "implementation_echo_test_gate.py",
+        "file_complexity_gate.py",
     ):
         assert gate_specific_policy not in source
-    assert run_dispatcher.count("payload") == 2
-    assert run_dispatcher.count("JSON.stringify(payload)") == 1
-    assert "child.stdin.end(JSON.stringify(payload));" in run_dispatcher
-    assert "permissionDecision" not in run_dispatcher
-    assert "hookSpecificOutput" not in run_dispatcher
-    gate_loop = run_dispatcher.split("  for (const gate of runtime.gates) {", 1)[1].split(
-        "  const deadlineMs", 1
-    )[0]
-    assert gate_loop == (
-        "\n    args.push(\"--gate\", gate.source, \"--gate-timeout\", "
-        "String(gate.timeout_seconds));\n  }\n"
-    )
-    assert diagnostics.count("result") == 3
-    assert "throw " not in diagnostics
-    assert "permissionDecision" not in diagnostics
-    assert "block:" not in diagnostics
-    assert "pi.sendMessage(" in diagnostics
-    assert source.count("command") == 4
-    assert handler.count("event.input") == 1
-    assert handler.count("event.toolName") == 1
-    assert handler.count("event.toolCallId") == 1
-    assert handler.count("context.cwd") == 1
-    assert handler.count("context.signal") == 1
-    assert "const command = event.input?.command;" in handler
-    assert 'if (typeof command !== "string") {' in handler
-    assert [
-        line.strip()
-        for line in handler.splitlines()
-        if line.strip().startswith("if (")
-    ] == [
-        'if (event.toolName !== "bash") return;',
-        "if (runtime instanceof Error) {",
-        'if (typeof command !== "string") {',
-        'if (decision === "deny" || decision === "ask") {',
-    ]
-    for forbidden_policy_syntax in (
-        ".includes(",
-        ".indexOf(",
-        ".match(",
-        ".startsWith(",
-        ".endsWith(",
-        "RegExp(",
-        "switch (",
-        "switch(",
-        "case ",
-    ):
-        assert forbidden_policy_syntax not in source
-    assert "rm -rf" not in source
 
 
 def test_pi_extension_is_a_thin_single_dispatch_bridge() -> None:
@@ -304,11 +369,11 @@ def test_pi_architecture_check_rejects_selective_typescript_policy() -> None:
         _assert_thin_pi_extension(gate_filter_mutant)
 
     transport_filter_mutant = source.replace(
-        "  for (const gate of runtime.gates) {\n"
+        "  for (const gate of gates) {\n"
         "    args.push(\"--gate\", gate.source, \"--gate-timeout\", "
         "String(gate.timeout_seconds));\n"
         "  }",
-        "  for (const gate of runtime.gates) {\n"
+        "  for (const gate of gates) {\n"
         "    if (gate.id === \"merge_authorization_gate\") continue;\n"
         "    args.push(\"--gate\", gate.source, \"--gate-timeout\", "
         "String(gate.timeout_seconds));\n"

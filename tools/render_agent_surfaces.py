@@ -32,6 +32,7 @@ try:
         PI_HOOK_SUPPORT,
         PI_PLUGIN_ROOT,
         ready_bash_gates as _pi_ready_bash_gates,
+        ready_file_gates as _pi_ready_file_gates,
         render_gate_inventory as _render_pi_gate_inventory,
         render_package as _render_pi_package,
         validate_adapter as _validate_pi_adapter,
@@ -41,6 +42,7 @@ except ModuleNotFoundError:
         PI_HOOK_SUPPORT,
         PI_PLUGIN_ROOT,
         ready_bash_gates as _pi_ready_bash_gates,
+        ready_file_gates as _pi_ready_file_gates,
         render_gate_inventory as _render_pi_gate_inventory,
         render_package as _render_pi_package,
         validate_adapter as _validate_pi_adapter,
@@ -72,6 +74,9 @@ SHARED_HOOK_SUPPORT = {
     # to work on Codex. Same failure mode: without it the import fails, the
     # gate fails open, and it is inert exactly where it was needed.
     "claude/hooks/_codex_patch.py",
+    # One owner for how a hook speaks to a host. A wrong wire shape is silent:
+    # the hook fires, decides correctly, and nothing happens.
+    "claude/hooks/_host_output.py",
     # Both advisory boundaries use the corpus-backed per-function strength
     # differ; its parser is a required transitive sibling in installed hosts.
     "claude/hooks/oracle_strength_diff.py",
@@ -642,7 +647,13 @@ def rendered_targets(
         if source_path.exists():
             targets[root / CODEX_PLUGIN_ROOT / source] = source_path.read_text(encoding="utf-8")
 
-    pi_hook_sources = {gate["source"] for gate in _pi_ready_bash_gates(manifest)}
+    # Both gate lists. gates.json names a gate by path and the dispatcher opens
+    # it from the plugin root, so a gate listed but not vendored is a gate that
+    # cannot run -- the inventory looks right and the brake is not there.
+    pi_hook_sources = {
+        gate["source"]
+        for gate in [*_pi_ready_bash_gates(manifest), *_pi_ready_file_gates(manifest)]
+    }
     pi_hook_sources.update(SHARED_HOOK_SUPPORT | PI_HOOK_SUPPORT)
     for source in sorted(pi_hook_sources):
         source_path = root / source
