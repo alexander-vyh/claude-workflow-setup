@@ -17,43 +17,34 @@ If no active molecules are found, say nothing about molecules.
 ## Gate Resolution
 
 A molecule gate is for an **unresolved consequential choice**, not routine progression
-**already included in the delegated outcome**. Design intent, materially different valid
-outcomes, privilege expansion, destructive shared effects, or unsafe ownership overlap
-may require attention. Creating the established worktree, editing scoped files, running
-checks, committing, pushing the task branch, updating its pull request, repairing causal
-failures, and following the repository's standard declared landing path do not require a
-new product decision.
+already included in the delegated outcome. Design intent, materially different valid
+outcomes, privilege expansion, destructive shared effects, or unsafe ownership overlap may
+require attention. Creating the established worktree, editing scoped files, running checks,
+committing, pushing the task branch, updating its pull request, repairing causal failures,
+and following the repository's declared landing path do not.
 
 If a stored gate is mechanically ready but its answer is already fixed by the approved
 specification, explicit delegation, or repository policy, resolve it from that durable
 authority and continue. If the choice is genuinely unresolved, block only that gate and
-its dependents; continue independent authorized work in other steps or molecules.
+its dependents; continue independent authorized work elsewhere.
 
-When the user approves a gate (says "looks good", "approved", "yes", "continue", "proceed", or similar affirmative):
-- Run `bd gate resolve <gate-id>` silently
-- Record the gate resolution (silently — never surface to user):
-  ```
-  bd audit record --kind gate_resolved \
-    --issue-id <gate-id> \
-    --response '{"molecule": "<mol-id>", "gate": "<gate-name>", "phase": "design|validate|build", "decision": "approved"}'
-  ```
-- Then check `bd mol current <molecule-id>` for the next step
-- Announce and run the next ordinary authorized step
+On user approval ("looks good", "approved", "yes", "continue", "proceed"): run
+`bd gate resolve <gate-id>`, record the audit below with `"decision": "approved"`, check
+`bd mol current <molecule-id>`, then announce and run the next authorized step.
 
-When the user rejects a gate (says "revise", "no", "go back", or similar):
-- Record the rejection (silently):
-  ```
-  bd audit record --kind gate_resolved \
-    --issue-id <gate-id> \
-    --response '{"molecule": "<mol-id>", "gate": "<gate-name>", "phase": "design|validate|build", "decision": "rejected"}'
-  ```
-- Keep the gate open
-- Help the user revise the previous step's output
-- When they're satisfied, ask again
+On rejection ("revise", "no", "go back"): record the same audit with
+`"decision": "rejected"`, keep the gate open, help revise the previous step's output, and
+ask again when they are satisfied.
+
+Both silently — never surface bd commands or gate internals:
+
+```
+bd audit record --kind gate_resolved \
+  --issue-id <gate-id> \
+  --response '{"molecule": "<mol-id>", "gate": "<gate-name>", "phase": "design|validate|build", "decision": "approved|rejected"}'
+```
 
 ## Phase Presentation
-
-Map internal steps to phases for the user:
 
 | Internal Steps | User-Facing Phase |
 |---------------|-------------------|
@@ -64,17 +55,15 @@ Map internal steps to phases for the user:
 
 ## Automatic Progression
 
-When a step completes and the next step has no gate:
-- Proceed automatically — don't ask permission for mechanical steps
-- Announce what you're doing: "Discovery is done. Running work-breakdown now."
+Next step has no gate: proceed automatically — don't ask permission for mechanical steps —
+and announce it ("Discovery is done. Running work-breakdown now.").
 
-When a step completes and the next step has a gate:
-- If the gate contains an unresolved consequential choice, present only that decision
-  and summarize the evidence needed to decide it
-- Otherwise resolve the mechanical gate from established authority and continue
-- In either case, continue independent authorized work rather than suspending the session
+Next step has a gate: if it holds an unresolved consequential choice, present only that
+decision with the evidence needed to decide it; otherwise resolve it from established
+authority and continue. Either way, keep independent authorized work running rather than
+suspending the session.
 
-When all steps in a molecule are complete, record completion (silently):
+On molecule completion, record silently:
 ```
 bd audit record --kind molecule_complete \
   --issue-id <mol-id> \
@@ -83,20 +72,15 @@ bd audit record --kind molecule_complete \
 
 ## Timing Analysis
 
-`bd mol progress <molecule-id>` already tracks step-level timing data including:
-- Completed / total steps with percentage
-- Rate (steps/hour based on closure times)
-- ETA for remaining work
-
-Use this for retrospectives or when the user asks about velocity — no need to
-add redundant timing audit records. For per-issue timestamps, use
-`bd show --long --local-time <issue-id>`.
+`bd mol progress <molecule-id>` already tracks completion percentage, rate, and ETA — use
+it for retrospectives or velocity questions rather than adding redundant timing audit
+records. For per-issue timestamps: `bd show --long --local-time <issue-id>`.
 
 ## Multi-Molecule Routing
 
-If multiple molecules are active, present the highest-priority one first and mention others exist:
-- "Continuing the higher-priority Validate work (dark-mode); auth-refactor remains in Design."
-- Ask for priority only when the alternatives encode a real unresolved outcome trade-off
+Present the highest-priority molecule first and mention the others exist ("Continuing the
+higher-priority Validate work (dark-mode); auth-refactor remains in Design."). Ask for
+priority only when the alternatives encode a real unresolved outcome trade-off.
 
 <!-- escapement:detail:start -->
 

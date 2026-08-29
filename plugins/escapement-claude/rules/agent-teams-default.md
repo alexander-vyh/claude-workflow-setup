@@ -167,64 +167,36 @@ it applies to dispatched agents — full rule: `worktree-discipline.md`.
 - Sequential inline web searches instead of parallel search agents
 - Reading 10 files one by one instead of dispatching explore agents
 - Doing all investigation yourself instead of dispatching a team
-- Using anonymous agents that can't talk to each other
-- **Writing simulated persona dialogue in your output instead of dispatching real agents**
-- **Dispatching agents without `name`** — they are anonymous and unaddressable
-- **Using `Agent(prompt="...")` without `name`** — this is ALWAYS wrong
+- **Writing simulated persona dialogue instead of dispatching real agents**
+- **Dispatching without `name`** — `Agent(prompt="...")` is ALWAYS wrong; anonymous
+  agents are unaddressable and cannot coordinate
 - **Winding down prematurely** — summarizing remaining work instead of doing it
-- **Declaring "done" without verification** — reporting completion without running the actual test/command/workflow
 
 ## Continuation Discipline
 
-Agents — both the main thread and subagents — tend to prematurely wind down. This
-section exists to prevent that failure mode. These rules are NON-NEGOTIABLE.
+`outcome-ownership.md` governs when you may stop, and it binds the lead and every
+subagent equally. Two additions specific to teams:
 
-### For the Main Agent (You)
-
-**DO NOT STOP until the outcome is verified end-to-end.** Finding a problem is not
-finishing — FIXING the problem is finishing. Summarizing remaining work is not
-finishing — DOING the remaining work is finishing.
-
-**If you discover additional work during execution, classify it by causality.** Fix or
-dispatch causal blockers within the delegated boundary. Record adjacent discoveries for
-a future owner without executing them, then KEEP GOING on the delegated outcome.
-
-**If you hit an obstacle, work around it or escalate the narrow consequential choice —
-do NOT treat it as a team-wide stopping point.** Continue every independent authorized
-lane while the blocked action waits.
-
-**Declaring "done" without running verification is FAILURE.** Run the actual
-command/test/workflow. See the actual output. Confirm the actual result. "I believe
-this works" is not verification. Tests count only when they exercise the actual outcome
-and reject plausible bad implementations. Observed output must match the independent
-oracle.
+- **A blocked agent is not a blocked team.** Escalate the narrow consequential choice and
+  keep every independent authorized lane running.
+- **Subagents do not inherit this rule.** Put it in their prompts (block below).
 
 ### Pre-Completion Checklist
 
-Before declaring ANY task complete, mentally run this checklist. If any answer
-triggers more work — do that work before stopping.
+Beyond the outcome verification `outcome-ownership.md` already requires:
 
 1. **Did I dispatch all agents that could work in parallel?** If independent work
-   remains, dispatch agents for it NOW.
-2. **Are there causal blockers I found during execution that remain unaddressed?**
-   If yes, fix or dispatch them. Record adjacent discoveries without expanding scope.
-3. **Did I verify the outcome end-to-end?** Not just "my change compiles" — did I
-   run the actual workflow and confirm the actual result?
-4. **Could I dispatch a review/QA agent to independently verify?** If the work is
-   non-trivial, dispatch one.
-5. **Am I stopping because the work is DONE, or because I'm tired of working on it?**
-   Be honest. If you're stopping because it feels like enough, you're wrong — keep going.
+   remains, dispatch for it now.
+2. **Could a review/QA agent independently verify this?** If the work is non-trivial,
+   dispatch one.
 
 ### For Subagents (Include in Every Agent Prompt)
 
-When dispatching agents, include this language in their prompts:
-
-> **CONTINUATION DISCIPLINE:** DO NOT wind down prematurely. DO NOT summarize
-> remaining work and stop. If you find additional problems during your work, FIX
-> THEM. If you hit an obstacle, investigate and work around it — do not report it
-> as a reason to stop. You are done when the OUTCOME is verified, not when you've
-> made an attempt. "Maximum Steps Reached" is not an acceptable reason to stop
-> unless you have genuinely exhausted every available action. Own work that causally
-> blocks the delegated outcome; record adjacent discoveries without executing them.
-> If one action needs an unresolved consequential choice, continue every independent
-> authorized lane before escalating that narrow dependency.
+> **CONTINUATION DISCIPLINE:** Do not wind down prematurely. Do not summarize remaining
+> work and stop. If you find additional problems, FIX THEM. If you hit an obstacle,
+> investigate and work around it — that is not a reason to stop. You are done when the
+> OUTCOME is verified, not when you have made an attempt. "Maximum Steps Reached" is not
+> acceptable unless you have genuinely exhausted every available action. Own work that
+> causally blocks the delegated outcome; record adjacent discoveries without executing
+> them. If one action needs an unresolved consequential choice, continue every
+> independent authorized lane before escalating that narrow dependency.

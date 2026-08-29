@@ -1,39 +1,30 @@
 # Durable Artifacts — Persist Before You Point (Global Rule)
 
-Applies to **any** multi-agent dispatch — research, review roundtables, debug
-fan-outs, everything. This is general agent-team hygiene, not research-specific.
-Home: `agent-teams-default.md` + the `dispatching-parallel-agents` skill.
+Applies to **any** multi-agent dispatch — research, review roundtables, debug fan-outs.
+General agent-team hygiene, not research-specific. Home: `agent-teams-default.md` + the
+`dispatching-parallel-agents` skill.
 
 ## The principle: nothing load-bearing on the wire
 
-Anything load-bearing that exists **only** in a `SendMessage` is lost the moment
-the sending agent shuts down. This is not hypothetical — in every recovered
-multi-agent session, agents delivered findings via SendMessage and then ended at
-"Approving shutdown"; the only durable copy lived in the *lead's* transcript,
-which compaction erases. Findings had to be reconstructed forensically from
-SendMessage tool-call payloads. Silent, total, unrecoverable loss of dispatched
-work.
+Anything load-bearing that exists **only** in a `SendMessage` is lost the moment the
+sending agent shuts down. The lead's transcript is the only other copy, and compaction
+erases it — silent, total, unrecoverable loss of dispatched work.
 
 ## The rule
 
-**Every dispatched agent writes its complete artifact to a file BEFORE sending
-its pointer message.** The `SendMessage` is a pointer — "done, findings at
-`<path>`" — **never the payload.** Write off the wire, at the source: the agent
-that *has* the work persists it, instead of relying on the lead to catch a
-fleeting message. This survives both agent shutdown and lead-transcript
-compaction.
+**Every dispatched agent writes its complete artifact to a file BEFORE sending its pointer
+message.** The `SendMessage` is a pointer — "done, findings at `<path>`" — **never the
+payload.** The agent that *has* the work persists it, rather than relying on the lead to
+catch a fleeting message. This survives both agent shutdown and lead-transcript compaction.
 
-- **Where:** a **gitignored** `.research/<topic>-<date>/<NN>-<agent>.md`. The
-  dispatch's **first action ensures `.research/` is in `.gitignore`** (add if
-  absent). NOT `docs/` — that commits PII-bearing output into a product repo
-  behind the gitleaks hook (would trade data-loss for a secret-leak). NOT `/tmp`
-  — it vanishes (the exact durability failure this fixes).
-- **Format contract:** each file carries a mandated `## Findings` header (the
-  dispatch prompt instructs every agent to emit it). Provenance / uncertainty
-  tags live **inline in the file**, never only in the message.
-- **Retention:** on completion the lead **prints the path and offers cleanup** —
-  no auto-delete (matches the repo's "no automated deletes; archive/flag only"
-  convention).
+- **Where:** a **gitignored** `.research/<topic>-<date>/<NN>-<agent>.md`. The dispatch's
+  **first action ensures `.research/` is in `.gitignore`** (add if absent). NOT `docs/` —
+  that commits PII-bearing output into a product repo. NOT `/tmp` — it vanishes, which is
+  the exact durability failure this fixes.
+- **Format contract:** each file carries a mandated `## Findings` header. Provenance and
+  uncertainty tags live **inline in the file**, never only in the message.
+- **Retention:** on completion the lead **prints the path and offers cleanup** — no
+  auto-delete.
 
 <!-- escapement:detail:start -->
 
@@ -74,8 +65,3 @@ belief — ship the rule + the lead-side contract first.
 
 
 <!-- escapement:detail:end -->
-## Status
-
-Promoted from a real near-miss (3 recovered sessions). Severity (silent total
-loss) makes the lead-side contract **mandatory**; the proportional-enforcement
-principle keeps the producer-side hook **off** until evidence demands it.
