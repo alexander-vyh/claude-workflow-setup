@@ -6,11 +6,16 @@ which is what shipped in #205 and again in #208.
 
 Captured behavior, all three from live sessions rather than from docs:
 
-  deny      Claude Code blocks on exit status 2 OR on
-            `hookSpecificOutput.permissionDecision`. Codex honors only the
-            latter and discards a hook that exits non-zero. The Pi extension
-            reads the same field off the dispatcher. So: the envelope, status
-            0, everywhere.
+  deny      `hookSpecificOutput.permissionDecision` with status 0.
+
+            Not "either works on Claude". Emitting the JSON decision AND
+            exiting non-zero is a contradictory double-signal: exit 2 is the
+            legacy stderr-feedback path, so Claude reported "PreToolUse:Edit
+            hook error: No stderr output" and the agent never saw the limit or
+            the waiver escape (escapement-uk9i). Codex separately discards a
+            hook that exits non-zero. The envelope with status 0 is the only
+            thing that works on both, and the Pi extension reads the same
+            field off the dispatcher.
 
   advisory  Codex does NOT surface a hook's top-level `systemMessage` to the
             model. A probe hook emitting both markers was asked which reached
