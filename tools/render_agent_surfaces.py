@@ -68,6 +68,10 @@ SHARED_HOOK_SUPPORT = {
     # Landing-time gates share repository-neutral origin/HEAD + merge-base
     # authority. Omitting this sibling makes installed hooks fail open.
     "claude/hooks/git_change_scope.py",
+    # Reader for Codex's apply_patch payload, imported by every gate that has
+    # to work on Codex. Same failure mode: without it the import fails, the
+    # gate fails open, and it is inert exactly where it was needed.
+    "claude/hooks/_codex_patch.py",
     # Both advisory boundaries use the corpus-backed per-function strength
     # differ; its parser is a required transitive sibling in installed hosts.
     "claude/hooks/oracle_strength_diff.py",

@@ -158,6 +158,14 @@ def test_codex_unparseable_patch_fails_open(tmp_path):
         assert run_hook(_patch_payload(text, str(tmp_path))) == (0, None), text
 
 
+def test_codex_delete_file_is_not_gated(tmp_path):
+    """Removing a file cannot push it past a length limit."""
+    target = tmp_path / "gone.py"
+    target.write_text("".join(f"line {i}\n" for i in range(2000)))
+    text = "*** Begin Patch\n*** Delete File: gone.py\n*** End Patch"
+    assert run_hook(_patch_payload(text, str(tmp_path))) == (0, None)
+
+
 def test_codex_bash_payload_is_not_gated(tmp_path):
     """The captured Bash shape shares the `command` key — it must not be parsed."""
     captured = FIXTURE["payloads"]["bash"]

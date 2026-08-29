@@ -616,8 +616,20 @@
       "source": "claude/hooks/gate_design_nudge.py",
       "hosts": {
         "codex": {
-          "status": "unsupported",
-          "unsupported_reason": "Codex-portable but needs fixture coverage before marking ready"
+          "status": "ready",
+          "events": [
+            {
+              "event": "PreToolUse",
+              "matcher": "apply_patch",
+              "command": "python3 -B claude/hooks/gate_design_nudge.py",
+              "timeout_seconds": 10
+            }
+          ],
+          "fixtures": [
+            "claude/hooks/tests/test_codex_gate_design_nudge.py::test_codex_patch_to_a_hook_file_nudges",
+            "claude/hooks/tests/test_codex_gate_design_nudge.py::test_codex_ordinary_source_patch_stays_silent",
+            "claude/hooks/tests/test_codex_gate_design_nudge.py::test_nudge_can_never_block_on_codex"
+          ]
         },
         "claude": {
           "status": "ready",

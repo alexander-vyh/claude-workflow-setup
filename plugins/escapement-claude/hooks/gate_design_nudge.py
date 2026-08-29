@@ -6,7 +6,7 @@ the full gate-design manual lives in the on-demand `gate-design` skill, a
 3-rule checklist stays resident as a stub rule, and THIS PreToolUse nudge
 catches the file-edit trigger a resident checklist might miss.
 
-When you Write/Edit a gate-ish file — a hook `.py`, a file with `gate` in its
+When you Write/Edit — or, on Codex, apply_patch — a gate-ish file — a hook `.py`, a file with `gate` in its
 name, or `settings.template.json` (gate wiring) — it injects a one-line
 systemMessage reminding you to load the `gate-design` skill before building the
 gate, so the deny gets an escape path, the gate emits signal, and any required
@@ -29,6 +29,20 @@ from __future__ import annotations
 import json
 import os
 import sys
+
+
+def _patch_target(command: str, cwd: str) -> str | None:
+    """The file a Codex apply_patch touches, or None if it cannot be read."""
+    hooks_dir = os.path.dirname(os.path.abspath(__file__))
+    if hooks_dir not in sys.path:
+        sys.path.insert(0, hooks_dir)
+    try:
+        from _codex_patch import first_target  # type: ignore
+    except ImportError:
+        return None  # advisory hook: never break a session over a missing helper
+    parsed = first_target(command, cwd)
+    return parsed[1] if parsed else None
+
 
 _NUDGE = (
     "You're editing a gate-ish file. Load the `gate-design` skill and satisfy "
@@ -63,12 +77,23 @@ def main() -> int:
     except (json.JSONDecodeError, ValueError):
         return 0  # fail-open
 
-    if data.get("tool_name", "") not in ("Write", "Edit"):
+    tool_name = data.get("tool_name", "")
+    if tool_name not in ("Write", "Edit", "apply_patch"):
         return 0
     tool_input = data.get("tool_input", {})
     if not isinstance(tool_input, dict):
         return 0
-    file_path = tool_input.get("file_path", "")
+
+    if tool_name == "apply_patch":
+        # Codex authors gates through apply_patch, so matching Write/Edit alone
+        # left the host that most needs this nudge without it.
+        target = _patch_target(tool_input.get("command", "") or "",
+                               str(data.get("cwd") or ""))
+        if target is None:
+            return 0  # unparseable — stay silent rather than guess
+        file_path = target
+    else:
+        file_path = tool_input.get("file_path", "")
 
     if not _is_gate_path(file_path):
         return 0  # ordinary edit — stay silent (anti-noise)
