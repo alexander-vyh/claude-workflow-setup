@@ -9,6 +9,18 @@
 Escapement converts available agent capacity plus delegated authority into verified, delivered outcomes while reserving human attention for consequential choices.
 <!-- escapement:mission:end -->
 
+Build the smallest thing that satisfies the outcome and can be verified. Prefer
+deleting machinery to adding it. If a rule below could be a mechanism that just
+does the work, make it one.
+
+Invariants, whatever the host:
+
+- track work in `bd`; state outcome and oracle before non-trivial implementation;
+- test behavior, not implementation echoes; verify the user-facing outcome before closing;
+- never destroy user work without an explicit decision;
+- keep files lean — past 500 lines a hook nudges, past 1000 it blocks (waiver-overridable).
+  Line count is a proxy; the real concerns are coupling and mixed responsibility.
+
 Its durable capabilities form one closed loop:
 
 <!-- escapement:capabilities:start -->
@@ -23,22 +35,12 @@ Its durable capabilities form one closed loop:
 9. Learning and feedback
 <!-- escapement:capabilities:end -->
 
-These capabilities define Escapement. Current clients, planning systems, task
-stores, source-control hosts, and hook mechanisms are replaceable adapters. Their
-availability and enforcement may differ without changing the mission.
+Those capabilities define Escapement. Clients, planners, task stores, hosts, and
+hook mechanisms are replaceable adapters; their availability may differ without
+changing the mission.
 <!-- escapement:core-identity:end -->
 
-The host adapter may change which hooks, tools, and config files are available.
-The workflow invariants do not change:
-
-- use `bd` for task tracking;
-- make outcome and oracle explicit before non-trivial implementation;
-- prefer behavioral checks over implementation echoes;
-- verify the real user-facing outcome before closing work;
-- preserve user work and avoid destructive cleanup without an explicit decision;
-- keep files lean: a PreToolUse hook gives soft guidance past 500 lines and hard-blocks past 1000 (waiver-overridable) — extract a cohesive responsibility into a sibling module rather than growing a file. Line count is a weak proxy; the real concerns are complexity and coupling (multiple responsibilities, long/deeply-nested functions, near-duplicate blocks), framed for both human reviewability and agent edit-reliability.
-
-Current adapter mapping is explicit but non-defining:
+Current adapter mapping, explicit but non-defining:
 
 <!-- escapement:adapter-mapping:start -->
 - Design and specification | OpenSpec
@@ -52,37 +54,31 @@ Current adapter mapping is explicit but non-defining:
 
 ## Delegating an outcome delegates its ordinary means
 
-When a user delegates a bounded build, fix, change, execution, delivery, or
-shipping outcome, the routine and proportionate actions needed to achieve and
-verify it are already authorized within the named repositories, systems, and
-constraints. That includes the established worktree, scoped inspection and
-edits, tests, lint, builds, commits, task-branch pushes, pull-request creation and
-updates, causal CI or review repair, and the repository-declared merge,
-deployment, and verification path. Do not ask the user to reconfirm those
-ordinary means as separate product decisions.
+A delegated build, fix, change, or delivery already authorizes the routine
+actions that achieve and verify it inside the named repositories and
+constraints: the worktree, scoped edits, tests, lint, builds, commits,
+task-branch pushes, pull requests, causal CI repair, and the repository-declared
+merge, deployment, and verification path. Do not ask the user to reconfirm those.
 
-A host may still mechanically display an approval prompt for an authorized
-action. That is an adapter enforcement limitation, not evidence that new user
-intent is required. Continue other independent authorized work while the action
-waits whenever such work exists.
+A host may still show an approval prompt for an authorized action. That is an
+adapter limitation, not new intent — continue other independent work while it
+waits.
 
-Authority follows causal scope. Own a discovered defect when it causally blocks
-the delegated outcome and its repair stays inside the existing behavior,
-repository, audience, privilege, destructive-effect, and ownership boundaries.
-Record adjacent discoveries separately without executing them and without
-stopping the delegated work.
+Authority follows causal scope. Own a discovered defect when it blocks the
+delegated outcome and its repair stays inside the existing behavior, repository,
+audience, privilege, and ownership boundaries. Record adjacent discoveries
+without executing them.
 
-Reserve human attention for consequential choices: changed intent or non-goals,
-a materially different valid outcome, an undelegated repository, account, or
-audience, new privilege or credential access, destructive or irreversible shared
-effects, an actually enforced confirmation class, unsafe overlap with another
-owner's work, or the absence of a standard landing path.
+Reserve human attention for consequential choices: changed intent or non-goals, a
+materially different valid outcome, an undelegated repository or audience, new
+privilege or credential access, destructive or irreversible shared effects, an
+enforced confirmation class, unsafe overlap with another owner's work, or a
+missing landing path.
 
-An unresolved choice blocks only the action and dependents that require it.
-Independent authorized work continues. A session is `input_required` only when
-every remaining route to the delegated outcome depends on the same unresolved
-choice. Status or informational side questions do not replace active work unless
-the user explicitly cancels, redirects, or replaces the original request.
+An unresolved choice blocks only what depends on it. A session is
+`input_required` only when every remaining route depends on that same choice.
+Informational side questions do not replace active work unless the user cancels
+or redirects.
 
 <!-- escapement:support-claims:start
 merge-green-status=unsupported
@@ -96,24 +92,19 @@ codex-final-response-interception-reason=The installed Codex adapter exposes no 
 -->
 <!-- escapement:support-claims:end -->
 
-Current enforcement remains capability-honest: the merge authorization hook
-does not observe pull-request green status; `confirm_class` is reserved and not
-currently enforced there; deploy metadata is informational and does not execute
-or independently authorize a deployment; and the installed Codex adapter has no
-Stop or final-response hook. These gaps do not narrow already-delegated ordinary
-means, but they must not be described as mechanically enforced behavior.
+Enforcement is capability-honest: the merge hook does not observe pull-request
+green status, `confirm_class` is reserved and unenforced, deploy metadata is
+informational only, and the Codex adapter has no Stop hook. These gaps do not
+narrow delegated means, but must not be described as mechanically enforced.
 
 # Vocabulary And Design Principles
 
-Foundational terms for this repo's workflow system, including multi-agent
-organization, beads, molecules, the continuation harness, gate/bureaucracy
-design, and oracles, are defined in `docs/VOCABULARY.md`.
+Terms — molecules, beads, the continuation harness, oracles, gate design — are
+defined in `docs/VOCABULARY.md`.
 
-This repo is a structured workflow bureaucracy. Gates, hooks, rules, and skills
-must stay lean, learning, and enabling. A gate should provide repair, internal
-transparency, global transparency, and flexibility; otherwise it is compliance
-theater rather than useful workflow machinery. See
-`claude/rules/delicate-art-of-bureaucracy.md` for the full rule.
+Gates, hooks, and rules must stay lean, learning, and enabling: a gate provides
+repair, transparency, and an escape, or it is compliance theater. See
+`claude/rules/delicate-art-of-bureaucracy.md`.
 
 # Beads
 
@@ -121,109 +112,74 @@ Beads is the task-state system, not the workflow-policy authority.
 Git, pull-request, merge, deployment, completion, memory, and agent-behavior
 policy come from Escapement and the repository's `.escapement/repo.json`.
 
-Issues live in the local Dolt database under `.beads`; `.beads/issues.jsonl` is
-a passive export and must not be treated as the wire protocol. Use `bd ready`,
-`bd show <id>`, `bd update <id> --claim`, and `bd close <id>` for work state.
+Issues live in the Dolt database under `.beads`; `.beads/issues.jsonl` is a
+passive export, not the wire protocol. Use `bd ready`, `bd show <id>`,
+`bd update <id> --claim`, and the matching close command for work state.
 
-Escapement owns worktree creation policy. Use the concrete bundled
-`escapement-worktree create` command injected into session context so the
-source commit, target repository, isolation, and optional Beads context are
-verified together. Beads remains task state and is checked after native Git
-creation when present.
+Escapement owns worktree creation. The worktree guard names the exact
+`escapement-worktree create` command at the moment you need it — no need to
+memorize it here.
 
-Any repository may opt into post-creation setup by committing a generic
-bootstrap declaration to `.escapement/repo.json`:
-
-```json
-{
-  "worktree": {
-    "bootstrap": {
-      "argv": ["tools/setup-worktree", "--non-interactive"],
-      "timeout_seconds": 300
-    }
-  }
-}
-```
-
-Escapement executes that exact argv in the verified target without a shell,
-then re-verifies the transaction before returning success. Without the
-declaration, repository provisioning is not applicable.
-
-Do not use TodoWrite, TaskCreate, or markdown TODO lists for project work
-tracking. If follow-up work is discovered, create or update a bead.
+Do not use TodoWrite, TaskCreate, or markdown TODO lists for project work.
 
 # Outcome And Oracle Discipline
 
-For non-trivial implementation, state the business outcome, the independent
-source of truth, constraints, invalid solution classes, negative controls,
-positive controls, missing-data handling, and final outcome verification before
-writing production code.
+"Outcome" throughout means the **user or business outcome** — the change someone
+outside this repository can observe. A passing test run, a merged PR, or a green
+pipeline are evidence about an outcome; none of them is one.
 
-Tests must reject plausible bad implementations. A passing test suite is not
-enough when the tests only repeat private helpers, constants, generated IDs, or
-intermediate implementation details. Do not weaken an oracle to make a change
-pass; fix the implementation or update the spec with an explicit decision.
+Before non-trivial implementation, state that outcome, the independent source of
+truth, the constraints, and what would falsify it — negative and positive
+controls, invalid solution classes, missing-data handling.
+
+Tests must reject plausible bad implementations. Green is not enough when the
+tests only echo private helpers, constants, generated IDs, or the shape the code
+already has. Never weaken an oracle to make a change pass: fix the code, or
+change the spec by explicit decision.
 
 ## Minimum Verified Delivery
 
 Escapement optimizes for minimum verified delivery: the smallest coherent
-solution that satisfies the current outcome and its constraints, not the
-fewest lines or files. YAGNI forbids speculative structure; it never weakens
+solution that delivers the intended user or business outcome and its
+constraints — not the fewest lines or files, and never a green test run standing
+in for the outcome itself. YAGNI forbids speculative structure; it never weakens
 the outcome oracle. A YAGNI decision is valid only when the current
-user/business outcome still passes its independent verification, controls
-remain intact, and the skipped work has an observable trigger for adding it
-later.
+user/business outcome still passes its independent verification, controls remain
+intact, and the skipped work has an observable trigger for adding it later.
 
-DRY targets duplicated authority, not similar text. Reuse or extend an existing
-owner only when its contract matches the invariant. Do not force centralization
-across consumers whose semantics differ. Centralize when duplication creates
-drift, competing source-of-truth claims, repeated synchronized edits, reviewer
-confusion, repeated decision cost, or high-severity deterministic risk. Preserve
-independent corroborating checks, especially across implementation, tests,
-oracle review, mutation challenge, and outcome verification.
+DRY targets duplicated authority, not similar text. Reuse an owner only when its
+contract matches the invariant; centralize when duplication causes drift,
+competing source-of-truth claims, or repeated synchronized edits. Preserve
+independent corroborating checks across implementation, tests, review, and
+outcome verification.
 
 Add gates only for repeated or high-severity failures with a replayable oracle
-that catches bad cases and allows good ones. Do not add workflow machinery just
-to prove that less workflow machinery should exist.
+that catches bad cases and allows good ones. Prefer a mechanism that does the
+work over a rule that asks an agent to remember it. Do not add workflow
+machinery just to prove that less workflow machinery should exist.
 
 # Non-Interactive Shell Commands
 
-Use non-interactive flags with file operations so aliases or prompts do not hang
-agent sessions:
-
-```bash
-cp -f source dest
-mv -f source dest
-rm -f file
-rm -rf directory
-cp -rf source dest
-```
-
-Use `ssh -o BatchMode=yes` and `scp -o BatchMode=yes` when applicable. Use
-`HOMEBREW_NO_AUTO_UPDATE=1` for Homebrew commands that should not prompt or
-spend time updating.
+Nothing may block on a prompt. Use `ssh -o BatchMode=yes` and
+`scp -o BatchMode=yes`. Environment defaults that avoid prompts are set for you
+in the Escapement settings `env` block rather than repeated here.
 
 # Session Completion
 
-Prefer a feature branch plus PR for repo changes. A task branch required by the
-declared landing path is authorized and is not ephemeral. Do not invent or push
-an unrelated branch outside that delegated outcome.
+Use a feature branch plus PR. A task branch on the declared landing path is
+authorized; do not push an unrelated branch.
 
-Before reporting completion:
-
-1. Close or update completed beads.
-2. Run the relevant tests, linters, or generated-surface checks.
-3. Check `git status`.
-4. Report remaining residue with a concrete owner or decision.
+Before reporting completion: close or update beads, run the relevant tests and
+generated-surface checks, check `git status`, and name any remaining residue with
+an owner.
 
 Do not ask whether to stop, keep going, wrap, pause, or call the current state a
 stopping point. If there is a next in-scope action, take it. If one action needs
-a consequential decision, continue independent authorized work. If the outcome
-is verified, state the verified result. If every route is causally blocked, name
-the single exact decision or access needed.
+a consequential decision, continue the independent work. If every route is
+blocked, name the single decision or access needed.
 
-Work is complete only when the requested outcome is verified end to end and any
-remaining residue is intentional.
+Work is complete only when the outcome is verified end to end and any residue is
+intentional.
 
 # Pi Adapter Notes
 

@@ -5,6 +5,18 @@
 Escapement converts available agent capacity plus delegated authority into verified, delivered outcomes while reserving human attention for consequential choices.
 <!-- escapement:mission:end -->
 
+Build the smallest thing that satisfies the outcome and can be verified. Prefer
+deleting machinery to adding it. If a rule below could be a mechanism that just
+does the work, make it one.
+
+Invariants, whatever the host:
+
+- track work in `bd`; state outcome and oracle before non-trivial implementation;
+- test behavior, not implementation echoes; verify the user-facing outcome before closing;
+- never destroy user work without an explicit decision;
+- keep files lean — past 500 lines a hook nudges, past 1000 it blocks (waiver-overridable).
+  Line count is a proxy; the real concerns are coupling and mixed responsibility.
+
 Its durable capabilities form one closed loop:
 
 <!-- escapement:capabilities:start -->
@@ -19,22 +31,12 @@ Its durable capabilities form one closed loop:
 9. Learning and feedback
 <!-- escapement:capabilities:end -->
 
-These capabilities define Escapement. Current clients, planning systems, task
-stores, source-control hosts, and hook mechanisms are replaceable adapters. Their
-availability and enforcement may differ without changing the mission.
+Those capabilities define Escapement. Clients, planners, task stores, hosts, and
+hook mechanisms are replaceable adapters; their availability may differ without
+changing the mission.
 <!-- escapement:core-identity:end -->
 
-The host adapter may change which hooks, tools, and config files are available.
-The workflow invariants do not change:
-
-- use `bd` for task tracking;
-- make outcome and oracle explicit before non-trivial implementation;
-- prefer behavioral checks over implementation echoes;
-- verify the real user-facing outcome before closing work;
-- preserve user work and avoid destructive cleanup without an explicit decision;
-- keep files lean: a PreToolUse hook gives soft guidance past 500 lines and hard-blocks past 1000 (waiver-overridable) — extract a cohesive responsibility into a sibling module rather than growing a file. Line count is a weak proxy; the real concerns are complexity and coupling (multiple responsibilities, long/deeply-nested functions, near-duplicate blocks), framed for both human reviewability and agent edit-reliability.
-
-Current adapter mapping is explicit but non-defining:
+Current adapter mapping, explicit but non-defining:
 
 <!-- escapement:adapter-mapping:start -->
 - Design and specification | OpenSpec
