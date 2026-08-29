@@ -234,13 +234,12 @@ def _run_stop(
                 "wake_at": (
                     dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=1)
                 ).isoformat(),
-                "supervisor_health": {
-                    "last_successful_reconcile_at": "2000-01-01T00:00:00+00:00"
-                },
+                "prompt": "resume later",
+                "created_by": "ScheduleWakeup",
             }
         ],
     ],
-    ids=["no-wake", "future-wake-missing-health", "future-wake-stale-health"],
+    ids=["no-wake", "bare-future-wake", "registered-future-wake"],
 )
 def test_public_stop_blocks_open_root_even_when_wakeup_cannot_prove_recovery(
     monkeypatch, capsys, tmp_path, scheduled
@@ -284,3 +283,65 @@ def test_public_wakeup_blocks_failed_root_show_after_ready_capability(
         fail_root_show=True,
     )
     assert "parent_outcome_unresolved" in output
+
+
+# --- the process result is the oracle, not the bytes on stdout ---------------
+# Ported from the Task 5 production review when the delegated-execution ledger
+# was removed. The claim was reached through a ledger there; its real owner is
+# the bd runner, so it is asserted directly against that instead.
+
+
+def _fake_bd(directory: pathlib.Path, *, exit_code: int, stdout: str) -> pathlib.Path:
+    binary_dir = directory / "bin"
+    binary_dir.mkdir(parents=True, exist_ok=True)
+    script = binary_dir / "bd"
+    script.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        f"sys.stdout.write({stdout!r})\n"
+        f"raise SystemExit({exit_code})\n",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    return binary_dir
+
+
+def test_nonzero_bd_with_plausible_closed_json_cannot_authorize_a_drain(
+    tmp_path, monkeypatch
+):
+    """A failed `bd` that still prints a closed root must not drain the queue.
+
+    Fragile implementation this rejects: parsing stdout and ignoring the exit
+    code. That reads as "root is closed" and lets a session stop with the work
+    unresolved -- the exact 2026-08-09 incident this module exists for.
+    """
+    repo = tmp_path / "repo"
+    (repo / ".beads").mkdir(parents=True)
+    closed_json = json.dumps([{"id": ROOT, "status": "closed"}])
+    fake_bin = _fake_bd(tmp_path, exit_code=17, stdout=closed_json)
+    monkeypatch.setenv("PATH", f"{fake_bin}{os.pathsep}{os.environ['PATH']}")
+
+    module = importlib.import_module("beads_task_state")
+    assert module._default_runner(str(repo))(["show", ROOT]) is None, (
+        "nonzero bd exit must discard stdout"
+    )
+    # The reason is whichever bd call fails first (the capability probe here);
+    # the claim under test is that no failing bd call can produce an allow.
+    decision, reason = _check_task_scope(_mode(ROOT, str(repo)), None)
+    assert decision == "block", f"a failed bd authorized a drain: {reason}"
+
+
+def test_successful_bd_with_the_same_bytes_is_the_positive_control(
+    tmp_path, monkeypatch
+):
+    """Isolating control: only the exit code differs, and the drain is allowed."""
+    repo = tmp_path / "repo"
+    (repo / ".beads").mkdir(parents=True)
+    closed_json = json.dumps([{"id": ROOT, "status": "closed"}])
+    fake_bin = _fake_bd(tmp_path, exit_code=0, stdout=closed_json)
+    monkeypatch.setenv("PATH", f"{fake_bin}{os.pathsep}{os.environ['PATH']}")
+
+    module = importlib.import_module("beads_task_state")
+    assert module._default_runner(str(repo))(["show", ROOT]) == [
+        {"id": ROOT, "status": "closed"}
+    ]

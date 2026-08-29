@@ -9,7 +9,7 @@ import re
 import shlex
 from collections.abc import Mapping
 
-from execution_expectation import mutate_trusted_atomic
+from trusted_json import mutate_trusted_atomic
 from trusted_source import is_trusted_file
 
 
@@ -176,3 +176,30 @@ def transcript_has_successful_exact_claim(
     except (OSError, UnicodeError):
         return False
     return bool(claim_ids & successful_results)
+
+
+def session_repo_cwd(thread_dir: pathlib.Path, session_id: str) -> pathlib.Path | None:
+    """Resolve the existing task-mode repository binding for daemon Beads calls.
+
+    Moved here from execution_supervisor when the delegated-execution ledger was
+    removed: reading session_mode.json is this module's contract, and the waker
+    still needs the binding to run Beads in the right repository.
+    """
+    mode_path = pathlib.Path(thread_dir) / "session_mode.json"
+    if mode_path.is_symlink() or not is_trusted_file(mode_path):
+        return None
+    try:
+        mode = json.loads(mode_path.read_text())
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(mode, dict) or mode.get("mode") != "task":
+        return None
+    if mode.get("session_id") != session_id:
+        return None
+    raw_cwd = mode.get("repo_cwd")
+    if not isinstance(raw_cwd, str) or not raw_cwd:
+        return None
+    repo_cwd = pathlib.Path(raw_cwd)
+    if not repo_cwd.is_absolute() or not repo_cwd.is_dir():
+        return None
+    return repo_cwd.resolve()

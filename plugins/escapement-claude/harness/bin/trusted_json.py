@@ -1,5 +1,23 @@
 #!/usr/bin/env python3
-"""Trusted, process-safe persistence for delegated execution ledgers."""
+"""Lock-protected, trust-checked, atomic mutation of a harness JSON file.
+
+This is plumbing, not policy. It was extracted from execution_expectation.py
+when the delegated-execution ledger was removed: the ledger's policy went away,
+but ``task_session_mode`` still needs a way to write a small JSON record without
+a torn write, a symlink swap, or a mutation that lands invalid.
+
+Guarantees, in the order they are enforced:
+
+* an exclusive flock on a sibling ``.<name>.lock``, so concurrent hooks in the
+  same thread directory serialize;
+* both the lock and the target must pass ``is_trusted_file`` -- correct owner and
+  mode, no symlink -- so another user cannot substitute either;
+* the caller's validator runs on the loaded state *and* on the mutation result,
+  so an invalid write raises instead of persisting;
+* the replacement is a same-directory temp file, fsynced, then ``os.replace``,
+  with the directory fsynced after -- a reader sees the old file or the new one,
+  never a partial one.
+"""
 
 from __future__ import annotations
 
@@ -12,30 +30,17 @@ import stat
 import tempfile
 from collections.abc import Callable
 
-from execution_validation import is_valid_ledger
 from trusted_source import is_trusted_file
 
 
-def load_trusted(path: pathlib.Path, expected_parent: str) -> dict | None:
-    """Load a trusted valid ledger for exactly one parent session."""
-    path = pathlib.Path(path)
-    if not is_trusted_file(path):
-        return None
-    try:
-        value = json.loads(path.read_text())
-    except (OSError, UnicodeError, json.JSONDecodeError):
-        return None
-    if not is_valid_ledger(value) or value["parent_session_id"] != expected_parent:
-        return None
-    return value
-
-
-def mutate_atomic(
+def mutate_trusted_atomic(
     path: pathlib.Path,
+    initializer: Callable[[], dict],
     mutation: Callable[[dict], dict],
-    initializer: Callable[[], dict] | None = None,
+    validator: Callable[[object], bool],
+    initial_validator: Callable[[object], bool] | None = None,
 ) -> dict:
-    """Serialize initialize-or-mutate under one stable path lock."""
+    """Mutate the JSON at ``path`` atomically, returning the persisted value."""
     path = pathlib.Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = path.with_name(f".{path.name}.lock")
@@ -45,29 +50,27 @@ def mutate_atomic(
     try:
         lock_stat = os.fstat(lock_fd)
         if not stat.S_ISREG(lock_stat.st_mode):
-            raise ValueError("ledger lock is not a regular file")
+            raise ValueError("lock is not a regular file")
         os.chmod(lock_path, 0o600)
         with os.fdopen(lock_fd, "r+") as lock_file:
             lock_fd = -1
             fcntl.flock(lock_file, fcntl.LOCK_EX)
             if not is_trusted_file(lock_path):
-                raise ValueError("ledger lock is not a trusted source")
+                raise ValueError("lock is untrusted")
             if is_trusted_file(path):
                 try:
-                    current = json.loads(path.read_text())
-                except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-                    raise ValueError("ledger JSON is malformed") from exc
-                if not is_valid_ledger(current):
-                    raise ValueError("ledger does not match the execution schema")
-            elif os.path.lexists(path) or initializer is None:
-                raise ValueError("ledger is not a trusted source")
+                    current = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, UnicodeError, ValueError) as exc:
+                    raise ValueError("JSON is malformed") from exc
+            elif os.path.lexists(path):
+                raise ValueError("path is untrusted")
             else:
                 current = initializer()
-                if not is_valid_ledger(current):
-                    raise ValueError("initializer produced an invalid execution ledger")
+            if not (initial_validator or validator)(current):
+                raise ValueError("state is invalid")
             updated = mutation(copy.deepcopy(current))
-            if not is_valid_ledger(updated):
-                raise ValueError("mutation produced an invalid execution ledger")
+            if not validator(updated):
+                raise ValueError("mutation is invalid")
 
             temporary_name: str | None = None
             try:
@@ -99,12 +102,3 @@ def mutate_atomic(
     finally:
         if lock_fd >= 0:
             os.close(lock_fd)
-
-
-def initialize_or_mutate_atomic(
-    path: pathlib.Path,
-    initializer: Callable[[], dict],
-    mutation: Callable[[dict], dict],
-) -> dict:
-    """Initialize an absent ledger or mutate an existing one under one lock."""
-    return mutate_atomic(path, mutation, initializer)

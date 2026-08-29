@@ -192,7 +192,10 @@ def test_mode_persistence_failure_records_incident_and_blocks_completion(
         harness_root=tmp_path,
     )
     assert mode is None
-    assert decision == ("block", "delegated_execution_unresolved")
+    # Renamed from "delegated_execution_unresolved" when the delegated-execution
+    # ledger was removed: the block is the same, the old name named a subsystem
+    # that no longer exists.
+    assert decision == ("block", "task_mode_incident_unresolved")
 
 
 def test_parallel_first_claim_wins_atomically_across_processes(tmp_path) -> None:
@@ -351,7 +354,10 @@ def test_untrusted_task_mode_incident_blocks_with_trusted_mode(
     )
 
     assert mode is not None
-    assert decision == ("block", "delegated_execution_unresolved")
+    # Renamed from "delegated_execution_unresolved" when the delegated-execution
+    # ledger was removed: the block is the same, the old name named a subsystem
+    # that no longer exists.
+    assert decision == ("block", "task_mode_incident_unresolved")
 
 
 if __name__ == "__main__":

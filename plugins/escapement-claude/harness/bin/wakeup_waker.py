@@ -26,16 +26,21 @@ import datetime as _dt
 import json
 import os
 import pathlib
+import subprocess
 import sys
 from typing import Callable, List, Optional, Tuple
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import wakeup_dispatch as wd  # noqa: E402
-import execution_supervisor as es  # noqa: E402
 import schedule_store  # noqa: E402
 import trusted_source as ts  # noqa: E402
 import worktree_lifecycle_supervisor as wls  # noqa: E402
-from thread_identity import is_actor_state_dir, iter_state_dirs  # noqa: E402
+from task_session_mode import session_repo_cwd  # noqa: E402
+from thread_identity import (  # noqa: E402
+    is_actor_state_dir,
+    iter_state_dirs,
+    session_id_for_state_dir,
+)
 
 HARNESS_ROOT = pathlib.Path(
     os.environ.get(
@@ -215,11 +220,11 @@ def main(argv=None) -> int:
                 continue
             session_id = _one_session_id(entries)
             repo_cwd = (
-                es.session_repo_cwd(sched.parent, session_id) if session_id else None
+                session_repo_cwd(sched.parent, session_id) if session_id else None
             )
             actor_state = is_actor_state_dir(sched.parent)
             canonical_session = (
-                es.session_id_for_state_dir(sched.parent) if actor_state else None
+                session_id_for_state_dir(sched.parent) if actor_state else None
             )
             runner_failed = False
             context_failed = False
@@ -272,7 +277,8 @@ def main(argv=None) -> int:
                 spawned = []
                 for s in spawns:
                     try:
-                        es.launch_in_repo(_spawn(s), repo_cwd)
+                        # Launch at the already-validated repository boundary.
+                        subprocess.Popen(_spawn(s), cwd=repo_cwd)
                     except OSError as exc:
                         scheduled_ok = False
                         exit_code = 1
@@ -289,41 +295,17 @@ def main(argv=None) -> int:
             if lock_file is not None:
                 lock_file.close()
     if args.fire:
-        lifecycle_result = None
-        lifecycle_ok = True
         try:
-            lifecycle_result = wls.reconcile(root.parent)
+            wls.reconcile(root.parent)
         except (OSError, RuntimeError, ValueError) as exc:
-            lifecycle_ok = False
-            print(f"worktree reconciliation incomplete: {exc}", file=sys.stderr)
-        if not scheduled_ok or not lifecycle_ok:
             exit_code = 1
-            if not scheduled_ok:
-                print(
-                    "execution reconciliation incomplete: scheduled-work inspection was incomplete",
-                    file=sys.stderr,
-                )
-        else:
-            reconcile_now = _dt.datetime.now(_dt.timezone.utc)
-
-            def inspect_scheduled():
-                return lifecycle_result
-
-            try:
-                result = es.reconcile_all(
-                    root,
-                    reconcile_now,
-                    f"wakeup-waker:{os.getpid()}",
-                    es.launch_recovery,
-                    inspect_scheduled=inspect_scheduled,
-                    completion_clock=lambda: _dt.datetime.now(_dt.timezone.utc),
-                    pass_started_at=now,
-                )
-                if result["status"] != "ok":
-                    exit_code = 1
-            except (OSError, RuntimeError, ValueError) as exc:
-                exit_code = 1
-                print(f"execution reconciliation incomplete: {exc}", file=sys.stderr)
+            print(f"worktree reconciliation incomplete: {exc}", file=sys.stderr)
+        # A schedule we could not inspect is reported, not swallowed. It no
+        # longer disables anything else: gating the whole pass on one untrusted
+        # schedule is what silently stopped reconciliation for 17 days.
+        if not scheduled_ok:
+            exit_code = 1
+            print("scheduled-work inspection was incomplete", file=sys.stderr)
     for s in total_spawns:
         print(json.dumps({"would_spawn" if not args.fire else "spawned": s}))
     print(

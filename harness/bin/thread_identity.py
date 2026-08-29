@@ -96,11 +96,6 @@ def iter_state_dirs(threads_root: pathlib.Path):
             yield from sorted(path for path in agents.iterdir() if path.is_dir())
 
 
-def supervisor_health_path(harness_root: pathlib.Path) -> pathlib.Path:
-    """Return the one authoritative health record for the configured harness."""
-    return pathlib.Path(harness_root) / "supervisor-health.json"
-
-
 def canonical_harness_root(thread_dir: pathlib.Path) -> pathlib.Path | None:
     """Resolve a harness root only for the two canonical state-dir shapes."""
     state_dir = pathlib.Path(thread_dir)
@@ -128,3 +123,33 @@ def _main(argv: list[str]) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(_main(sys.argv[1:]))
+
+
+def session_id_for_state_dir(thread_dir: pathlib.Path) -> Optional[str]:
+    """Resolve the parent session bound to one legacy or actor state directory.
+
+    Moved here from execution_supervisor when the delegated-execution ledger was
+    removed: this is state-directory identity, which is this module's contract.
+    """
+    import json
+
+    from trusted_source import is_trusted_file
+
+    state_dir = pathlib.Path(thread_dir)
+    is_actor = is_actor_state_dir(state_dir)
+    path_session = state_dir.parent.parent.name if is_actor else state_dir.name
+    mode_path = state_dir / "session_mode.json"
+    if not mode_path.is_symlink() and is_trusted_file(mode_path):
+        try:
+            mode = json.loads(mode_path.read_text())
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            mode = None
+        if isinstance(mode, dict):
+            session_id = mode.get("session_id")
+            if (
+                isinstance(session_id, str)
+                and session_id
+                and (sanitize_session_id(session_id) or "current") == path_session
+            ):
+                return session_id
+    return None if is_actor else path_session

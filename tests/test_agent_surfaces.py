@@ -1247,40 +1247,6 @@ def _generated_hook_commands(plugin_root, event):
     ]
 
 
-def test_manifest_registers_only_nonblocking_managed_dispatch_observation():
-    """PreTool observation is ready; incomplete reconciliation stays disabled."""
-    hook = _manifest_hook("delegation_hook")
-    claude = hook["hosts"]["claude"]
-    codex = hook["hosts"]["codex"]
-
-    assert hook["source"] == "harness/bin/delegation_hook.py"
-    assert "automatic" in hook["description"]
-    assert "non-blocking" in hook["description"]
-    assert claude["status"] == "ready"
-    assert claude["events"] == [
-        {
-            "event": "PreToolUse",
-            "matcher": "Agent",
-            "command": "python3 -B ~/.claude/harness/bin/delegation_hook.py",
-        }
-    ]
-    assert (
-        "harness/tests/test_delegation_hook.py::"
-        "test_managed_first_attempt_registers_without_prepare_or_child_bead"
-    ) in claude["fixtures"]
-    assert codex["status"] == "unsupported"
-    assert "Agent" in codex["unsupported_reason"]
-
-    reconcile = _manifest_hook("execution_reconcile")
-    assert reconcile["source"] == "harness/bin/execution_reconcile.py"
-    for host_name in ("codex", "claude"):
-        host = reconcile["hosts"][host_name]
-        assert host["status"] == "partial"
-        assert host.get("events", []) == []
-        assert "expectation" in host["unsupported_reason"]
-        assert "missing ledger" in host["unsupported_reason"]
-
-
 def test_renderer_rewrites_harness_commands_to_each_installed_plugin_root():
     renderer_spec = importlib.util.spec_from_file_location(
         "agent_surface_renderer_delegation_test", RENDERER
@@ -1290,11 +1256,11 @@ def test_renderer_rewrites_harness_commands_to_each_installed_plugin_root():
     renderer_spec.loader.exec_module(renderer)
 
     assert renderer._codex_plugin_command(
-        "python3 -B harness/bin/execution_reconcile.py"
-    ) == 'python3 -B "${PLUGIN_ROOT}/harness/bin/execution_reconcile.py"'
+        "python3 -B harness/bin/stop_hook.py"
+    ) == 'python3 -B "${PLUGIN_ROOT}/harness/bin/stop_hook.py"'
     assert renderer._claude_plugin_command(
-        "python3 -B ~/.claude/harness/bin/execution_reconcile.py"
-    ) == 'python3 -B "${CLAUDE_PLUGIN_ROOT}/harness/bin/execution_reconcile.py"'
+        "python3 -B ~/.claude/harness/bin/stop_hook.py"
+    ) == 'python3 -B "${CLAUDE_PLUGIN_ROOT}/harness/bin/stop_hook.py"'
 
 
 def _all_generated_hook_commands(plugin_root):
@@ -1313,19 +1279,10 @@ def test_generated_plugins_only_register_safe_delegation_observation():
 
     assert all("execution_reconcile.py" not in command for _, _, command in codex_commands)
     assert all("execution_reconcile.py" not in command for _, _, command in claude_commands)
-    delegation_commands = [
-        (event, matcher, command)
-        for event, matcher, command in claude_commands
-        if "delegation_hook.py" in command
-    ]
-    assert delegation_commands == [
-        (
-            "PreToolUse",
-            "Agent",
-            'python3 -B "${CLAUDE_PLUGIN_ROOT}/harness/bin/delegation_hook.py"',
-        )
-    ]
+    # The delegated-execution ledger was removed; nothing may still register its
+    # dispatch observer or reconciler on any host.
     assert all("delegation_hook.py" not in command for _, _, command in codex_commands)
+    assert all("delegation_hook.py" not in command for _, _, command in claude_commands)
 
     for _event, _matcher, command in codex_commands + claude_commands:
         assert "~/.claude" not in command
@@ -1346,34 +1303,8 @@ def test_task_mode_entry_runs_only_after_successful_claude_bash_calls():
     ]
 
 
-def test_codex_plugin_bundles_reconciliation_import_closure():
-    required = (
-        "execution_reconcile.py",
-        "execution_ledger.py",
-        "execution_store.py",
-        "execution_validation.py",
-        "thread_identity.py",
-        "trusted_source.py",
-    )
-    for name in required:
-        path = CODEX_WRAPPER / "harness" / "bin" / name
-        assert path.is_file(), f"Codex SessionStart bundle omits runtime dependency: {name}"
-
-
 def test_containment_sources_are_byte_identical_to_installed_package_copies():
     pairs = (
-        (
-            ROOT / "harness" / "bin" / "delegation_hook.py",
-            CLAUDE_PLUGIN / "harness" / "bin" / "delegation_hook.py",
-        ),
-        (
-            ROOT / "harness" / "bin" / "execution_reconcile.py",
-            CODEX_WRAPPER / "harness" / "bin" / "execution_reconcile.py",
-        ),
-        (
-            ROOT / "harness" / "bin" / "execution_reconcile.py",
-            CLAUDE_PLUGIN / "harness" / "bin" / "execution_reconcile.py",
-        ),
         (
             ROOT / "claude" / "hooks" / "root_checkout_guard.py",
             CODEX_WRAPPER / "claude" / "hooks" / "root_checkout_guard.py",
@@ -1386,101 +1317,6 @@ def test_containment_sources_are_byte_identical_to_installed_package_copies():
     for source, packaged in pairs:
         assert packaged.is_file(), f"packaged source missing: {packaged}"
         assert packaged.read_bytes() == source.read_bytes()
-
-
-def test_bundled_codex_reconciler_executes_directly_without_global_registration(
-    tmp_path,
-):
-    """Keep repair code executable without registering its false warning."""
-    assert all(
-        "execution_reconcile.py" not in command
-        for _event, _matcher, command in _all_generated_hook_commands(CODEX_WRAPPER)
-    )
-
-    source_bin = ROOT / "harness" / "bin"
-    sys.path.insert(0, str(source_bin))
-    try:
-        import execution_ledger as ledger_api
-    finally:
-        sys.path.remove(str(source_bin))
-
-    session_id = "019c8a3b-rendered-codex-session"
-    ledger = ledger_api.new_ledger(session_id)
-    ledger_api.register_execution(
-        ledger,
-        {
-            "kind": "dispatch_registered",
-            "parent_session_id": session_id,
-            "bead_id": "escapement-e3ai.5",
-            "execution_id": "exec-rendered-codex",
-            "host": "codex",
-            "agent_name": "task-3-host-adapter",
-            "dispatch_tool_use_id": "call-rendered-codex",
-            "watchdog_id": "watch-rendered-codex",
-            "attempt": 1,
-            "generation": 1,
-        },
-        dt.datetime(2026, 8, 9, 20, 0, tzinfo=dt.timezone.utc),
-    )
-    harness_root = tmp_path / "harness"
-    ledger_path = harness_root / "threads" / session_id / "executions.json"
-    ledger_path.parent.mkdir(parents=True)
-    ledger_path.write_text(json.dumps(ledger), encoding="utf-8")
-    ledger_path.chmod(0o600)
-
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    fake_bd = fake_bin / "bd"
-    fake_bd.write_text(
-        "#!/usr/bin/env python3\n"
-        "import json, sys\n"
-        "args = [arg for arg in sys.argv[1:] if arg != '--json']\n"
-        "if args == ['show', 'escapement-e3ai.5']:\n"
-        "    print(json.dumps([{'id': 'escapement-e3ai.5', 'status': 'closed', "
-        "'parent': 'escapement-e3ai'}]))\n"
-        "elif args == ['show', 'escapement-e3ai']:\n"
-        "    print(json.dumps([{'id': 'escapement-e3ai', "
-        "'status': 'in_progress'}]))\n"
-        "else:\n"
-        "    raise SystemExit(2)\n",
-        encoding="utf-8",
-    )
-    fake_bd.chmod(0o755)
-
-    command = [
-        sys.executable,
-        "-B",
-        str(CODEX_WRAPPER / "harness" / "bin" / "execution_reconcile.py"),
-    ]
-    env = os.environ.copy()
-    env["HARNESS_ROOT"] = str(harness_root)
-    env["PATH"] = f"{fake_bin}{os.pathsep}{env.get('PATH', '')}"
-    env["PYTHONPATH"] = ""
-    env["PYTHONNOUSERSITE"] = "1"
-    payload = {
-        "session_id": session_id,
-        "cwd": "/repo",
-        "hook_event_name": "SessionStart",
-        "source": "startup",
-        "host": "codex",
-        "parent_id": "payload-parent-must-not-be-used",
-    }
-    result = subprocess.run(
-        command,
-        cwd=tmp_path,
-        input=json.dumps(payload),
-        capture_output=True,
-        text=True,
-        env=env,
-    )
-
-    assert result.returncode == 0, result.stderr
-    output = json.loads(result.stdout)
-    assert output["hookSpecificOutput"]["hookEventName"] == "SessionStart"
-    context = output["hookSpecificOutput"]["additionalContext"]
-    assert "parent outcome escapement-e3ai is unresolved" in context
-    assert "bd show escapement-e3ai" in context
-    assert "payload-parent-must-not-be-used" not in context
 
 
 # escapement-w4sn: the always-on rules must be injected through exactly ONE channel.

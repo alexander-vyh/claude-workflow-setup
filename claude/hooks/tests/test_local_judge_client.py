@@ -26,7 +26,6 @@ HARNESS_BIN = REPO_ROOT / "harness" / "bin"
 if str(HARNESS_BIN) not in sys.path:
     sys.path.insert(0, str(HARNESS_BIN))
 
-import execution_ledger  # noqa: E402
 
 
 class _ChatHandler(BaseHTTPRequestHandler):
@@ -442,7 +441,7 @@ def test_http_401_reports_optional_judge_unavailable_without_raising(monkeypatch
     assert result["reason"] == "unavailable"
 
 
-@pytest.mark.parametrize("entrypoint", ["execution_supervisor.py", "wakeup_waker.py"])
+@pytest.mark.parametrize("entrypoint", ["wakeup_waker.py"])
 def test_deterministic_reconcilers_do_not_import_optional_local_judge(entrypoint):
     source_path = REPO_ROOT / "harness" / "bin" / entrypoint
     source = source_path.read_text(encoding="utf-8")
@@ -456,150 +455,6 @@ def test_deterministic_reconcilers_do_not_import_optional_local_judge(entrypoint
 
     assert not any("local_judge" in name for name in imported)
     assert "_local_judge_client" not in source
-
-
-def test_public_waker_recovers_due_work_during_judge_401(monkeypatch, tmp_path):
-    monkeypatch.setenv("ESCAPEMENT_LOCAL_JUDGE_API_KEY", "wrong-secret")
-    _UnauthorizedHandler.authorization = None
-    _UnauthorizedHandler.request_count = 0
-    session_id = "judge-outage-recovery-session"
-    child_bead = "escapement-judge-child"
-    parent_bead = "escapement-judge-parent"
-    execution_id = "exec-judge-outage"
-    threads_root = tmp_path / "harness" / "threads"
-    thread_dir = threads_root / session_id
-    repo_cwd = tmp_path / "canonical-repo"
-    repo_cwd.mkdir()
-
-    ledger = execution_ledger.new_ledger(session_id)
-    execution_ledger.register_execution(
-        ledger,
-        {
-            "kind": "dispatch_registered",
-            "parent_session_id": session_id,
-            "bead_id": child_bead,
-            "execution_id": execution_id,
-            "host": "claude",
-            "agent_name": "judge-outage-worker",
-            "dispatch_tool_use_id": "tool-judge-outage",
-            "watchdog_id": "watch-judge-outage",
-            "attempt": 1,
-            "generation": 1,
-        },
-        dt.datetime(2000, 1, 1, 0, 0, tzinfo=dt.timezone.utc),
-    )
-
-    def write_trusted(path, value):
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(value), encoding="utf-8")
-        path.chmod(0o600)
-
-    ledger_path = thread_dir / "executions.json"
-    write_trusted(ledger_path, ledger)
-    write_trusted(
-        thread_dir / "session_mode.json",
-        {
-            "mode": "task",
-            "repo_cwd": str(repo_cwd),
-            "task_id": child_bead,
-            "parent_id": parent_bead,
-            "session_id": session_id,
-        },
-    )
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    bd_record = tmp_path / "bd-record.jsonl"
-    spawn_record = tmp_path / "spawn-record.jsonl"
-    fake_bd = fake_bin / "bd"
-    fake_bd.write_text(
-        "#!/usr/bin/env python3\n"
-        "import json, os, pathlib, sys\n"
-        "args = [arg for arg in sys.argv[1:] if arg != '--json']\n"
-        "with pathlib.Path(os.environ['BD_RECORD']).open('a') as handle:\n"
-        "    handle.write(json.dumps({'cwd': os.getcwd(), 'args': args}) + '\\n')\n"
-        f"if args == ['show', {child_bead!r}]:\n"
-        f"    print(json.dumps([{{'id': {child_bead!r}, 'status': 'in_progress', "
-        f"'parent': {parent_bead!r}}}]))\n"
-        f"elif args == ['show', {parent_bead!r}]:\n"
-        f"    print(json.dumps([{{'id': {parent_bead!r}, 'status': 'in_progress'}}]))\n"
-        "else:\n"
-        "    raise SystemExit(74)\n",
-        encoding="utf-8",
-    )
-    fake_bd.chmod(0o755)
-    fake_claude = fake_bin / "claude"
-    fake_claude.write_text(
-        "#!/usr/bin/env python3\n"
-        "import json, os, pathlib, sys\n"
-        "with pathlib.Path(os.environ['SPAWN_RECORD']).open('a') as handle:\n"
-        "    handle.write(json.dumps({'cwd': os.getcwd(), 'argv': sys.argv[1:]}) + '\\n')\n",
-        encoding="utf-8",
-    )
-    fake_claude.chmod(0o755)
-
-    def probe_and_reconcile(base_url):
-        advisory = lj.health_check(
-            base_url=base_url,
-            model="fake-local-model",
-            timeout=2,
-        )
-        environment = os.environ.copy()
-        environment["ESCAPEMENT_LOCAL_JUDGE_BASE_URL"] = base_url
-        environment["PATH"] = f"{fake_bin}{os.pathsep}{environment.get('PATH', '')}"
-        environment["BD_RECORD"] = str(bd_record)
-        environment["SPAWN_RECORD"] = str(spawn_record)
-        result = subprocess.run(
-            [
-                sys.executable,
-                str(HARNESS_BIN / "wakeup_waker.py"),
-                "--threads-root",
-                str(threads_root),
-                "--fire",
-            ],
-            cwd=tmp_path,
-            env=environment,
-            capture_output=True,
-            text=True,
-        )
-        return advisory, result
-
-    advisory, result = _call_loopback(_UnauthorizedHandler, probe_and_reconcile)
-
-    assert advisory["ok"] is False
-    assert advisory["reason"] == "unavailable"
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.strip().endswith("FIRED: 0 spawn(s) planned")
-    deadline = time.monotonic() + 3
-    while not spawn_record.exists() and time.monotonic() < deadline:
-        time.sleep(0.01)
-    spawned = [json.loads(line) for line in spawn_record.read_text().splitlines()]
-    assert len(spawned) == 1
-    assert spawned[0]["cwd"] == str(repo_cwd)
-    assert spawned[0]["argv"][:3] == ["--resume", session_id, "-p"]
-    prompt = spawned[0]["argv"][3]
-    assert execution_id in prompt
-    assert child_bead in prompt
-    assert parent_bead in prompt
-    bd_calls = [json.loads(line) for line in bd_record.read_text().splitlines()]
-    assert bd_calls == [
-        {"cwd": str(repo_cwd), "args": ["show", child_bead]},
-        {"cwd": str(repo_cwd), "args": ["show", parent_bead]},
-    ]
-    durable = json.loads(ledger_path.read_text(encoding="utf-8"))
-    execution = durable["executions"][0]
-    assert execution["reconcile_due"] == "hard"
-    assert execution["recovery_claim"]["owner"].startswith("wakeup-waker:")
-    assert execution["recovery_claim"]["execution_id"] == execution_id
-    assert execution["recovery_claim"]["attempt"] == 1
-    assert execution["recovery_claim"]["generation"] == 1
-    health = json.loads(
-        (threads_root.parent / "supervisor-health.json").read_text(encoding="utf-8")
-    )
-    assert health["completed_generation"] == 1
-    assert health["last_successful_reconcile_at"] is not None
-    assert health["counts"]["threads"] == 1
-    assert health["counts"]["recoveries"] == 1
-    assert _UnauthorizedHandler.request_count == 1
 
 
 def test_health_check_reports_unavailable_without_raising():
