@@ -48,7 +48,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import sys
 
 SOFT_LIMIT = 500
@@ -239,56 +238,40 @@ def _respond(decision: str, file_path: str, projected: int, *, codex: bool = Fal
     return 2
 
 
-_PATCH_TARGET = re.compile(r"^\*\*\* (Add|Update) File: (.+?)\s*$")
+def _parse_patch(command: str, cwd: str):
+    """Delegate to the shared reader of Codex's apply_patch payload."""
+    hooks_dir = os.path.dirname(os.path.abspath(__file__))
+    if hooks_dir not in sys.path:
+        sys.path.insert(0, hooks_dir)
+    try:
+        from _codex_patch import first_target  # type: ignore
+    except ImportError:
+        return None  # fail open rather than block a session on a missing helper
+    return first_target(command, cwd)
 
 
 def patch_projection(command: str, cwd: str) -> tuple[str, int, list[str]] | None:
     """Project the post-patch line count for a Codex `apply_patch` payload.
 
-    Codex writes files through `apply_patch`, whose PreToolUse payload carries
-    the whole patch as `tool_input["command"]` — captured from a live session,
-    not assumed:
-
-        {"tool_name": "apply_patch",
-         "tool_input": {"command": "*** Begin Patch\\n*** Add File: hello.py\\n+print(1)\\n*** End Patch"},
-         "cwd": "/abs/dir"}
-
-    Paths inside the patch are relative to `cwd`. Only the first target is
-    projected: this gate reports one file, and a patch touching several is
-    better judged per-file on the next edit than by a summed number that
-    matches no file on disk. Anything unparseable returns None and fails open.
+    Parsing the patch belongs to `_codex_patch`, which owns Codex's format for
+    every gate that needs it. What is decided here is what this gate measures:
+    an added file is its own length, and an updated file is what is already on
+    disk plus the delta. An unreadable target returns None and fails open --
+    guessing a baseline would deny on a number matching no file.
     """
-    if not command or "*** " not in command:
+    parsed = _parse_patch(command, cwd)
+    if parsed is None:
         return None
-    added = removed = 0
-    target: str | None = None
-    kind = ""
-    for line in command.splitlines():
-        match = _PATCH_TARGET.match(line)
-        if match:
-            if target is not None:
-                break  # second target — project only the first
-            kind, target = match.group(1), match.group(2).strip()
-            continue
-        if target is None:
-            continue
-        if line.startswith("+++") or line.startswith("---"):
-            continue
-        if line.startswith("+"):
-            added += 1
-        elif line.startswith("-"):
-            removed += 1
-    if not target:
-        return None
-
-    path = target if os.path.isabs(target) else os.path.join(cwd or "", target)
+    kind, path, added, removed = parsed
     if kind == "Add":
         return path, added, []
+    if kind == "Delete":
+        return None  # a deletion cannot push a file over a length limit
     try:
         with open(path, encoding="utf-8", errors="replace") as handle:
             existing = handle.read().splitlines()
     except OSError:
-        return None  # unreadable — fail open rather than guess a baseline
+        return None
     return path, len(existing) + added - removed, existing[:5]
 
 
