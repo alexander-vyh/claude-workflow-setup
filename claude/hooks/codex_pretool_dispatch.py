@@ -157,14 +157,21 @@ def _aggregate(
         )
         if reasons:
             hook_output["permissionDecisionReason"] = "\n\n".join(reasons)
+    messages = _unique([*messages, *warnings])
+    if messages:
+        output["systemMessage"] = "\n\n".join(messages)
+        # Codex does not pass a hook's top-level systemMessage to the model --
+        # only additionalContext. Without this, every non-blocking verdict from
+        # every dispatched gate was computed, aggregated, and then dropped on
+        # the host those gates run on. The two channels are different
+        # audiences, not a duplicate: Claude shows systemMessage to the user
+        # and additionalContext to the model.
+        contexts.extend(messages)
     contexts = _unique(contexts)
     if contexts:
         hook_output["additionalContext"] = "\n\n".join(contexts)
     if len(hook_output) > 1:
         output["hookSpecificOutput"] = hook_output
-    messages = _unique([*messages, *warnings])
-    if messages:
-        output["systemMessage"] = "\n\n".join(messages)
     return output
 
 
