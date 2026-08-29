@@ -75,12 +75,15 @@ mkdir -p \
 cp "$REPO/scripts/plugin-update.sh" "$UPDATER_REPO/scripts/plugin-update.sh"
 cp "$REPO/scripts/plugin-update-transaction.py" \
   "$UPDATER_REPO/scripts/plugin-update-transaction.py"
+cp "$REPO/scripts/plugin-wrapper-target.py" \
+  "$UPDATER_REPO/scripts/plugin-wrapper-target.py"
 cp "$REPO/scripts/continuation-supervisor-install.sh" \
   "$UPDATER_REPO/scripts/continuation-supervisor-install.sh"
 cp "$REPO/scripts/continuation-supervisor-state.py" \
   "$UPDATER_REPO/scripts/continuation-supervisor-state.py"
 chmod +x \
   "$UPDATER_REPO/scripts/plugin-update-transaction.py" \
+  "$UPDATER_REPO/scripts/plugin-wrapper-target.py" \
   "$UPDATER_REPO/scripts/continuation-supervisor-state.py"
 cp "$REPO/scripts/prune_settings_hooks.py" "$UPDATER_REPO/scripts/prune_settings_hooks.py"
 cp "$REPO/plugins/escapement-claude/harness/bin/stop_hook.py" \
@@ -134,6 +137,7 @@ done
 printf '%s\n' \
   '{"hooks":{"Stop":[{"hooks":[{"command":"python3 -B ${CLAUDE_PLUGIN_ROOT}/hooks/validate_no_shirking.py"}]}]}}' \
   > "$CACHE/hooks/hooks.json"
+cp -R "$CACHE/." "$UPDATER_REPO/plugins/escapement-claude/"
 cp -R "$CACHE" "$CACHE_OLD"
 # The pre-update package can legitimately predate newly required support files.
 # It must remain eligible for refresh; the post-update package must be complete.
@@ -214,6 +218,7 @@ JSON
 # Stub the real reinstall side effects: install force-enables and drops model.
 cat > "$BIN/claude" <<'STUB'
 #!/usr/bin/env bash
+printf '%s\n' "$*" >> "$HOME/claude.log"
 S="$HOME/.claude/settings.json"
 set_json() { python3 - "$S" "$@" <<'PY'
 import json,sys
@@ -406,6 +411,136 @@ HOME="$HOME_DIR" PATH="$BIN:$PATH" bash "$UPDATER_REPO/scripts/plugin-update.sh"
   || { cat "$TD/out2.log"; bad "second plugin update exited non-zero"; }
 [ "$(readlink "$CLAUDE_DIR/harness/bin" 2>/dev/null)" = "$CACHE/harness/bin" ] \
   && ok "second update remains converged" || bad "second update changed harness target"
+
+# Cross-host positive control: the Codex updater intentionally promotes the
+# shared harness wrappers into its versioned Escapement plugin cache. Exercise
+# a non-default CODEX_HOME so ownership follows the Codex updater's contract.
+CODEX_STATE_HOME="$TD/codex-state"
+CODEX_CACHE="$CODEX_STATE_HOME/plugins/cache/escapement/escapement/1.0.0"
+mkdir -p "$CODEX_CACHE/harness/bin" "$CODEX_CACHE/harness/schemas"
+rm -f "$CLAUDE_DIR/harness/bin" "$CLAUDE_DIR/harness/schemas"
+ln -s "$CODEX_CACHE/harness/bin" "$CLAUDE_DIR/harness/bin"
+ln -s "$CODEX_CACHE/harness/schemas" "$CLAUDE_DIR/harness/schemas"
+if HOME="$HOME_DIR" CODEX_HOME="$CODEX_STATE_HOME/" PATH="$BIN:$PATH" \
+  bash "$UPDATER_REPO/scripts/plugin-update.sh" >"$TD/codex-wrapper.log" 2>&1
+then
+  ok "Codex-managed shared harness wrappers are accepted"
+else
+  cat "$TD/codex-wrapper.log"
+  bad "Codex-managed shared harness wrappers were rejected"
+fi
+[ "$(readlink "$CLAUDE_DIR/harness/bin" 2>/dev/null)" = "$CACHE/harness/bin" ] \
+  && [ "$(readlink "$CLAUDE_DIR/harness/schemas" 2>/dev/null)" = "$CACHE/harness/schemas" ] \
+  && ok "Claude refresh converges both Codex-managed wrappers" \
+  || bad "Claude refresh did not converge Codex-managed wrappers"
+
+# Cross-host negative controls: reject broad Codex paths, nested version
+# segments, and component mismatches before any authority state is mutated.
+snapshot_deployment_state() {
+  python3 - "$CLAUDE_DIR" "$CODEX_STATE_HOME" "$1" <<'PY'
+import hashlib, json, os, stat, sys
+from pathlib import Path
+
+records = []
+roots = [Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3])]
+try:
+    roots.append(Path(sys.argv[3]).resolve(strict=True))
+except OSError:
+    pass
+seen = set()
+for root in roots:
+    key = str(root.absolute())
+    if key in seen:
+        continue
+    seen.add(key)
+    if not root.exists() and not root.is_symlink():
+        records.append([key, "missing"])
+        continue
+    paths = [root]
+    if root.is_dir() and not root.is_symlink():
+        for parent, directories, files in os.walk(root, followlinks=False):
+            paths.extend(Path(parent, name) for name in sorted(directories + files))
+    for path in paths:
+        metadata = path.lstat()
+        record = [key, str(path.absolute()), stat.S_IFMT(metadata.st_mode), stat.S_IMODE(metadata.st_mode)]
+        if path.is_symlink():
+            record.append(os.readlink(path))
+        elif path.is_file():
+            record.append(hashlib.sha256(path.read_bytes()).hexdigest())
+        records.append(record)
+print(json.dumps(records, separators=(",", ":")))
+PY
+}
+reject_codex_wrapper_target() {
+  local name="$1" component="$2" target="$3"
+  mkdir -p "$target"
+  rm -f "$CLAUDE_DIR/harness/bin" "$CLAUDE_DIR/harness/schemas"
+  ln -s "$CODEX_CACHE/harness/bin" "$CLAUDE_DIR/harness/bin"
+  ln -s "$CODEX_CACHE/harness/schemas" "$CLAUDE_DIR/harness/schemas"
+  rm -f "$CLAUDE_DIR/harness/$component"
+  ln -s "$target" "$CLAUDE_DIR/harness/$component"
+  cp "$CLAUDE_DIR/settings.json" "$TD/$name-settings.before"
+  cp "$CLAUDE_DIR/plugins/installed_plugins.json" "$TD/$name-registry.before"
+  touch "$HOME_DIR/claude.log" "$HOME_DIR/launchctl.log"
+  cp "$HOME_DIR/claude.log" "$TD/$name-claude.before"
+  cp "$HOME_DIR/launchctl.log" "$TD/$name-launchctl.before"
+  snapshot_deployment_state "$target" > "$TD/$name-tree.before"
+  if HOME="$HOME_DIR" CODEX_HOME="${REJECT_CODEX_HOME:-$CODEX_STATE_HOME}" PATH="$BIN:$PATH" \
+    bash "$UPDATER_REPO/scripts/plugin-update.sh" >"$TD/$name.log" 2>&1
+  then
+    bad "$name Codex wrapper should fail closed"
+  else
+    ok "$name Codex wrapper fails closed"
+  fi
+  snapshot_deployment_state "$target" > "$TD/$name-tree.after"
+  [ "$(readlink "$CLAUDE_DIR/harness/$component" 2>/dev/null)" = "$target" ] \
+    && cmp -s "$TD/$name-tree.before" "$TD/$name-tree.after" \
+    && cmp -s "$HOME_DIR/claude.log" "$TD/$name-claude.before" \
+    && cmp -s "$HOME_DIR/launchctl.log" "$TD/$name-launchctl.before" \
+    && ok "$name failure is atomic" || bad "$name failure mutated deployment state"
+  cp "$TD/$name-settings.before" "$CLAUDE_DIR/settings.json"
+  cp "$TD/$name-registry.before" "$CLAUDE_DIR/plugins/installed_plugins.json"
+}
+reject_codex_wrapper_target \
+  "unrelated-root" "bin" "$CODEX_STATE_HOME/unrelated/harness/bin"
+reject_codex_wrapper_target \
+  "nested-version" "bin" "$CODEX_CACHE/extra/harness/bin"
+reject_codex_wrapper_target \
+  "wrong-component" "schemas" "$CODEX_CACHE/harness/bin"
+OVERLAP_NESTED="$CLAUDE_DIR/plugins/cache/escapement/escapement/1.0.0/extra/harness/bin"
+REJECT_CODEX_HOME="$CLAUDE_DIR" reject_codex_wrapper_target \
+  "overlapping-root" "bin" "$OVERLAP_NESTED"
+DOTDOT_TARGET="$CODEX_CACHE/../dotdot/harness/bin"
+reject_codex_wrapper_target "dotdot" "bin" "$DOTDOT_TARGET"
+PINNED_NESTED="$CLAUDE_DIR/.escapement-pinned-legacy/arbitrary/harness/bin"
+reject_codex_wrapper_target "pinned-nested" "bin" "$PINNED_NESTED"
+ESCAPED_CACHE="$TD/escaped-codex-cache"
+mkdir -p "$ESCAPED_CACHE/harness/bin"
+ln -s "$ESCAPED_CACHE" \
+  "$CODEX_STATE_HOME/plugins/cache/escapement/escapement/escaped"
+reject_codex_wrapper_target \
+  "symlink-escape" "bin" \
+  "$CODEX_STATE_HOME/plugins/cache/escapement/escapement/escaped/harness/bin"
+INTERNAL_DEST="$CODEX_STATE_HOME/plugins/cache/escapement/escapement/internal-dest"
+INTERNAL_LINK="$CODEX_STATE_HOME/plugins/cache/escapement/escapement/internal/harness/bin"
+mkdir -p "$INTERNAL_DEST" "${INTERNAL_LINK%/bin}"
+ln -s "$INTERNAL_DEST" "$INTERNAL_LINK"
+reject_codex_wrapper_target "internal-redirect" "bin" "$INTERNAL_LINK"
+SWAPPED_COMPONENT="$CODEX_STATE_HOME/plugins/cache/escapement/escapement/swapped/harness"
+mkdir -p "$SWAPPED_COMPONENT/bin"
+ln -s "$SWAPPED_COMPONENT/bin" "$SWAPPED_COMPONENT/schemas"
+reject_codex_wrapper_target \
+  "symlinked-component" "schemas" "$SWAPPED_COMPONENT/schemas"
+cp "$UPDATER_REPO/scripts/plugin-wrapper-target.py" "$TD/wrapper-helper.before"
+printf '#!/bin/sh\nexit 3\n' > "$UPDATER_REPO/scripts/plugin-wrapper-target.py"
+chmod +x "$UPDATER_REPO/scripts/plugin-wrapper-target.py"
+reject_codex_wrapper_target \
+  "classifier-failure" "bin" "$CODEX_CACHE/harness/bin"
+cp "$TD/wrapper-helper.before" "$UPDATER_REPO/scripts/plugin-wrapper-target.py"
+chmod +x "$UPDATER_REPO/scripts/plugin-wrapper-target.py"
+rm -f "$CLAUDE_DIR/harness/bin" "$CLAUDE_DIR/harness/schemas"
+ln -s "$CACHE/harness/bin" "$CLAUDE_DIR/harness/bin"
+ln -s "$CACHE/harness/schemas" "$CLAUDE_DIR/harness/schemas"
 
 # Phase-split negative control: a legacy package may refresh without the new
 # dependencies, but the refreshed package must satisfy the full current
