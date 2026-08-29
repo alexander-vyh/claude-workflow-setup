@@ -71,15 +71,9 @@ include in the prompt:
 
 ## When NOT To Use Serena
 
-- Files that are not source code (markdown, YAML, JSON, dotfiles) — use Read / Edit / Grep
-- Searching for literal strings (error messages, log lines, regex patterns) — Grep is faster and more precise
-- Files Serena's LSP cannot parse (rare; if you see "no symbols found" on a code file, fall back to Read)
-- One-off shell-style exploration ("ls this directory") — use Bash or Glob
-
-## Anti-Patterns
-
-- Reading a 900-line model file to find one method — should have been `find_symbol`
-- Grepping for a method definition by name — should have been `find_symbol`
-- Editing a method by Read + Edit with a fragile `old_string` — should have been `replace_symbol_body`
-- Skipping `list_memories` at session start — losing free context the project already has
-- Dispatching subagents without telling them Serena exists — they will grep blindly
+- Non-source files (markdown, YAML, JSON, dotfiles) — use Read / Edit / Grep
+- Literal strings (error messages, log lines, regex patterns) — Grep is faster and more
+  precise
+- Files Serena's LSP cannot parse (rare; on "no symbols found" for a code file, fall back
+  to Read)
+- One-off shell exploration ("ls this directory") — Bash or Glob

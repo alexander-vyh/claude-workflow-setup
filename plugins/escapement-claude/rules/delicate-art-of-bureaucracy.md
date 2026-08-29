@@ -109,44 +109,18 @@ Recognizing them early is the work.
 <!-- escapement:detail:end -->
 ## Operating rules
 
-These follow from the four design features and the four failure modes.
+1. **Every rule has a half-life.** Annual review minimum. A rule unrevised in a year is a
+   candidate for re-justification, not veneration.
+2. **Every gate produces signal.** Waivers are labeled training data; denials are
+   questions the system is asking. A gate producing no usable signal is bloat.
+3. **Design intent does not survive implementation.** A gate designed enablingly will be
+   experienced coercively if deployed without context, trust, or the practitioner's input
+   on its rationale. How it ships matters as much as how it is designed.
+4. **Behavior precedes belief.** The user need not believe in a new gate first. Run it,
+   observe the friction, revise.
+5. **Coercion is a smell, not a strategy.** A gate that exists primarily to block —
+   without a corresponding affordance to *unblock* — is on the coercive axis. Add the
+   affordance or remove the gate.
 
-1. **Every rule has a half-life.** Annual review minimum. A rule that
-   hasn't been revised in a year is a candidate for re-justification, not
-   for veneration. Adler & Borys's paper is itself thirty years old and
-   still operative — that is a *property* of the framework, not a default
-   assumption to extend to every gate.
-2. **Every gate produces signal.** Waivers are not friction; they are
-   labeled training data. Denials are not punishment; they are questions
-   the system is asking. If a gate produces no usable signal, it is bloat.
-3. **Design intent does not survive implementation.** A gate designed
-   enablingly will be experienced coercively if deployed without context,
-   without trust, or without the practitioner's input on its rationale
-   (Adler & Borys, 1996, p. 78: *"a procedure designed with an enabling
-   intent and embodying enabling features can be implemented coercively"*).
-   How the gate is rolled out matters as much as how it is designed.
-4. **Behavior precedes belief.** When a new gate ships, the user does not
-   need to believe in it first. Run the gate, observe the friction, revise.
-   Shook (2010): *"It's easier to act your way to a new way of thinking
-   than to think your way to a new way of acting."*
-5. **Coercion is a smell, not a strategy.** A gate that exists primarily
-   to block — without a corresponding affordance to *unblock* — is on the
-   coercive axis. Add the affordance or remove the gate.
-
----
-
-## Deeper context — lives in the `gate-design` skill
-
-The *why* behind this framework — for readers who want it — is preserved in
-full in the **`gate-design` skill**, under its *For deeper context* section.
-Agents executing on a task do not need it; the operational content above is
-self-sufficient. Relocated there to keep this always-on rule lean:
-
-- **The operative thesis** (Schwartz, 2020) — bureaucracy as turning
-  problem-solving successes into problem-solved routines.
-- **The full lineage** — Gouldner (1954) → Adler & Borys (1996) → Adler
-  (1992) / Shook (2010) → Schwartz (2020) → Wiesche et al. (2013).
-- **What the lineage doesn't cover** — the management-thinker tradition
-  (Grove, Lencioni, Scott, Brown) and the individual-lean tradition (Allen,
-  Benson & Barry, Newport, Torres).
-- **Citations** — the six primary sources, in full.
+The lineage and full rationale (Gouldner → Adler & Borys → Shook → Schwartz) live in the
+`gate-design` skill.

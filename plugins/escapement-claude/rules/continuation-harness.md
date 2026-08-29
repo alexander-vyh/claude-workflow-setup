@@ -151,21 +151,17 @@ The residual platform fix (the runtime emitting its own death signal / raising t
 <!-- escapement:detail:end -->
 ## Rule: outcome-bias
 
-If you are not done and not scheduled to return, you are not stopping. Action without outcomes (more tool calls, more subagent dispatches, more bead-claims) does not substitute for proof of completion or proof of resumption. See `feedback/outcome-bias-over-action-bias` memory for the underlying principle.
+If you are not done and not scheduled to return, you are not stopping. More tool
+calls, dispatches, or bead-claims are not proof of completion or resumption.
 
 ## Completion target: ship it live
 
-There is **no git completion ceiling**. Done means the outcome is live and verified
-end-to-end — merged and deployed where the change actually runs — not "PR opened" or
-"committed locally." A cap that stopped an agent below live delivery contradicted the
-outcome-ownership rule (done = the real result is happening), so the ceiling machinery
-(`ceiling_push_cap.py`, `repo-policy.json`, `set-repo-ceiling`) was removed. Drive work
-all the way to a verified live outcome. Authorized ordinary external actions such as
-commits, task-branch pushes, pull-request updates, and a repository's standard declared
-landing path are not categorically human-only. If an action genuinely crosses delegated
-authority (for example, it needs a new credential or creates an undelegated irreversible
-shared effect), name that exact dependency and continue the rest — do not treat "PR
-opened" as done.
+Done means merged and deployed where the change actually runs — not "PR opened" or
+"committed locally." There is no git completion ceiling. Commits, task-branch pushes,
+pull-request updates, and a repository's standard declared landing path are authorized
+ordinary means, not categorically human-only. If an action genuinely crosses delegated
+authority (a new credential, an undelegated irreversible shared effect), name that exact
+dependency and continue the rest.
 
 ### Per-repo outcome authorization — the durable authorization the base prompt defers to
 
@@ -181,62 +177,31 @@ codex-final-response-interception-reason=The installed Codex adapter exposes no 
 -->
 <!-- escapement:support-claims:end -->
 
-The base Claude Code system prompt says: *confirm before hard-to-reverse or
-outward-facing actions — unless durably authorized.* A repo's committed
-`.escapement/repo.json` (the per-project options manifest) **is** that durable
-authorization. Read it before deciding whether to merge (`harness/bin/repo_outcome.py`
-resolves it):
+The base prompt confirms hard-to-reverse actions *unless durably authorized*. A repo's
+committed `.escapement/repo.json` **is** that authorization. Read it before merging
+(`harness/bin/repo_outcome.py` resolves it):
 
 - `intended_outcome` at or above `merged` **and** `auto_merge_on_green: true` →
-  **you are pre-authorized for the standard declared landing path.** When independent
-  evidence shows the change has reached green verification, **merge it
-  and ship it live. Do NOT ask "want me to merge it now, or review the PR first?"** —
-  that solicitation is the exact anti-pattern this authorization exists to remove. If
-  the repo also declares a `deploy` surface, name it in your report ("now live at X")
-  rather than ask about it.
-- No declaration, malformed, or `auto_merge_on_green: false` → the conservative
-  default (stop at `pr-opened`, may ask). Unchanged from today. Never assume
-  authorization a repo did not grant.
+  pre-authorized for the declared landing path. On green evidence, **merge and ship it
+  live. Do NOT ask "want me to merge it now, or review the PR first?"** — that
+  solicitation is the exact anti-pattern this authorization removes. If the repo declares
+  a `deploy` surface, name it in your report ("now live at X") rather than ask.
+- No declaration, malformed, or `auto_merge_on_green: false` → stop at `pr-opened`, may
+  ask. Never assume authorization a repo did not grant.
 
 **The "irreversible external action" carve-out does NOT cover a merge that triggers
-auto-deploy.** That carve-out is for steps you genuinely *cannot* perform without a
-human — typing a credential, clicking an external approval. A `gh pr merge` you have
-the ability to run is not such a step; a repo that declared `merged-and-deployed`
-authorized exactly that outcome. Merging-to-auto-deploy is the *point*, not a blocker
-— do not stretch the carve-out to re-introduce the ask the declaration removed.
+auto-deploy.** It covers steps you genuinely cannot perform without a human — typing a
+credential, clicking an external approval. A `gh pr merge` you can run is not one — do
+not stretch the carve-out to re-introduce the ask the declaration removed.
 
-The current support boundary is narrower than the configuration vocabulary:
+Support boundary, narrower than the configuration vocabulary: the merge hook does not
+observe green status; `confirm_class` is reserved and not currently enforced; `deploy`
+metadata is informational. Do not claim stronger enforcement until a point-of-effect fixture proves it.
 
-- The merge authorization hook reads the repository declaration and proposed merge
-  command. It **does not itself observe green status**; green must come from the actual
-  check/merge surface.
-- `confirm_class` is **reserved and not currently enforced**. Storing a value does not
-  create a live confirmation gate.
-- `deploy` metadata is informational. It identifies the standard declared landing and
-  verification path; the merge gate neither executes it nor treats arbitrary deploy
-  commands as authorized ordinary means.
-
-Do not claim stronger enforcement until a point-of-effect fixture proves it.
-
-**After independently verifying green, attempt the merge — do not pre-judge repository
-authorization in conversation.**
-A real incident (2026-07-04, simplifi/cro-reporting PR #262) showed the failure
-mode this closes: an agent reasoned in prose about whether it was authorized to
-merge, decided it wasn't, and — because no repo.json existed to name as the real
-reason — **invented a fabricated "platform-level gate, not something resolvable
-from my side."** GitHub branch protection confirmed no such gate existed. The fix
-is to stop reasoning about authorization in chat at all: when you reach a green
-PR, **run `gh pr merge <PR> --squash` and let `merge_authorization_gate.py` (a
-`PreToolUse` hook on `Bash(gh pr merge:*)`) return the actual verdict** — it reads
-the same `.escapement/repo.json` `repo_outcome.py` resolves, deterministically. If
-it denies, its `permissionDecisionReason` names the true cause (no declaration,
-or a malformed one) — report *that*, verbatim in substance, never a guess dressed
-up as an external constraint. This gate's verdict is about the declared authorization,
-not PR check status, `confirm_class`, or deploy execution. If the repo genuinely should
-be configured, offer to run `harness/bin/set_repo_outcome.py` (the validated authoring helper — replaces
-hand-editing `.escapement/repo.json`) rather than asking the user to write JSON by
-hand.
-
-## Status
-
-This rule is paired with the continuation-harness (May 2026). Code installs to `~/.claude/harness/bin/` (deployed by `INSTALL.sh` from the repo's `harness/` source); runtime state lives in `~/.claude/harness/` and is keyed per session (`threads/{session_id}/`) so concurrent agents never clobber each other. The full spec lives in the repo at `openspec/changes/continuation-harness/`. Still v0.1+: full 57-stall regression test, the launchd waker that actually fires scheduled wakeups, and the supervisor daemon. (Bead-derived contracts shipped — `harness/bin/derive_contract.py`; see "How to declare a contract" above. Listing them as unbuilt is believed to be why adoption sat at 0 of 475 open beads in a real repo as of 2026-08-20.)
+**Attempt the merge; do not pre-judge repository authorization in conversation.** Run
+`gh pr merge <PR> --squash` and let `merge_authorization_gate.py` (PreToolUse on
+`Bash(gh pr merge:*)`) return the actual verdict. If it denies, report its
+`permissionDecisionReason` — verbatim in substance, never a guess dressed up as an
+external constraint. (An agent once invented a "platform-level gate" that branch
+protection confirmed did not exist.) To configure a repo, offer
+`harness/bin/set_repo_outcome.py` rather than asking the user to hand-write JSON.

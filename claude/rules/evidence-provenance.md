@@ -42,14 +42,12 @@ Exactly one of:
 What you may not do: write it as a flat assertion indistinguishable from a fact
 you measured.
 
-**Why:** A reader cannot audit confidence they cannot see. If "778 files"
-(counted) and "Brett owns the migration" (guessed) are written in the same
-assertive tone, the reader must either re-audit everything or trust everything —
-both are failures. The provenance marker is what lets them trust selectively.
+**Why:** A reader cannot audit confidence they cannot see. If a counted figure and a
+guessed owner are written in the same assertive tone, the reader must re-audit everything
+or trust everything — both are failures. The marker is what lets them trust selectively.
 
 ## Scope
 
-This applies everywhere — design docs, PR descriptions, retros, code comments,
-analysis, commit messages, chat. It is not a discovery-skill rule; it is a
-writing rule. Wherever you assert something a decision will rest on, the reader
-gets to know if you checked.
+Everywhere — design docs, PR descriptions, retros, code comments, analysis, commit
+messages, chat. Wherever you assert something a decision will rest on, the reader gets to
+know whether you checked.
