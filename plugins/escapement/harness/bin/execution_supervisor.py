@@ -13,7 +13,6 @@ import subprocess
 from collections.abc import Callable
 
 from execution_ledger import apply_event, claim_recovery, reconcile_deadlines
-from execution_parent import classify_canonical_parent
 from execution_store import load_trusted, mutate_atomic
 from trusted_source import is_trusted_file
 from thread_identity import is_actor_state_dir, iter_state_dirs, sanitize_session_id
@@ -117,7 +116,7 @@ def plan_thread(
     active_executions = [
         execution
         for execution in ledger["executions"]
-        if execution["state"] not in {"terminal", "cancelled", "aborted"}
+        if execution["state"] not in {"terminal", "cancelled"}
     ]
     if active_executions and repo_cwd is None:
         return {"status": "unresolved", "thread": session_id, "ledger_path": path}
@@ -145,18 +144,12 @@ def plan_thread(
         child = _one_exact(bd_runner(["show", bead_id]), bead_id)
         if child is None:
             return {"status": "unresolved", "thread": session_id, "ledger_path": path}
-        relationship, parent_id = classify_canonical_parent(child)
-        if relationship == "unresolved":
+        parent_id = child.get("parent") or child.get("parent_id")
+        if not isinstance(parent_id, str) or not parent_id:
             return {"status": "unresolved", "thread": session_id, "ledger_path": path}
-        parent = None
-        if relationship == "parented":
-            parent = _one_exact(bd_runner(["show", parent_id]), parent_id)
-            if parent is None:
-                return {
-                    "status": "unresolved",
-                    "thread": session_id,
-                    "ledger_path": path,
-                }
+        parent = _one_exact(bd_runner(["show", parent_id]), parent_id)
+        if parent is None:
+            return {"status": "unresolved", "thread": session_id, "ledger_path": path}
         canonical[execution["execution_id"]] = {
             "child": child,
             "parent": parent,
@@ -185,13 +178,9 @@ def _recovery_descriptor(plan: dict, item: dict) -> dict:
     activity_kind = item.get("last_activity_kind") or "none"
     activity_at = item.get("last_activity_at") or "none"
     native_child = item.get("native_child_id") or "none"
-    relationship = (
-        f"parent bead {canonical['parent_id']} and child bead {item['bead_id']}"
-        if canonical["parent_id"] is not None
-        else f"standalone bead {item['bead_id']}"
-    )
     prompt = (
-        f"Reconcile delegated execution {item['execution_id']} for {relationship}; attempt "
+        f"Reconcile delegated execution {item['execution_id']} for parent bead "
+        f"{canonical['parent_id']} and child bead {item['bead_id']}; attempt "
         f"{item['attempt']} generation {item['generation']} crossed its {reason} "
         f"deadline {deadline}. Last accepted activity: {activity_kind} at "
         f"{activity_at}. Native child: {native_child}; native status "
@@ -298,7 +287,6 @@ def reconcile_all(
             if snapshot["reconcile_due"] is None or snapshot["state"] in {
                 "terminal",
                 "cancelled",
-                "aborted",
             }:
                 continue
             execution_id = snapshot["execution_id"]

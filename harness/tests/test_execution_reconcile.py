@@ -23,9 +23,6 @@ import pathlib
 import select
 import subprocess
 import sys
-import types
-
-import pytest
 
 BIN = pathlib.Path(__file__).resolve().parent.parent / "bin"
 sys.path.insert(0, str(BIN))
@@ -39,12 +36,6 @@ CODEX_SESSION = "019c8a3b-codex-thread-9"
 BEAD = "escapement-e3ai.5"
 ROOT = "escapement-e3ai"
 EXECUTION = "exec-reconcile-alpha"
-
-# Wall-clock hang guard for subprocess completion. Deliberately generous: it
-# exists so a genuine deadlock fails the run instead of hanging it forever, and
-# it asserts nothing about how fast a healthy run is. The real timing invariant
-# is the bounded `select` while the lock is held.
-SUBPROCESS_HANG_GUARD_SECONDS = 60
 
 
 def at(value: str) -> dt.datetime:
@@ -140,7 +131,6 @@ def late_generation_one_terminal(session_id: str = SESSION) -> dict:
         "terminal_event_id": "literal-late-generation-one",
         "terminal_reason": "completed",
         "result_digest": "sha256:late-generation-one",
-        "host_event_id": "claude:terminal:literal-late-generation-one",
     }
 
 
@@ -155,30 +145,13 @@ def beads_runner(parent_status: str = "closed", *, missing: str | None = None):
             if missing == "child":
                 return []
             if missing == "canonical_parent":
-                return [{"id": BEAD, "status": "closed", "parent": ""}]
+                return [{"id": BEAD, "status": "closed"}]
             return [{"id": BEAD, "status": "closed", "parent": ROOT}]
         if args == ["show", ROOT]:
             if missing == "parent":
                 return []
             return [{"id": ROOT, "status": parent_status}]
         return None
-
-    return run_bd, calls
-
-
-def beads_runner_with_parent_value(*, present: bool, value=None):
-    calls: list[list[str]] = []
-
-    def run_bd(args: list[str]):
-        calls.append(args)
-        if args == ["show", BEAD]:
-            child = {"id": BEAD, "status": "closed"}
-            if present:
-                child["parent"] = value
-            return [child]
-        if isinstance(value, str) and value and args == ["show", value]:
-            return [{"id": value, "status": "closed"}]
-        return []
 
     return run_bd, calls
 
@@ -249,80 +222,6 @@ def test_closed_parent_with_no_due_attempts_emits_nothing() -> None:
     assert calls == [["show", BEAD], ["show", ROOT]]
 
 
-def test_lifecycle_adapter_failure_is_fail_open_and_leaves_ledger_unchanged(
-    tmp_path, monkeypatch
-) -> None:
-    ledger = registered()
-    before = copy.deepcopy(ledger)
-    transcript = tmp_path / "claude.jsonl"
-    transcript.write_text("{}\n", encoding="utf-8")
-    payload = claude_session_start()
-    payload["transcript_path"] = str(transcript)
-    adapter = types.SimpleNamespace(
-        observe_transcript=lambda _path, _ledger: (_ for _ in ()).throw(
-            RuntimeError("adapter drift")
-        )
-    )
-    monkeypatch.setitem(sys.modules, "claude_agent_lifecycle", adapter)
-    run_bd, _calls = beads_runner("closed")
-
-    result = execution_reconcile.reconcile_session(
-        payload, run_bd, lambda _session: ledger, at("2026-08-09T20:01:00Z")
-    )
-
-    assert result["status"] == "continue"
-    assert "managed completion remains unresolved" in result["additional_context"]
-    assert ledger == before
-
-
-@pytest.mark.parametrize(
-    ("present", "value"),
-    [(False, None), (True, None)],
-    ids=["absent-parent", "explicit-null-parent"],
-)
-def test_standalone_bead_is_canonical_and_silent_at_session_start(
-    present: bool, value
-) -> None:
-    ledger = registered()
-    run_bd, calls = beads_runner_with_parent_value(present=present, value=value)
-
-    result = execution_reconcile.reconcile_session(
-        claude_session_start(),
-        run_bd,
-        lambda _session: ledger,
-        at("2026-08-09T20:01:00Z"),
-    )
-
-    assert result == {"status": "clear", "additional_context": ""}
-    assert calls == [["show", BEAD]]
-
-
-@pytest.mark.parametrize(
-    "malformed_parent",
-    ["", False, True, [], {}, 17],
-    ids=["empty", "false", "true", "list", "mapping", "integer"],
-)
-def test_malformed_parent_never_becomes_standalone_at_session_start(
-    malformed_parent,
-) -> None:
-    ledger = registered()
-    run_bd, calls = beads_runner_with_parent_value(present=True, value=malformed_parent)
-
-    result = execution_reconcile.reconcile_session(
-        claude_session_start(),
-        run_bd,
-        lambda _session: ledger,
-        at("2026-08-09T20:01:00Z"),
-    )
-
-    assert result["status"] == "continue"
-    assert (
-        f"canonical parent relationship for {BEAD} is unresolved"
-        in result["additional_context"]
-    )
-    assert calls == [["show", BEAD]]
-
-
 def test_codex_sessionstart_uses_the_same_reconciliation_without_stop_claims() -> None:
     ledger = registered(CODEX_SESSION)
     run_bd, _calls = beads_runner("in_progress")
@@ -374,7 +273,7 @@ def test_missing_beads_state_emits_unresolved_context() -> None:
     assert calls == [["show", BEAD]]
 
 
-def test_malformed_canonical_parent_relationship_is_actionable_and_unresolved() -> None:
+def test_missing_canonical_parent_relationship_is_actionable_and_unresolved() -> None:
     ledger = registered()
     run_bd, calls = beads_runner(missing="canonical_parent")
     payload = claude_session_start()
@@ -665,7 +564,6 @@ def test_public_sessionstart_durably_merges_reconciliation_with_concurrent_chang
             "recorded_at": incident["recorded_at"],
         }
         for incident in persisted["incidents"]
-        if incident["type"] == "old_generation_event"
     )
     assert active["generation"] == 2
     assert active["native_child_id"] == "native-generation-2"
@@ -733,13 +631,7 @@ def test_public_sessionstart_emits_only_after_durable_reconciliation(tmp_path) -
             fcntl.flock(lock_file, fcntl.LOCK_UN)
 
     assert process is not None
-    # Hang guard, NOT part of the oracle. The invariant is the pair of
-    # assertions above — nothing readable and no exit while the lock is held.
-    # This budget only has to be longer than a healthy run, and a healthy run
-    # here starts two interpreters (this hook, then the fake `bd`). At 5s it
-    # went red on a machine running concurrent suites; the same pattern
-    # elsewhere in this suite already allows 15s.
-    stdout, stderr = process.communicate(timeout=SUBPROCESS_HANG_GUARD_SECONDS)
+    stdout, stderr = process.communicate(timeout=5)
     assert process.returncode == 0, stderr
     output = json.loads(stdout)
     context = output["hookSpecificOutput"]["additionalContext"]

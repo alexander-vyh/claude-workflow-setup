@@ -24,12 +24,33 @@ bad() { printf '  FAIL: %s\n' "$*"; fail=1; }
   && ok "documented installer entrypoint is executable" \
   || bad "INSTALL.sh is not executable despite documented ./INSTALL.sh invocation"
 
-ROOT="$(mktemp -d)"
-trap 'rm -rf "$ROOT"' EXIT
+ROOT="$(mktemp -d)"; trap 'rm -rf "$ROOT"' EXIT
 BIN="$ROOT/bin"
 mkdir -p "$BIN"
 
-ln -s "$REPO/tests/helpers/fake_delegation_canary_claude.py" "$BIN/claude"
+cat > "$BIN/claude" <<'STUB'
+#!/usr/bin/env bash
+S="$HOME/.claude/settings.json"
+set_json() { python3 - "$S" "$@" <<'PY'
+import json,sys
+p=sys.argv[1]; op=sys.argv[2]; d=json.load(open(p))
+if op=="enable":
+    d.setdefault("enabledPlugins",{})["escapement@escapement"]=True
+    d.pop("model",None)
+elif op=="disable":
+    d.setdefault("enabledPlugins",{})["escapement@escapement"]=False
+json.dump(d,open(p,"w"),indent=2)
+PY
+}
+case "$1 $2" in
+  "plugin update")    set_json enable ;;
+  "plugin install")   set_json enable ;;
+  "plugin uninstall") : ;;
+  "plugin disable")   set_json disable ;;
+esac
+exit 0
+STUB
+chmod +x "$BIN/claude"
 
 # Isolate the supervisor installer that plugin-update owns. The dedicated
 # installer test executes plist argv; this integration stub records only that
@@ -164,18 +185,6 @@ assert_auxiliary_owned() {
     || bad "$label: mol-status is not executable"
 }
 
-assert_canary_audit() {
-  local home_dir="$1"
-  local label="$2"
-  if python3 "$REPO/tests/helpers/fake_delegation_canary_claude.py" \
-    --assert-audit "$home_dir/canary-audit.jsonl"
-  then
-    ok "$label: real canary seam observed armed journal and live candidate"
-  else
-    bad "$label: canary audit did not prove armed journal/live candidate"
-  fi
-}
-
 # Default install: auxiliary assets use the pin; workflow uses the plugin.
 T1="$ROOT/default"
 setup_claude_home "$T1"
@@ -202,7 +211,6 @@ else
 fi
 assert_plugin_owned "$T1" "default install"
 assert_auxiliary_owned "$T1" "$PIN" "default install"
-assert_canary_audit "$T1" "default install"
 
 SUPERVISOR_PLIST="$T1/Library/LaunchAgents/com.escapement.continuation-supervisor.plist"
 if [ -f "$SUPERVISOR_PLIST" ] && python3 - "$SUPERVISOR_PLIST" "$T1/.claude/harness/bin/wakeup_waker.py" <<'PY'
@@ -227,18 +235,14 @@ grep -q '^bootstrap ' "$T1/launchctl.log" 2>/dev/null \
 
 # Sequential regression: a later legacy update may refresh the auxiliary pin,
 # but it must leave plugin ownership intact.
-rm -f "$T1/canary-audit.jsonl"
 HOME="$T1" PATH="$BIN:$PATH" ESCAPEMENT_PIN_REMOTE="$REPO" ESCAPEMENT_PIN_REF="$BASE_REF" \
   bash "$REPO/scripts/plugin-update.sh" >"$T1/plugin-update.log" 2>&1 \
   || { cat "$T1/plugin-update.log"; bad "direct plugin update exited non-zero"; }
-assert_canary_audit "$T1" "direct plugin update"
-rm -f "$T1/canary-audit.jsonl"
 HOME="$T1" PATH="$BIN:$PATH" ESCAPEMENT_PIN_REMOTE="$REPO" ESCAPEMENT_PIN_REF="$BASE_REF" \
   bash "$REPO/INSTALL.sh" --update >"$T1/update.log" 2>&1 \
   || { cat "$T1/update.log"; bad "INSTALL.sh --update exited non-zero"; }
 assert_plugin_owned "$T1" "plugin update then legacy update"
 assert_auxiliary_owned "$T1" "$PIN" "plugin update then legacy update"
-assert_canary_audit "$T1" "plugin update then legacy update"
 
 # --dev affects only auxiliary assets; plugin workflow ownership is unchanged.
 T2="$ROOT/dev"
@@ -249,7 +253,6 @@ HOME="$T2" PATH="$BIN:$PATH" bash "$REPO/INSTALL.sh" --dev >"$T2/out.log" 2>&1 \
   && ok "--dev points auxiliary claude/bin into working tree" \
   || bad "--dev claude/bin target is wrong"
 assert_plugin_owned "$T2" "--dev install"
-assert_canary_audit "$T2" "--dev install"
 
 # CWS-era pin resolution now uses the retained claude/bin auxiliary sentinel.
 T3="$ROOT/cws"
@@ -262,7 +265,6 @@ HOME="$T3" PATH="$BIN:$PATH" CWS_PIN_DIR="$T3/.claude/.cws-pinned" \
   ESCAPEMENT_PIN_REMOTE="$REMOTE" ESCAPEMENT_PIN_REF="main" \
   bash "$REPO/INSTALL.sh" >"$T3/install.log" 2>&1 \
   || { cat "$T3/install.log"; bad "CWS-era install exited non-zero"; }
-assert_canary_audit "$T3" "CWS-era install"
 
 CWS_PIN="$T3/.claude/.cws-pinned"
 ESC_PIN="$T3/.claude/.escapement-pinned"
@@ -280,7 +282,6 @@ cws_before="$(git -C "$CWS_PIN" rev-parse HEAD 2>/dev/null || echo MISSING)"
   git -c user.email=t@t -c user.name=t commit --quiet -m "drift advance"
 ) || bad "could not advance local remote"
 
-rm -f "$T3/canary-audit.jsonl"
 HOME="$T3" PATH="$BIN:$PATH" ESCAPEMENT_PIN_REMOTE="$REMOTE" ESCAPEMENT_PIN_REF="main" \
   bash "$REPO/INSTALL.sh" --update >"$T3/update.log" 2>&1
 upd_rc=$?
@@ -310,10 +311,8 @@ else
   bad "update silently left the live auxiliary pin stale"
 fi
 assert_plugin_owned "$T3" "CWS update"
-assert_canary_audit "$T3" "CWS update"
 
 # Explicit override still wins.
-rm -f "$T3/canary-audit.jsonl"
 HOME="$T3" PATH="$BIN:$PATH" ESCAPEMENT_PIN_DIR="$ESC_PIN" \
   ESCAPEMENT_PIN_REMOTE="$REMOTE" ESCAPEMENT_PIN_REF="main" \
   bash "$REPO/INSTALL.sh" --update >"$T3/update-override.log" 2>&1 \
@@ -321,7 +320,6 @@ HOME="$T3" PATH="$BIN:$PATH" ESCAPEMENT_PIN_DIR="$ESC_PIN" \
 [ -d "$ESC_PIN/.git" ] && ok "explicit pin override refreshed named directory" \
   || bad "explicit pin override did not create named directory"
 assert_plugin_owned "$T3" "explicit override update"
-assert_canary_audit "$T3" "explicit override update"
 
 # Fresh --update keeps the default auxiliary pin behavior.
 T4="$ROOT/fresh"
@@ -333,7 +331,6 @@ HOME="$T4" PATH="$BIN:$PATH" ESCAPEMENT_PIN_REMOTE="$REMOTE" ESCAPEMENT_PIN_REF=
   && ok "fresh --update uses default auxiliary pin" \
   || bad "fresh --update did not create default auxiliary pin"
 assert_plugin_owned "$T4" "fresh update"
-assert_canary_audit "$T4" "fresh update"
 
 # Fail-closed transaction ordering: without an authoritative user-scope plugin,
 # INSTALL.sh must fail before refreshing even the auxiliary pin or changing any

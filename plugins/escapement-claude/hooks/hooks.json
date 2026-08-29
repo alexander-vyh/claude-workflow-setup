@@ -4,24 +4,6 @@
       {
         "hooks": [
           {
-            "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/hooks/review_gate.py\"",
-            "type": "command"
-          }
-        ],
-        "matcher": "Agent"
-      },
-      {
-        "hooks": [
-          {
-            "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/harness/bin/delegation_hook.py\"",
-            "type": "command"
-          }
-        ],
-        "matcher": "Agent"
-      },
-      {
-        "hooks": [
-          {
             "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/hooks/design_doc_location_guard.py\"",
             "type": "command"
           }
@@ -74,17 +56,6 @@
         "matcher": "Bash"
       }
     ],
-    "PostToolUseFailure": [
-      {
-        "hooks": [
-          {
-            "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/harness/bin/delegation_hook.py\"",
-            "type": "command"
-          }
-        ],
-        "matcher": "Agent"
-      }
-    ],
     "PreCompact": [
       {
         "hooks": [
@@ -113,7 +84,7 @@
             "type": "command"
           }
         ],
-        "matcher": "Agent|Bash"
+        "matcher": "Agent|Bash(bd close:*)|Bash(bd update:*)"
       },
       {
         "hooks": [
@@ -583,26 +554,6 @@
         "hooks": [
           {
             "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/hooks/validate_no_shirking.py\"",
-            "type": "command"
-          }
-        ],
-        "matcher": ""
-      }
-    ],
-    "SubagentStop": [
-      {
-        "hooks": [
-          {
-            "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/hooks/review_gate.py\"",
-            "type": "command"
-          }
-        ],
-        "matcher": ""
-      },
-      {
-        "hooks": [
-          {
-            "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/harness/bin/delegation_hook.py\"",
             "type": "command"
           }
         ],

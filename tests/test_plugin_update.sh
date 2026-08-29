@@ -81,49 +81,10 @@ cp "$REPO/scripts/continuation-supervisor-install.sh" \
   "$UPDATER_REPO/scripts/continuation-supervisor-install.sh"
 cp "$REPO/scripts/continuation-supervisor-state.py" \
   "$UPDATER_REPO/scripts/continuation-supervisor-state.py"
-cp "$REPO/scripts/plugin-update-canary-gate.sh" \
-  "$UPDATER_REPO/scripts/plugin-update-canary-gate.sh"
 chmod +x \
   "$UPDATER_REPO/scripts/plugin-update-transaction.py" \
   "$UPDATER_REPO/scripts/plugin-wrapper-target.py" \
-  "$UPDATER_REPO/scripts/continuation-supervisor-state.py" \
-  "$UPDATER_REPO/scripts/plugin-update-canary-gate.sh"
-cat > "$UPDATER_REPO/scripts/delegation-canary.py" <<'PY'
-#!/usr/bin/env python3
-import argparse
-import json
-import os
-from pathlib import Path
-
-parser = argparse.ArgumentParser()
-parser.add_argument("--claude-bin")
-parser.add_argument("--source-root", type=Path)
-parser.add_argument("--candidate-root", type=Path)
-parser.add_argument("--scratch-root", type=Path)
-args = parser.parse_args()
-home = Path(os.environ["HOME"])
-claude = home / ".claude"
-registry = json.loads((claude / "plugins/installed_plugins.json").read_text())
-selected = Path(registry["plugins"]["escapement@escapement"][0]["installPath"])
-settings = json.loads((claude / "settings.json").read_text())
-loaded = (home / "launchctl.loaded").read_text().splitlines()
-candidate_live = all(
-    (
-        (claude / ".plugin-update-transaction.json").is_file(),
-        selected == args.candidate_root,
-        os.readlink(claude / "harness/bin") == str(args.candidate_root / "harness/bin"),
-        os.readlink(claude / "harness/schemas") == str(args.candidate_root / "harness/schemas"),
-        settings["enabledPlugins"]["escapement@escapement"] is False,
-        (claude / "harness/continuation-supervisor-installed.json").is_file(),
-        "com.escapement.continuation-supervisor" in loaded,
-    )
-)
-if not candidate_live:
-    raise SystemExit(72)
-with (home / "canary.log").open("a", encoding="utf-8") as handle:
-    handle.write(str(args.candidate_root) + "\n")
-print('{"status":"pass"}')
-PY
+  "$UPDATER_REPO/scripts/continuation-supervisor-state.py"
 cp "$REPO/scripts/prune_settings_hooks.py" "$UPDATER_REPO/scripts/prune_settings_hooks.py"
 cp "$REPO/plugins/escapement-claude/harness/bin/stop_hook.py" \
   "$UPDATER_REPO/plugins/escapement-claude/harness/bin/stop_hook.py"
@@ -341,9 +302,6 @@ model="$(python3 -c "import json;print(json.load(open('$CLAUDE_DIR/settings.json
 grep -q '^bootstrap ' "$HOME_DIR/launchctl.log" 2>/dev/null \
   && ok "complete updater fixture reaches the supervisor load boundary" \
   || bad "complete updater fixture never loaded the supervisor"
-grep -Fxq "$CACHE" "$HOME_DIR/canary.log" 2>/dev/null \
-  && ok "delegation canary observed the live candidate before commit" \
-  || bad "delegation canary did not observe the live candidate"
 
 for stale in \
   "$CLAUDE_DIR/skills/discovery" \

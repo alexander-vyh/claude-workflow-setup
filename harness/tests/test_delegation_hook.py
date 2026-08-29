@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# file-complexity-waiver: 1285 lines, 280 past the hard limit and pre-existing. This edit only widens one subprocess hang-guard timeout that went red under concurrent-suite load; it adds no behavior. Splitting this file by invariant (registration vs concurrency vs completion evidence) is owned by bead escapement-88lm.
 """Behavioral oracle for host delegation registration.
 
 Business invariant: native Agent capacity is never denied by Escapement
@@ -1027,7 +1026,6 @@ def late_generation_one_terminal() -> dict:
         "terminal_event_id": "late-generation-one-terminal",
         "terminal_reason": "completed",
         "result_digest": "sha256:late-generation-one",
-        "host_event_id": "claude:terminal:late-generation-one",
     }
 
 
@@ -1206,12 +1204,7 @@ def _public_concurrent_first_preparations(
         finally:
             fcntl.flock(lock_file, fcntl.LOCK_UN)
 
-    # Hang guard, NOT part of the oracle. The timing invariant is the two
-    # assertions below: nothing readable and neither process exited while the
-    # lock was held. This budget only has to exceed a healthy run, and a
-    # healthy run here is two interpreter starts. At 5s it went red on a
-    # machine running concurrent suites.
-    completed = [process.communicate(timeout=60) for process in processes]
+    completed = [process.communicate(timeout=5) for process in processes]
     assert readable == []
     assert polls_while_locked == [None, None]
     assert durable_while_locked is False

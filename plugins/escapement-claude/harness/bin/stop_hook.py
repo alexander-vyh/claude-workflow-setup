@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# file-complexity-waiver: 1153 lines; delegated Stop policy is isolated in execution_stop_adapter.py and the .gate-signal.jsonl writer in gate_signal.py, leaving this legacy hook with thin imports and calls to both. Growth here is denial copy (the delegated escape paths), not logic. Broader split remains owned by bead e9v.7.
+# file-complexity-waiver: 1091 lines; delegated Stop policy is isolated in execution_stop_adapter.py, leaving this legacy hook with one adapter import and call. Broader split remains owned by bead e9v.7.
 """
 Claude Code Stop-hook adapter for continuation-harness.
 
@@ -48,7 +48,6 @@ import winddown_outage_sentinel as _wos  # noqa: E402
 import datetime as _dt2  # noqa: E402
 from beads_task_state import check_task_root_outcome, check_task_scope  # noqa: E402
 from execution_stop_adapter import decide_task_mode  # noqa: E402
-import gate_signal  # noqa: E402
 
 # State root is the standard per-user location (env-overridable), NOT relative
 # to where this code is installed — so dev-copy and installed-copy share state
@@ -120,88 +119,6 @@ _TASK_MODE_DISPLAY: dict[str, str] = {
         "(2) add a `blocker-waiver: <reason>` line (≥20 chars, non-placeholder) if the "
         "blocker genuinely cannot be scripted; (3) if the blocker claim is invalid, "
         "unblock or close the bead. The user can always release you by saying 'stop'."
-    ),
-    "delegated_execution_overdue": (
-        "continuation-harness [delegated]: delegated_execution_overdue. An agent this "
-        "session dispatched crossed one of its own deadlines without the host reporting "
-        "it finished, so Stop is not granted. Do NOT hand-edit executions.json and do "
-        "NOT summarize and ask what to do next. START HERE — `python3 "
-        "~/.claude/harness/bin/execution_reconcile.py list --session {session_id}` "
-        "prints each execution's state, native_child_id, and which deadline it crossed. "
-        "The right move depends on what that shows, and there are only two cases. "
-        "(A) native_child_id is set and state is running: the child STARTED and has not "
-        "stopped. Nothing renews a child's idle deadline, so crossing it means the child "
-        "is SLOW, not dead — every agent that works longer than 15 minutes lands here. "
-        "Do not cancel it; `cancel` will refuse, because 'no result will arrive' would "
-        "be false. Keep working — the execution terminalizes ITSELF when the child "
-        "reports, and this gate releases with it. (B) native_child_id is null, or the "
-        "hard deadline has passed: no child was ever bound, or it has had its full "
-        "budget. Terminalize it with a real reason — `python3 "
-        "~/.claude/harness/bin/execution_reconcile.py cancel --session {session_id} "
-        "--execution-id <id> --reason \"<why no result will arrive, >=20 chars, no "
-        "placeholder>\"`. That records a CANCELLATION, not a result: it never claims the "
-        "child's work was done, and the reason is stored durably in the ledger."
-    ),
-    "delegated_execution_unresolved": (
-        "continuation-harness [delegated]: delegated_execution_unresolved. This "
-        "session's delegated-execution evidence does not add up — most often a child "
-        "finished but its result was never consumed. Terminal is not applied: a child "
-        "finishing is not the same as its result being used. Do NOT hand-edit "
-        "executions.json and do NOT summarize and ask what to do next. Escape paths: "
-        "(1) inspect it — `python3 ~/.claude/harness/bin/execution_reconcile.py list "
-        "--session {session_id}` prints each execution's state, native child, and "
-        "result_application state; (2) for one that is terminal but unapplied, actually "
-        "consume that child's result, then record it through "
-        "`execution_ledger.claim_result_application` + "
-        "`result_application.apply_verified_result` passing a REAL business oracle — the "
-        "terminal state and the result digest are NOT substitutes for verifying the "
-        "outcome, and passing a stub oracle is the one thing this gate exists to stop; "
-        "(3) for a child that died without reporting, `python3 "
-        "~/.claude/harness/bin/execution_reconcile.py cancel --session {session_id} "
-        "--execution-id <id> --reason \"<why, >=20 chars>\"`; (4) if the ledger, "
-        "expectation, or incident file under this thread is itself missing or untrusted, "
-        "that is the defect to fix — file a bead and repair it, do not delete it."
-    ),
-    "managed_wake_unresolved": (
-        "continuation-harness [delegated]: managed_wake_unresolved. An agent this "
-        "session dispatched is still active and the supervisor has no future wake "
-        "registered for it, so this session cannot be parked — but nothing is broken "
-        "and there is nothing to repair. Do NOT hand-edit executions.json and do NOT "
-        "summarize and ask what to do next. The child is running and will report; when "
-        "it does, its execution terminalizes itself and this gate releases. So: KEEP "
-        "WORKING. Do the next in-scope thing, or work alongside the child. To see what "
-        "is outstanding — `python3 ~/.claude/harness/bin/execution_reconcile.py list "
-        "--session {session_id}`. If one of those children is one you no longer want, "
-        "cancel it by id with a real reason rather than waiting it out; `cancel` will "
-        "refuse a child that is merely slow, and tell you so."
-    ),
-    "parent_outcome_unresolved": (
-        "continuation-harness [delegated]: parent_outcome_unresolved. Every delegated "
-        "execution in this session is finished, but the parent bead this session is "
-        "scoped to is not closed — so the WORK landed and the OUTCOME is unrecorded. "
-        "That is the gap this gate exists for: a finished child is not a delivered "
-        "outcome. Do NOT hand-edit executions.json and do NOT summarize and ask what to "
-        "do next. Escape paths: (1) verify the parent's real user-facing outcome, then "
-        "close it — `bd show <parent>` then `bd close <parent>`; (2) if the outcome is "
-        "genuinely not delivered yet, it is not done — keep working it; (3) if the "
-        "parent bead cannot be resolved because its own state is wrong, repair the bead "
-        "and say so in its notes. Do not close it to clear the gate — that launders an "
-        "unfinished outcome into a delivered one."
-    ),
-    "supervisor_health_unresolved": (
-        "continuation-harness [delegated]: supervisor_health_unresolved. A bounded "
-        "pause needs the continuation supervisor to have completed a recent successful "
-        "reconcile, and it has not — so the machinery that would wake this session back "
-        "up cannot be trusted to do it. Parking now risks a session that never resumes. "
-        "Do NOT hand-edit executions.json and do NOT summarize and ask what to do next. "
-        "Escape paths: (1) the always-available one — KEEP WORKING; a dispatched child "
-        "terminalizes its own execution when it reports, and that releases this gate "
-        "without any supervisor involvement; (2) see what is outstanding — `python3 "
-        "~/.claude/harness/bin/execution_reconcile.py list --session {session_id}`; "
-        "(3) if the supervisor is genuinely down and you want pauses working again, "
-        "reinstall it with `bash scripts/continuation-supervisor-install.sh` from the "
-        "escapement repo, and file a bead for why it stopped — a silently dead "
-        "supervisor is a defect, not a condition to route around."
     ),
 }
 
@@ -844,13 +761,38 @@ def _check_bd_queue_implicit(
 def _record_gate_signal(decision: str, reason: str, session_id: str, notes: str = "") -> None:
     """Bridge a Stop-gate decision to `.beads/.gate-signal.jsonl` (corpus-bridge).
 
+    harness/bin is state-only and cannot import claude/hooks/_gate_signal, so we
+    mirror its line shape + .beads resolution (BEADS_DIR, else walk up from cwd).
     REQUIRED because the half-life toolchain and the running launchd monitor read
     ONLY `.gate-signal.jsonl`; a scope decision logged only to incidents.jsonl is
     invisible to half-life review (the corpus-split gap the 858 panel flagged).
-    The canonical line shape is owned by `gate_signal`, so the harness has one
-    writer rather than a copy per gate. Best-effort — never fails the hook.
+    Best-effort — never fails the hook.
     """
-    gate_signal.record(decision, reason, session_id, notes)
+    try:
+        beads = None
+        env = os.environ.get("BEADS_DIR")
+        if env and pathlib.Path(env).is_dir():
+            beads = pathlib.Path(env)
+        else:
+            cwd = pathlib.Path(os.getcwd()).resolve()
+            for parent in [cwd, *cwd.parents]:
+                if (parent / ".beads").is_dir():
+                    beads = parent / ".beads"
+                    break
+        if beads is None:
+            return
+        line = {
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "gate": "continuation-harness",
+            "decision": decision,
+            "reason": reason,
+            "session_id": session_id,
+            "extras": {"notes": notes} if notes else {},
+        }
+        with (beads / ".gate-signal.jsonl").open("a") as f:
+            f.write(json.dumps(line) + "\n")
+    except OSError:
+        pass
 
 
 def _log_incident(record: dict) -> None:
@@ -948,10 +890,6 @@ def main() -> int:
             display = _TASK_MODE_DISPLAY.get(reason) or RESUMPTION_PROMPT.format(
                 reason=reason
             )
-            # The delegated escape commands are only runnable with this exact
-            # session id, so substitute it rather than making the agent guess.
-            # `.replace` (not `.format`) so unrelated message text is untouched.
-            display = display.replace("{session_id}", session_id)
             print(json.dumps({"decision": "block", "reason": display}))
         return 0
 

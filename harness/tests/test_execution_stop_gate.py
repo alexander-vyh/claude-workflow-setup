@@ -62,11 +62,9 @@ def _execution(
         "last_activity_kind": (
             None if queued else "terminal_event" if terminal else "child_started"
         ),
-        # Resolved executions have no live deadline or recovery residue; keep
-        # this fixture structurally valid under the durable Task 1 contract.
-        "start_deadline": None if terminal else "2026-08-09T20:02:00Z",
-        "idle_deadline": None if terminal else idle_deadline,
-        "hard_deadline": None if terminal else hard_deadline,
+        "start_deadline": "2026-08-09T20:02:00Z",
+        "idle_deadline": idle_deadline,
+        "hard_deadline": hard_deadline,
         "reconcile_due": None,
         "terminal_at": "2026-08-09T20:08:00Z" if terminal else None,
         "terminal_reason": "completed" if terminal else None,

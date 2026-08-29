@@ -8,11 +8,6 @@
       "timeout_seconds": 5
     },
     {
-      "id": "review_gate",
-      "source": "claude/hooks/review_gate.py",
-      "timeout_seconds": 20
-    },
-    {
       "id": "beads_worktree_guard",
       "source": "claude/hooks/beads_worktree_guard.py",
       "timeout_seconds": 10
