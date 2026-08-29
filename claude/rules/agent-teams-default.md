@@ -14,6 +14,8 @@ address each other via `SendMessage({to: name})`.
 
 (`TeamCreate` and `team_name` are deprecated and ignored by the current Claude Code runtime.)
 
+<!-- escapement:detail:start -->
+
 ### Concrete Example — This Is What Every Dispatch Must Look Like
 
 ```
@@ -37,6 +39,8 @@ Agent(prompt="Investigate OAuth patterns...")
 # Fire-and-forget, no coordination possible
 ```
 
+
+<!-- escapement:detail:end -->
 ### Shared terminology before a design fan-out (gated)
 
 **Most research does NOT need this.** But before a multi-agent **design** effort
@@ -86,6 +90,8 @@ When one lane reaches an unresolved consequential choice, preserve that dependen
 keep other authorized lanes running. A blocked agent is not a blocked team. Escalate
 only the narrow decision after all independent authorized work has continued as far as
 it can.
+
+<!-- escapement:detail:start -->
 
 ## Agent Pairing for Quality
 
@@ -141,6 +147,8 @@ it should have been decomposed further. Break work into pieces small enough that
 each agent can complete its piece independently. Smaller tasks = more parallelism =
 faster delivery = easier verification.
 
+
+<!-- escapement:detail:end -->
 ## Writer Isolation
 
 Two or more agents that will COMMIT means one worktree and branch each —

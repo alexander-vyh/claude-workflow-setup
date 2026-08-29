@@ -51,6 +51,8 @@ The brief must include:
 A test plan fails review if the named fragile implementation would pass every
 behavioral, fixture, contract, architecture, and static check.
 
+<!-- escapement:detail:start -->
+
 ### Rapid form (low-blast-radius changes)
 
 The 9-section brief is the default. A low-blast-radius change may use exactly three
@@ -106,6 +108,8 @@ The fragile-implementation challenge is mandatory in both forms. The rapid form
 compresses presentation; it never drops independent truth, binding constraints,
 discriminating controls, missing-data behavior, or final user-facing proof.
 
+
+<!-- escapement:detail:end -->
 ## Implementation-Echo Tests Are Not Accepted
 
 A test is an implementation echo if it passes by repeating the same constant,

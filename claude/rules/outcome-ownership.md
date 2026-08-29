@@ -37,6 +37,8 @@ record it separately and keep delivering the delegated outcome.
 → Component ownership does not excuse a causal blocker. Repair it within the existing
 authority boundary; track a non-blocking adjacent issue without expanding scope.
 
+<!-- escapement:detail:start -->
+
 ### Wind-Down Anti-Patterns (The Silent Killer)
 
 These are the most insidious failures because they LOOK like completion but ARE NOT.
@@ -95,6 +97,8 @@ metadata is informational: it describes the standard declared landing path but n
 executes a deployment nor authorizes arbitrary commands. See `continuation-harness.md`
 § Per-repo outcome authorization.
 
+
+<!-- escapement:detail:end -->
 ## The Verification Test
 
 Before declaring done, answer honestly:

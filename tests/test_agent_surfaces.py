@@ -1611,12 +1611,28 @@ def test_rules_delivered_exactly_once_across_both_channels(tmp_path):
         f"dedup-phrase count = {combined.count(RULE_DEDUP_PHRASE)}"
     )
     # Positive control: the surviving channel still delivers the sentinel AND every
-    # bundled rule body verbatim — the fix removed the duplicate, not the rules.
+    # bundled rule — the fix removed the duplicate, not the rules.
+    #
+    # "Delivers" is no longer "verbatim in full": a rule may hold reference
+    # sections back behind detail markers, which the injector replaces with the
+    # rule's own path (see tests/test_rule_injection.py for that contract). What
+    # must not happen is a rule going missing, so assert on the rule's identity
+    # and on the pointer that makes the held-back part reachable.
     assert channel_b.count(RULE_DEDUP_PHRASE) == 1
     for rule_file in sorted((CLAUDE_PLUGIN / "rules").glob("*.md")):
-        assert rule_file.read_text() in channel_b, (
-            f"surviving channel dropped rule body: {rule_file.name}"
+        body = rule_file.read_text()
+        title = next(ln for ln in body.splitlines() if ln.startswith("# "))
+        assert title in channel_b, (
+            f"surviving channel dropped rule: {rule_file.name}"
         )
+        if "<!-- escapement:detail:start -->" in body:
+            assert rule_file.name in channel_b, (
+                f"{rule_file.name}: detail held back without a path to read it"
+            )
+        else:
+            assert body in channel_b, (
+                f"surviving channel dropped rule body: {rule_file.name}"
+            )
 
 
 def test_claude_plugin_injects_rules_with_imperative_framing(tmp_path):

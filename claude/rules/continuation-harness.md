@@ -24,6 +24,8 @@ The session is `input_required` only when no authorized path toward the delegate
 outcome remains runnable. Informational side questions do not cancel the active outcome;
 answer them and resume unless the user explicitly redirects or stops the work.
 
+<!-- escapement:detail:start -->
+
 ## How to declare a contract
 
 ### Preferred: declare the oracle on the bead, once
@@ -145,6 +147,8 @@ A background `Workflow` run is killed at the Claude Code host's task timeout (~1
 
 The residual platform fix (the runtime emitting its own death signal / raising the timeout) is tracked outside this repo; the harness-side mitigation above turns silent stranding into a scheduled, mechanical re-check.
 
+
+<!-- escapement:detail:end -->
 ## Rule: outcome-bias
 
 If you are not done and not scheduled to return, you are not stopping. Action without outcomes (more tool calls, more subagent dispatches, more bead-claims) does not substitute for proof of completion or proof of resumption. See `feedback/outcome-bias-over-action-bias` memory for the underlying principle.

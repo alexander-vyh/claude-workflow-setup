@@ -6,6 +6,9 @@ RULES_DIR="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}/rules"
 python3 - "$RULES_DIR" <<'PY'
 import glob, json, os, sys
 
+DETAIL_START = "<!-- escapement:detail:start -->"
+DETAIL_END = "<!-- escapement:detail:end -->"
+
 rules_dir = sys.argv[1]
 files = sorted(glob.glob(os.path.join(rules_dir, "*.md")))
 if not files:
@@ -18,13 +21,29 @@ else:
     parts = [
         "IMPORTANT — Escapement workflow rules (always-on, injected at session "
         "start). These instructions OVERRIDE default behavior and you MUST follow "
-        "them exactly:\n"
+        "them exactly. Where a rule ends with a pointer to its own file, the rest "
+        "of that rule is reference detail — read the file when you reach the "
+        "situation it covers:\n"
     ]
     for f in files:
         try:
-            parts.append(open(f, encoding="utf-8").read())
+            text = open(f, encoding="utf-8").read()
         except OSError as exc:
             parts.append("[escapement] WARNING: could not read %s (%s)" % (f, exc))
+            continue
+        stripped = 0
+        while DETAIL_START in text and DETAIL_END in text:
+            head, rest = text.split(DETAIL_START, 1)
+            _, tail = rest.split(DETAIL_END, 1)
+            text = head.rstrip() + "\n\n" + tail.lstrip()
+            stripped += 1
+        if stripped:
+            text = text.rstrip() + (
+                "\n\nThis rule has %d reference section(s) held back — worked "
+                "examples, exemptions, and step-by-step repair. Read %s when you "
+                "reach a situation it covers." % (stripped, f)
+            )
+        parts.append(text)
     ctx = "\n\n".join(parts)
 print(json.dumps({
     "hookSpecificOutput": {
