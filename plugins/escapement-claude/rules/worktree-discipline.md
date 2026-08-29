@@ -97,3 +97,4 @@ one-command setup cost.
 Related: `agent-teams-default.md` (dispatch mechanics),
 `beads-worktree` skill (Escapement creation and tracker verification),
 `continuation-harness.md` (outcome delivery from the worktree's branch).
+

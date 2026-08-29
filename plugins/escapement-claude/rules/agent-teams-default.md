@@ -14,6 +14,8 @@ address each other via `SendMessage({to: name})`.
 
 (`TeamCreate` and `team_name` are deprecated and ignored by the current Claude Code runtime.)
 
+<!-- escapement:detail:start -->
+
 ### Concrete Example — This Is What Every Dispatch Must Look Like
 
 ```
@@ -36,6 +38,10 @@ Agent(
 Agent(prompt="Investigate OAuth patterns...")
 # Fire-and-forget, no coordination possible
 ```
+
+
+<!-- escapement:detail:end -->
+<!-- escapement:detail:start -->
 
 ### Shared terminology before a design fan-out (gated)
 
@@ -70,6 +76,8 @@ guidance, not a gate.
 
 **"Roundtable" NEVER means writing simulated dialogue in your output.** It ALWAYS means dispatching real named agents on a team that independently analyze and communicate via SendMessage.
 
+
+<!-- escapement:detail:end -->
 ### Works With Beads
 
 Named agents and beads are complementary. Beads tracks *what* to do (`bd ready`, `bd close`), named agents handle *how* they coordinate while doing it. When dispatching agents for beads-tracked work, give each agent a `name` — beads adds tracking, naming enables coordination.
@@ -86,6 +94,8 @@ When one lane reaches an unresolved consequential choice, preserve that dependen
 keep other authorized lanes running. A blocked agent is not a blocked team. Escalate
 only the narrow decision after all independent authorized work has continued as far as
 it can.
+
+<!-- escapement:detail:start -->
 
 ## Agent Pairing for Quality
 
@@ -141,6 +151,8 @@ it should have been decomposed further. Break work into pieces small enough that
 each agent can complete its piece independently. Smaller tasks = more parallelism =
 faster delivery = easier verification.
 
+
+<!-- escapement:detail:end -->
 ## Writer Isolation
 
 Two or more agents that will COMMIT means one worktree and branch each —

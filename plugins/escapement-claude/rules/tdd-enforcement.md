@@ -51,6 +51,8 @@ The brief must include:
 A test plan fails review if the named fragile implementation would pass every
 behavioral, fixture, contract, architecture, and static check.
 
+<!-- escapement:detail:start -->
+
 ### Rapid form (low-blast-radius changes)
 
 The 9-section brief is the default. A low-blast-radius change may use exactly three
@@ -106,6 +108,8 @@ The fragile-implementation challenge is mandatory in both forms. The rapid form
 compresses presentation; it never drops independent truth, binding constraints,
 discriminating controls, missing-data behavior, or final user-facing proof.
 
+
+<!-- escapement:detail:end -->
 ## Implementation-Echo Tests Are Not Accepted
 
 A test is an implementation echo if it passes by repeating the same constant,
@@ -163,6 +167,8 @@ The exemption above covers *passive* config — files an application reads as da
 
 For behavioral config, "it parses" and "it's well-formed" are **gates, not oracles**. A schema-valid workflow can still suppress a deploy trigger; a valid HCL plan can still destroy the wrong resource. The verification owed scales with behavioral risk:
 
+<!-- escapement:detail:start -->
+
 | Rung | What it proves | Required |
 |------|----------------|----------|
 | Parse | valid syntax | gate only — never sufficient alone |
@@ -170,6 +176,8 @@ For behavioral config, "it parses" and "it's well-formed" are **gates, not oracl
 | Predict (`tofu plan` + deterministic JSON assertion; `kubectl apply --dry-run=server`) | the change-set this produces vs current state | required for IaC / manifest config-authoring changes |
 | Observe (`gh workflow run` + assert the downstream run started; apply-to-sandbox / terratest) | the actual behavior happened | required for trigger / auth / deploy-gating logic — the only oracle for that class |
 
+
+<!-- escapement:detail:end -->
 **Lint alone is forbidden as the verification for trigger / auth / deploy-gating changes.** Canonical counterexample: a GitHub workflow whose `GITHUB_TOKEN`-authored merge silently fails to re-trigger `on: push` (GitHub's server-side recursion guard) is schema-perfect and behaviorally broken — no parse or lint catches it; only observing a real trigger does.
 
 **When a behavior genuinely cannot be reproduced locally** (platform semantics, no sandbox available), that is a **structured waiver, not an exemption**: state (a) why it cannot repro, (b) the platform behavior at risk, (c) the post-merge observation that WILL confirm it (e.g. `gh run list --workflow=deploy.yml` shows a run for the merged SHA), (d) a human ack. A waiver makes the gap visible and time-bound; silence makes it a production incident.

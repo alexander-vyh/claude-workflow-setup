@@ -34,6 +34,8 @@ discussion, not in silent suppression of one or the other. Surface the
 tension, name which design feature is being traded for which, and decide
 deliberately.
 
+<!-- escapement:detail:start -->
+
 ## The four design features (Adler & Borys, 1996)
 
 Every gate, hook, rule, skill, and harness in this repo must be evaluated
@@ -103,6 +105,8 @@ Recognizing them early is the work.
   enabling-by-design is not a guaranteed cure.
   [per published abstract; full paper not accessed]
 
+
+<!-- escapement:detail:end -->
 ## Operating rules
 
 These follow from the four design features and the four failure modes.

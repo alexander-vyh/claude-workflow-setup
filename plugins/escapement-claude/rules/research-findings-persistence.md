@@ -35,6 +35,8 @@ compaction.
   no auto-delete (matches the repo's "no automated deletes; archive/flag only"
   convention).
 
+<!-- escapement:detail:start -->
+
 ## Enforcement — at the consumer's gate, not the producer's
 
 The **lead's existing continuation-harness contract** is the enforcement — no new
@@ -70,6 +72,8 @@ inline + --persist-waiver "<why>"`), `_gate_signal.record(gate=
 'research-persistence', …)`, and the same substance check. Behavior precedes
 belief — ship the rule + the lead-side contract first.
 
+
+<!-- escapement:detail:end -->
 ## Status
 
 Promoted from a real near-miss (3 recovered sessions). Severity (silent total
