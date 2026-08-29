@@ -21,9 +21,7 @@ EXPECTED_CODEX_GATE = {
     "matcher": "Bash",
     "dispatcher": "codex_pretool_dispatch.py",
     "gate": "claude/hooks/test_oracle_brief_gate.py",
-    # shared_tmp_artifact_gate joins the chain at 5s: 139 + 5 + 1s of
-    # per-gate dispatcher overhead.
-    "timeout": 145,
+    "timeout": 139,
 }
 CODEX_PLUGIN_FINAL_RESPONSE_GAP_FRAGMENT = 'python3 -B "${PLUGIN_ROOT}/claude/hooks/codex_final_response_gap.py"'
 CODEX_PLUGIN_CONTEXT_FRAGMENT = (
