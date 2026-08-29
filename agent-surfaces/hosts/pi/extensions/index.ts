@@ -16,7 +16,7 @@ type HookOutput = {
   additionalContext?: string;
 };
 type DispatcherResponse = { hookSpecificOutput?: HookOutput; systemMessage?: string };
-type Runtime = { dispatcherPath: string; gates: Gate[]; instructions: string };
+type Runtime = { dispatcherPath: string; gates: Gate[]; fileGates: Gate[]; instructions: string };
 
 const pluginRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const MAX_OUTPUT_BYTES = 1_048_576;
@@ -50,7 +50,8 @@ function loadRuntime(): Runtime {
   if (!Array.isArray(parsed.gates) || parsed.gates.length === 0) {
     return fail("gate inventory must contain gates");
   }
-  for (const gate of parsed.gates) {
+  const fileGates = Array.isArray(parsed.file_gates) ? parsed.file_gates : [];
+  for (const gate of [...parsed.gates, ...fileGates]) {
     if (
       !gate || typeof gate !== "object" || Array.isArray(gate)
       || typeof gate.id !== "string" || typeof gate.source !== "string"
@@ -63,6 +64,7 @@ function loadRuntime(): Runtime {
   return {
     dispatcherPath: confinedFile(parsed.dispatcher),
     gates: parsed.gates,
+    fileGates,
     instructions: readFileSync(resolve(pluginRoot, "PI.md"), "utf8"),
   };
 }
@@ -110,14 +112,15 @@ function parseDispatcherResponse(stdout: string): DispatcherResponse {
 
 function runDispatcher(
   runtime: Runtime,
+  gates: Gate[],
   payload: Record<string, unknown>,
   signal?: AbortSignal,
 ): Promise<DispatcherResponse> {
   const args = ["-B", runtime.dispatcherPath];
-  for (const gate of runtime.gates) {
+  for (const gate of gates) {
     args.push("--gate", gate.source, "--gate-timeout", String(gate.timeout_seconds));
   }
-  const deadlineMs = runtime.gates.reduce(
+  const deadlineMs = gates.reduce(
     (total, gate) => total + (gate.timeout_seconds + 1) * 1000,
     0,
   );
@@ -201,7 +204,82 @@ export default function escapementPi(pi: PiAPI): void {
       : `${event.systemPrompt}\n\n${runtime.instructions}`,
   }));
 
+  // Pi's file tools, captured from a live `pi --mode json` session: `write`
+  // carries {path, content} and `edit` carries {path, edits:[{oldText,newText}]}.
+  // Both are mapped here onto the payload the gates already read, so a gate
+  // needs no knowledge of Pi.
+  function fileGatePayload(toolName: string, input: unknown): Record<string, unknown> | null {
+    const args = (input ?? {}) as Record<string, unknown>;
+    const path = args.path;
+    if (typeof path !== "string" || path.length === 0) return null;
+
+    if (toolName === "write") {
+      const content = args.content;
+      if (typeof content !== "string") return null;
+      return { tool_name: "Write", tool_input: { file_path: path, content } };
+    }
+
+    // Pi sends a LIST of edits where Claude sends one old/new pair. Joining
+    // each side with "\n" keeps the projection exact rather than approximate:
+    // both sides gain the same number of separators, so the joined delta
+    // equals the sum of the per-edit deltas.
+    const edits = args.edits;
+    if (!Array.isArray(edits) || edits.length === 0) return null;
+    const olds: string[] = [];
+    const news: string[] = [];
+    for (const entry of edits) {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
+      const { oldText, newText } = entry as Record<string, unknown>;
+      if (typeof oldText !== "string" || typeof newText !== "string") return null;
+      olds.push(oldText);
+      news.push(newText);
+    }
+    return {
+      tool_name: "Edit",
+      tool_input: {
+        file_path: path,
+        old_string: olds.join("\n"),
+        new_string: news.join("\n"),
+      },
+    };
+  }
+
   pi.on("tool_call", async (event, context) => {
+    if (event.toolName === "write" || event.toolName === "edit") {
+      if (runtime instanceof Error) {
+        return { block: true, reason: `Escapement Pi configuration error: ${runtime.message}` };
+      }
+      if (runtime.fileGates.length === 0) return;
+      const mapped = fileGatePayload(event.toolName, event.input);
+      // An unreadable payload fails OPEN here. A file write that cannot be
+      // parsed is not evidence of a violation, and blocking on it would make
+      // every future Pi tool-shape change look like a policy failure.
+      if (mapped === null) return;
+      try {
+        const result = await runDispatcher(
+          runtime,
+          runtime.fileGates,
+          {
+            session_id: event.toolCallId,
+            cwd: context.cwd,
+            hook_event_name: "PreToolUse",
+            ...mapped,
+          },
+          context.signal,
+        );
+        surfaceDiagnostics(pi, result);
+        const hook = result.hookSpecificOutput;
+        if (hook?.permissionDecision === "deny" || hook?.permissionDecision === "ask") {
+          return {
+            block: true,
+            reason: hook.permissionDecisionReason || "Escapement blocked this file write",
+          };
+        }
+      } catch (error) {
+        return { block: true, reason: `Escapement Pi adapter error: ${error}` };
+      }
+      return;
+    }
     if (event.toolName !== "bash") return;
     if (runtime instanceof Error) {
       return { block: true, reason: `Escapement Pi configuration error: ${runtime.message}` };
@@ -214,6 +292,7 @@ export default function escapementPi(pi: PiAPI): void {
     try {
       const result = await runDispatcher(
         runtime,
+        runtime.gates,
         {
           session_id: event.toolCallId,
           cwd: context.cwd,

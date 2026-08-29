@@ -40,8 +40,9 @@ Value-not-presence (gate-design rule 3):
   Waiver must be non-empty after the colon; bare marker is rejected.
 
 Exit codes:
-  0  — pass (under soft limit, exempt, waiver) or soft nudge (allowed, with message)
-  2  — deny (would exceed the hard limit)
+  0  — always. A denial rides the stdout envelope, not the exit status: Codex
+       discards a gate that exits non-zero, and Claude honors the envelope
+       either way.
 """
 
 from __future__ import annotations
@@ -197,30 +198,49 @@ def deny_response(file_path: str, projected: int) -> dict:
     }
 
 
-def codex_deny_response(file_path: str, projected: int) -> dict:
-    """The same denial, in the envelope Codex actually honors.
+def _host_output():
+    """The shared builders for host-visible output, or None if unavailable."""
+    hooks_dir = os.path.dirname(os.path.abspath(__file__))
+    if hooks_dir not in sys.path:
+        sys.path.insert(0, hooks_dir)
+    try:
+        import _host_output  # type: ignore
+    except ImportError:
+        return None
+    return _host_output
 
-    Claude Code blocks on exit status 2. Codex does not: it reads a
-    `hookSpecificOutput` object off stdout and expects status 0, exactly as
-    `codex_pretool_dispatch.py` composes when it aggregates gates. Emitting the
-    flat Claude shape with status 2 let a live Codex session append to a
-    1050-line file with the hook firing and its verdict discarded.
-    """
-    return {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": deny_response(file_path, projected)["denyReason"],
+
+def deny_envelope(file_path: str, projected: int) -> dict:
+    """The denial, in the one shape every host honors. See _host_output."""
+    reason = deny_response(file_path, projected)["denyReason"]
+    shared = _host_output()
+    if shared is None:  # fail open on the transport, not on the verdict
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": reason,
+            }
         }
-    }
+    return shared.deny(reason)
 
 
-def _respond(decision: str, file_path: str, projected: int, *, codex: bool = False) -> int:
-    """Emit the decision in the calling host's contract.
+def soft_envelope(file_path: str, projected: int) -> dict:
+    """The nudge, on both names the hosts use for an advisory message.
 
-    The verdict itself is shared — only the wire shape differs, so a gate can
-    never allow on one host what it denies on the other.
+    Sent only as `systemMessage` this tier was invisible on Codex: a live
+    session in the soft band was asked whether it had been told anything about
+    a line count and said no. Codex passes only `additionalContext` through.
     """
+    message = build_soft_message(file_path, projected)
+    shared = _host_output()
+    if shared is None:
+        return {"systemMessage": message}
+    return shared.advisory(message)
+
+
+def _respond(decision: str, file_path: str, projected: int) -> int:
+    """Emit the decision. One shape for every host, so a verdict cannot drift."""
     if decision in ("exempt", "pass"):
         return 0
     if decision == "waiver":
@@ -228,14 +248,11 @@ def _respond(decision: str, file_path: str, projected: int, *, codex: bool = Fal
         return 0
     if decision == "soft":
         _emit_signal("soft-nudge", file_path, projected)
-        json.dump({"systemMessage": build_soft_message(file_path, projected)}, sys.stdout)
+        json.dump(soft_envelope(file_path, projected), sys.stdout)
         return 0
     _emit_signal("deny", file_path, projected)
-    if codex:
-        json.dump(codex_deny_response(file_path, projected), sys.stdout)
-        return 0
-    json.dump(deny_response(file_path, projected), sys.stdout)
-    return 2
+    json.dump(deny_envelope(file_path, projected), sys.stdout)
+    return 0
 
 
 def _parse_patch(command: str, cwd: str):
@@ -299,7 +316,7 @@ def main() -> int:
         if _is_exempt(file_path):
             return 0
         return _respond(
-            decide(projected, file_path, first_lines), file_path, projected, codex=True
+            decide(projected, file_path, first_lines), file_path, projected
         )
 
     file_path = tool_input.get("file_path", "")

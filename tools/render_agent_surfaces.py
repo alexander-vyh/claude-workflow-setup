@@ -72,6 +72,9 @@ SHARED_HOOK_SUPPORT = {
     # to work on Codex. Same failure mode: without it the import fails, the
     # gate fails open, and it is inert exactly where it was needed.
     "claude/hooks/_codex_patch.py",
+    # One owner for how a hook speaks to a host. A wrong wire shape is silent:
+    # the hook fires, decides correctly, and nothing happens.
+    "claude/hooks/_host_output.py",
     # Both advisory boundaries use the corpus-backed per-function strength
     # differ; its parser is a required transitive sibling in installed hosts.
     "claude/hooks/oracle_strength_diff.py",

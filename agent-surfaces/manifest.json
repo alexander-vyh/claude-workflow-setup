@@ -41,7 +41,12 @@
       "source_event": "PreToolUse",
       "source_matcher": "Bash",
       "target_event": "tool_call",
-      "target_matcher": "bash"
+      "target_matcher": "bash",
+      "file_source_matcher": "apply_patch",
+      "file_target_matchers": [
+        "write",
+        "edit"
+      ]
     }
   },
   "support_claims": [

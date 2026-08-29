@@ -72,5 +72,17 @@
       "source": "claude/hooks/spec_id_enforcement.py",
       "timeout_seconds": 10
     }
+  ],
+  "file_gates": [
+    {
+      "id": "gate_design_nudge",
+      "source": "claude/hooks/gate_design_nudge.py",
+      "timeout_seconds": 10
+    },
+    {
+      "id": "file_complexity_gate",
+      "source": "claude/hooks/file_complexity_gate.py",
+      "timeout_seconds": 10
+    }
   ]
 }

@@ -27,6 +27,18 @@ FIXTURE = json.loads(
     (TEST_DIR / "fixtures" / "codex_apply_patch_pretooluse.json").read_text()
 )
 
+def _load(name: str):
+    path = TEST_DIR.parent / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+dispatch = _load("codex_pretool_dispatch")
+
 HOOK_PATH = TEST_DIR.parent / "gate_design_nudge.py"
 _spec = importlib.util.spec_from_file_location("gate_design_nudge", HOOK_PATH)
 nudge = importlib.util.module_from_spec(_spec)
@@ -59,6 +71,9 @@ def test_codex_patch_to_a_hook_file_nudges():
     code, decision = run_hook(_patch_payload("claude/hooks/my_new_gate.py"))
     assert code == 0
     assert "gate-design" in decision["systemMessage"]
+    # The channel that actually reaches a Codex model. Asserting only
+    # systemMessage is what let this nudge ship inert.
+    assert "gate-design" in decision["hookSpecificOutput"]["additionalContext"]
 
 
 def test_codex_patch_to_a_gate_named_file_nudges():
@@ -96,6 +111,15 @@ def test_nudge_can_never_block_on_codex():
     for target in ("claude/hooks/g.py", "src/app.py", "settings.template.json"):
         code, decision = run_hook(_patch_payload(target))
         assert code == 0
-        if decision is not None:
-            assert "permissionDecision" not in decision
-            assert "hookSpecificOutput" not in decision
+        if decision is None:
+            continue
+        # The invariant is that nothing here can block. The nudge does use
+        # hookSpecificOutput -- that envelope carries `additionalContext`, the
+        # only advisory channel Codex passes to the model -- so the check is
+        # for a decision field, not for the envelope.
+        assert "permissionDecision" not in json.dumps(decision), (
+            f"{target}: an advisory hook emitted a decision"
+        )
+        assert dispatch._aggregate([decision], []).get(
+            "hookSpecificOutput", {}
+        ).get("permissionDecision") is None

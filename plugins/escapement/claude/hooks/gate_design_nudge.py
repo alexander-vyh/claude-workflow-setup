@@ -31,6 +31,24 @@ import os
 import sys
 
 
+def _advisory(message: str) -> dict:
+    """Both names the hosts use for an advisory message.
+
+    Sent only as `systemMessage`, this nudge never reached a Codex session --
+    verified by asking one whether it had seen the words "gate-design" after
+    patching a hook file. It had not. Codex passes only `additionalContext`
+    through to the model.
+    """
+    hooks_dir = os.path.dirname(os.path.abspath(__file__))
+    if hooks_dir not in sys.path:
+        sys.path.insert(0, hooks_dir)
+    try:
+        from _host_output import advisory  # type: ignore
+    except ImportError:
+        return {"systemMessage": message}
+    return advisory(message)
+
+
 def _patch_target(command: str, cwd: str) -> str | None:
     """The file a Codex apply_patch touches, or None if it cannot be read."""
     hooks_dir = os.path.dirname(os.path.abspath(__file__))
@@ -98,7 +116,7 @@ def main() -> int:
     if not _is_gate_path(file_path):
         return 0  # ordinary edit — stay silent (anti-noise)
 
-    json.dump({"systemMessage": _NUDGE}, sys.stdout)
+    json.dump(_advisory(_NUDGE), sys.stdout)
     return 0
 
 
