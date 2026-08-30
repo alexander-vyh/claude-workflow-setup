@@ -65,6 +65,7 @@ ADAPTER_MAPPING_END = "<!-- escapement:adapter-mapping:end -->"
 SHARED_HOOK_SUPPORT = {
     "claude/hooks/_worktree_cli.py",
     "claude/hooks/_gate_signal.py",
+    "claude/hooks/_advisory_dedupe.py",
     "claude/hooks/_local_judge_client.py",
     "claude/hooks/_gh_command.py",
     # Landing-time gates share repository-neutral origin/HEAD + merge-base

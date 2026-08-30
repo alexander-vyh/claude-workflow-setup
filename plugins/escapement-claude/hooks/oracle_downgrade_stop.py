@@ -20,8 +20,11 @@ Stop proceed.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import pathlib
+import re
 import sys
 from pathlib import Path
 
@@ -29,11 +32,15 @@ _HOOKS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HOOKS_DIR))
 
 try:
+    from _advisory_dedupe import already_reported as _already_seen
     from _gate_signal import record as _record_signal
 except Exception:  # pragma: no cover - signal is best-effort
 
     def _record_signal(*_args, **_kwargs) -> None:
         return None
+
+    def _already_seen(*_args, **_kwargs) -> bool:
+        return False
 
 
 def _allow() -> int:
@@ -42,23 +49,40 @@ def _allow() -> int:
 
 
 def _build_message(findings: list[tuple[str, list[str]]]) -> str:
-    lines = [
-        "⚠ Oracle-downgrade advisory (non-blocking) — changed test file(s) look like "
-        "they may weaken the test oracle. If this is intentional (refactor, dead-code "
-        "removal, or red→green now that the feature shipped), no action needed:",
-    ]
-    for rel, reasons in findings:
-        lines.append(f"  • {rel}")
-        for reason in reasons[:8]:
-            lines.append(f"      – {reason}")
-        if len(reasons) > 8:
-            lines.append(f"      – ... {len(reasons) - 8} more reasons")
-    lines.append(
-        "If a removed or weakened assertion protected real behavior, restore or "
-        "re-add equivalent coverage before this change lands."
-    )
-    return "\n".join(lines)
+    """One compact line: which files, which test functions, how many.
 
+    This advisory fires on every Stop. It previously inlined up to eight raw
+    assertion source strings per changed test file, which on a phone is pages of
+    unreadable text per turn -- and reliably trains the reader to skip it.
+
+    What survives here is what a reader can act on: the file, the specific test
+    functions that weakened, and the scale. The raw assertion sources go to the
+    gate-signal corpus via _record_signal, which is the durable store built for
+    them.
+    """
+    def _subjects(reasons: list[str]) -> str:
+        names: list[str] = []
+        for reason in reasons:
+            for name in re.findall(r"'([A-Za-z_][A-Za-z0-9_]*)'", reason):
+                if name not in names:
+                    names.append(name)
+        if not names:
+            return f"{len(reasons)} finding(s)"
+        shown = ", ".join(names[:6])
+        if len(names) > 6:
+            shown += f", +{len(names) - 6} more"
+        return shown
+
+    total = sum(len(reasons) for _, reasons in findings)
+    parts = [f"{rel} ({_subjects(reasons)})" for rel, reasons in findings[:4]]
+    if len(findings) > 4:
+        parts.append(f"+{len(findings) - 4} more file(s)")
+    return (
+        f"⚠ Oracle-downgrade advisory (non-blocking): {total} weakened assertion(s) "
+        f"in {len(findings)} changed test file(s) — " + "; ".join(parts) + ". "
+        "Intentional refactor or red→green? No action needed. Otherwise restore "
+        "equivalent coverage before this lands; full detail in the gate-signal log."
+    )
 
 def _collect_findings(repo_root: Path) -> list[tuple[str, list[str]]]:
     from git_change_scope import change_sources, net_tree_scope
@@ -137,6 +161,17 @@ def main() -> int:
         )
         return _allow()
 
+    session_id = data.get("session_id") or data.get("sessionId") or ""
+    if _already_seen("oracle_downgrade_stop", str(session_id), findings):
+        _record_signal(
+            gate_name="oracle_downgrade_stop",
+            decision="allow",
+            reason="stop: unchanged oracle-downgrade finding already reported",
+            issue_count=len(findings),
+            files=[rel for rel, _ in findings],
+        )
+        return _allow()
+
     _record_signal(
         gate_name="oracle_downgrade_stop",
         decision="warn",
@@ -145,6 +180,8 @@ def main() -> int:
         ),
         issue_count=len(findings),
         files=[rel for rel, _ in findings],
+        # Detail moved off the user-facing message and into the durable corpus.
+        weakened={rel: reasons for rel, reasons in findings},
     )
     json.dump({"systemMessage": _build_message(findings)}, sys.stdout)
     return 0
