@@ -1,0 +1,63 @@
+#!/usr/bin/env python3
+"""Has this session already been told this exact thing?
+
+An advisory gate that re-reports an unchanged finding on every turn is not an
+advisory -- it trains the reader to skip it, which costs the one time it matters.
+Measured over the signal corpus before this shipped: of 11,399 fires across the
+two oracle-downgrade gates, 9,843 (86%) were unchanged repeats, with runs up to
+82 consecutive identical messages inside a single session.
+
+These gates are stateless by construction: they re-scan the working tree on every
+Stop or finishing command, and an uncommitted weakened assertion looks new every
+time. This module gives them a one-line memory.
+
+Fail-open everywhere: any error means report. A duplicated advisory is a nuisance;
+a missed one is the failure the gate exists to prevent.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import pathlib
+import re
+from typing import Any
+
+_SESSION_RE = re.compile(r"[A-Za-z0-9._-]{1,128}")
+
+
+def _state_path(gate_name: str, session_id: str) -> pathlib.Path | None:
+    if not session_id or not _SESSION_RE.fullmatch(session_id):
+        return None
+    if not gate_name or not _SESSION_RE.fullmatch(gate_name):
+        return None
+    root = os.environ.get("HARNESS_ROOT") or os.path.join(
+        os.path.expanduser("~"), ".claude", "harness"
+    )
+    return pathlib.Path(root) / "threads" / session_id / f"{gate_name}.last"
+
+
+def already_reported(gate_name: str, session_id: str, finding: Any) -> bool:
+    """True when ``finding`` is exactly what this session was last told by this gate.
+
+    Records the finding as the new high-water mark when it differs, so the next
+    identical call is suppressed and the next *different* one is not.
+    """
+    try:
+        digest = hashlib.sha256(
+            json.dumps(finding, sort_keys=True, default=str).encode("utf-8")
+        ).hexdigest()
+    except (TypeError, ValueError):
+        return False
+    try:
+        state = _state_path(str(gate_name), str(session_id))
+        if state is None:
+            return False
+        if state.exists() and state.read_text(encoding="utf-8").strip() == digest:
+            return True
+        state.parent.mkdir(parents=True, exist_ok=True)
+        state.write_text(digest, encoding="utf-8")
+        return False
+    except OSError:
+        return False
