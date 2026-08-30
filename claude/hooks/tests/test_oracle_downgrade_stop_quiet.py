@@ -20,6 +20,9 @@ Invalid solution classes rejected here
 - a "fix" that suppresses a genuinely NEW finding
   -> test_a_changed_finding_reports_again
 - letting the message grow back into a wall of text -> test_message_stays_short
+- a memory that outlives the condition, so a weakening removed and then
+  reintroduced identically is never mentioned again
+  -> test_a_reintroduced_finding_reports_again
 """
 
 from __future__ import annotations
@@ -100,13 +103,37 @@ def repo(tmp_path):
     return d
 
 
+def _weaken(repo: pathlib.Path) -> None:
+    (repo / "tests" / "unit" / "test_x.py").write_text(
+        "def test_a():\n    assert compute()\n"
+    )
+
+
+def _restore(repo: pathlib.Path) -> None:
+    (repo / "tests" / "unit" / "test_x.py").write_text(
+        'def test_a():\n    assert compute() == 1_333.33\n    assert kind == "coverage"\n'
+    )
+
+
+def test_the_fixture_actually_produces_a_finding(repo, tmp_path):
+    """Positive control.
+
+    Every dedupe test below is meaningless if the gate finds nothing to report.
+    This asserts the premise rather than letting the others skip past a dead
+    fixture and leave the suite green while testing nothing.
+    """
+    out = _run(repo, tmp_path / "harness", "sess-control")
+    assert "systemMessage" in out, (
+        "the weakened-oracle fixture must produce a reported finding; "
+        "without it the dedupe tests below prove nothing"
+    )
+
+
 def test_unchanged_finding_is_silent_the_second_time(repo, tmp_path):
     """The regression: 82 consecutive identical advisories in one session."""
     harness = tmp_path / "harness"
     first = _run(repo, harness, "sess-quiet")
     second = _run(repo, harness, "sess-quiet")
-    if not first.strip():
-        pytest.skip("this fixture produced no finding; nothing to dedupe")
     assert "systemMessage" in first, "a new finding must be reported once"
     assert second.strip() == "", (
         "an unchanged finding must not be reported again in the same session"
@@ -116,23 +143,46 @@ def test_unchanged_finding_is_silent_the_second_time(repo, tmp_path):
 def test_a_changed_finding_reports_again(repo, tmp_path):
     """Negative control: dedupe must not swallow genuinely new information."""
     harness = tmp_path / "harness"
-    first = _run(repo, harness, "sess-change")
-    if not first.strip():
-        pytest.skip("this fixture produced no finding; nothing to dedupe")
+    assert "systemMessage" in _run(repo, harness, "sess-change")
+
+    # A second file weakens its oracle too. The finding set has changed, so the
+    # session must hear about it even though the first file is unchanged.
     other = repo / "tests" / "unit" / "test_y.py"
-    other.write_text("def test_b():\n    assert thing()\n")
+    other.write_text('def test_b():\n    assert total == 42\n')
     subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
     subprocess.run(["git", "commit", "-qm", "add"], cwd=repo, check=True)
-    other.write_text("def test_b():\n    pass\n")
-    third = _run(repo, harness, "sess-change")
-    assert third.strip() != "" or True  # shape-dependent; the silent case is asserted above
+    other.write_text("def test_b():\n    assert total\n")
+
+    assert "systemMessage" in _run(repo, harness, "sess-change"), (
+        "a newly weakened second file is new information and must be reported"
+    )
+
+
+def test_a_reintroduced_finding_reports_again(repo, tmp_path):
+    """A clean turn must clear the memory.
+
+    Without an invalidation path the stored digest outlives the condition it
+    describes, so weaken -> fix -> weaken identically is silently swallowed the
+    second time. That converts a noise fix into a missed warning, which is the
+    one outcome this gate exists to prevent.
+    """
+    harness = tmp_path / "harness"
+    assert "systemMessage" in _run(repo, harness, "sess-cycle"), "first weakening reported"
+
+    _restore(repo)
+    assert _run(repo, harness, "sess-cycle").strip() == "", "a clean tree says nothing"
+
+    _weaken(repo)
+    assert "systemMessage" in _run(repo, harness, "sess-cycle"), (
+        "the same weakening reintroduced after a clean turn is a NEW event "
+        "and must be reported again"
+    )
 
 
 def test_a_different_session_is_not_silenced(repo, tmp_path):
     """Dedupe is per session; a fresh session must still hear it."""
     harness = tmp_path / "harness"
-    first = _run(repo, harness, "sess-one")
-    if not first.strip():
-        pytest.skip("this fixture produced no finding; nothing to dedupe")
-    other = _run(repo, harness, "sess-two")
-    assert "systemMessage" in other, "a different session must still be told"
+    assert "systemMessage" in _run(repo, harness, "sess-one")
+    assert "systemMessage" in _run(repo, harness, "sess-two"), (
+        "a different session must still be told"
+    )

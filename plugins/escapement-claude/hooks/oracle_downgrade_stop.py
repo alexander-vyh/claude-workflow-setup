@@ -33,6 +33,7 @@ sys.path.insert(0, str(_HOOKS_DIR))
 
 try:
     from _advisory_dedupe import already_reported as _already_seen
+    from _advisory_dedupe import clear as _forget_seen
     from _gate_signal import record as _record_signal
 except Exception:  # pragma: no cover - signal is best-effort
 
@@ -41,6 +42,9 @@ except Exception:  # pragma: no cover - signal is best-effort
 
     def _already_seen(*_args, **_kwargs) -> bool:
         return False
+
+    def _forget_seen(*_args, **_kwargs) -> None:
+        return None
 
 
 def _allow() -> int:
@@ -153,7 +157,12 @@ def main() -> int:
     except Exception:
         return _allow()
 
+    session_id = data.get("session_id") or data.get("sessionId") or ""
+
     if not findings:
+        # A clean turn invalidates the memory. Leaving the old digest in place
+        # would silently suppress an identical weakening reintroduced later.
+        _forget_seen("oracle_downgrade_stop", str(session_id))
         _record_signal(
             gate_name="oracle_downgrade_stop",
             decision="allow",
@@ -161,7 +170,6 @@ def main() -> int:
         )
         return _allow()
 
-    session_id = data.get("session_id") or data.get("sessionId") or ""
     if _already_seen("oracle_downgrade_stop", str(session_id), findings):
         _record_signal(
             gate_name="oracle_downgrade_stop",
