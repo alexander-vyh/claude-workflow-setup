@@ -107,3 +107,25 @@ def test_a_different_session_is_not_silenced(harnessed):
     assert _warned(run_hook(_payload(harnessed, "sess-two"))[1]), (
         "a different session must still be warned"
     )
+
+
+def test_an_unrelated_command_does_not_reset_the_memory(harnessed):
+    """Invalidation must be narrow, or it silently restores the noise.
+
+    Only an empty ``analyze()`` is evidence that the tree is clean. The gate's
+    other early returns -- wrong hook event, not a finishing command, no git root
+    -- mean it never evaluated. Clearing on those would reset the memory on every
+    unrelated Bash command, so the next finishing command would warn again about
+    a finding the session had already been shown, which is the original defect.
+    """
+    _write(harnessed, WEAK)
+    assert _warned(run_hook(_payload(harnessed, "sess-narrow"))[1])
+
+    # A plain, non-finishing Bash command in between.
+    passthrough = hook_payload(harnessed, command="ls -la")
+    passthrough["session_id"] = "sess-narrow"
+    run_hook(passthrough)
+
+    assert not _warned(run_hook(_payload(harnessed, "sess-narrow"))[1]), (
+        "an unrelated command must not reset the dedupe memory"
+    )
