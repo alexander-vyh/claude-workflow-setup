@@ -28,9 +28,17 @@ from pathlib import Path
 # Shared signal capture per claude/rules/gate-design.md Rule 2.
 sys.path.insert(0, str(Path(__file__).parent))
 try:
+    from _advisory_dedupe import already_reported_any as _already_seen
+    from _advisory_dedupe import clear as _forget_seen
     from _gate_signal import record as _record_signal
 except ImportError:  # pragma: no cover
     def _record_signal(*_args, **_kwargs) -> None:
+        return None
+
+    def _already_seen(*_args, **_kwargs) -> bool:
+        return False
+
+    def _forget_seen(*_args, **_kwargs) -> None:
         return None
 
 
@@ -347,7 +355,13 @@ def main() -> int:
 
     rel_path = os.path.relpath(filepath, repo_root)
 
+    session_id = data.get("session_id") or data.get("sessionId") or ""
+
     if has_test_changes:
+        # The condition this gate exists to flag is resolved, so the memory of
+        # having flagged it must go too. Leaving it would silence the gate for
+        # the rest of the session once tests are touched and then abandoned.
+        _forget_seen("tdd_gate", str(session_id))
         _record_signal(
             gate_name="tdd_gate",
             decision="allow",
@@ -356,7 +370,18 @@ def main() -> int:
         )
         return allow()
 
-    # No test files modified — nudge toward TDD
+    # No test files modified — nudge toward TDD, but only about a file this
+    # session has not already been nudged about. The advice does not depend on
+    # which file triggered it, and repeating it trains the reader to skip it.
+    if _already_seen("tdd_gate", str(session_id), rel_path):
+        _record_signal(
+            gate_name="tdd_gate",
+            decision="allow",
+            reason="already nudged about this file in this session",
+            file=rel_path,
+        )
+        return allow()
+
     _record_signal(
         gate_name="tdd_gate",
         decision="ask",
