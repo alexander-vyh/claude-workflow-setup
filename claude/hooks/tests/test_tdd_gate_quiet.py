@@ -34,22 +34,21 @@ Invalid solution classes rejected here
 
 from __future__ import annotations
 
-import importlib.util
 import io
 import json
 import subprocess
-import sys
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-_HOOKS = Path(__file__).resolve().parents[1]
-_spec = importlib.util.spec_from_file_location("tdd_gate", _HOOKS / "tdd-gate.py")
-tdd_gate = importlib.util.module_from_spec(_spec)
-assert _spec.loader is not None
-sys.modules["tdd_gate"] = tdd_gate
-_spec.loader.exec_module(tdd_gate)
+# Reuse the module object test_tdd_gate already registered in sys.modules rather
+# than loading a second copy under the same name. mock.patch resolves
+# "tdd_gate.*" through sys.modules, so a second registration would silently
+# redirect that file's patches to an object its tests never call -- which broke
+# 10 of its tests under pytest's alphabetical collection order while passing
+# under any order that loaded this file first.
+from test_tdd_gate import tdd_gate
 
 
 @pytest.fixture
