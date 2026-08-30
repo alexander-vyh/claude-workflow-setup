@@ -10,10 +10,11 @@ import sys
 from pathlib import Path
 
 HOOK = Path(__file__).resolve().parent.parent / "implementation_echo_test_gate.py"
-spec = importlib.util.spec_from_file_location("implementation_echo_test_gate", HOOK)
-gate = importlib.util.module_from_spec(spec)
-sys.modules["implementation_echo_test_gate"] = gate
-spec.loader.exec_module(gate)
+# Shared loader: reusing an equivalent registration keeps every test file on one
+# module object, so mock.patch("<name>.*") cannot be redirected by import order.
+from _hook_module import load_hook
+
+gate = load_hook("implementation_echo_test_gate", HOOK)
 
 
 def test_git_dash_C_absolute():

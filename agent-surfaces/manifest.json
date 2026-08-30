@@ -815,7 +815,9 @@
           ],
           "fixtures": [
             "claude/hooks/tests/test_oracle_downgrade_stop.py::test_in_place_weakening_emits_advisory",
-            "claude/hooks/tests/test_oracle_downgrade_stop.py::test_non_stop_event_is_silent"
+            "claude/hooks/tests/test_oracle_downgrade_stop.py::test_non_stop_event_is_silent",
+            "claude/hooks/tests/test_oracle_downgrade_stop_quiet.py::test_unchanged_finding_is_silent_the_second_time",
+            "claude/hooks/tests/test_oracle_downgrade_stop_quiet.py::test_a_reintroduced_finding_reports_again"
           ]
         }
       }
@@ -849,7 +851,8 @@
             }
           ],
           "fixtures": [
-            "claude/hooks/tests/test_oracle_downgrade_warning_gate.py"
+            "claude/hooks/tests/test_oracle_downgrade_warning_gate.py",
+            "claude/hooks/tests/test_oracle_downgrade_warning_gate_quiet.py"
           ]
         }
       }
@@ -1204,7 +1207,8 @@
             }
           ],
           "fixtures": [
-            "claude/hooks/tests/test_tdd_gate.py"
+            "claude/hooks/tests/test_tdd_gate.py",
+            "claude/hooks/tests/test_tdd_gate_quiet.py"
           ]
         }
       }

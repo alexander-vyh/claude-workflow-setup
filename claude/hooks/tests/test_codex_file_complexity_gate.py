@@ -29,14 +29,13 @@ FIXTURE = json.loads(
     (TEST_DIR / "fixtures" / "codex_apply_patch_pretooluse.json").read_text()
 )
 
+# Shared loader: reusing an equivalent registration keeps every test file on one
+# module object, so mock.patch("<name>.*") cannot be redirected by import order.
+from _hook_module import load_hook
+
+
 def _load(name: str):
-    path = TEST_DIR.parent / f"{name}.py"
-    spec = importlib.util.spec_from_file_location(name, path)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
-    return module
+    return load_hook(name, TEST_DIR.parent / f"{name}.py")
 
 
 # The independent reader of Codex's PreToolUse contract. It was written against
@@ -47,11 +46,7 @@ dispatch = _load("codex_pretool_dispatch")
 
 
 HOOK_PATH = TEST_DIR.parent / "file_complexity_gate.py"
-_spec = importlib.util.spec_from_file_location("file_complexity_gate", HOOK_PATH)
-gate = importlib.util.module_from_spec(_spec)
-sys.modules["file_complexity_gate"] = gate
-assert _spec.loader is not None
-_spec.loader.exec_module(gate)
+gate = load_hook("file_complexity_gate", HOOK_PATH)
 
 
 def run_hook(payload: dict) -> tuple[int, dict | None]:
