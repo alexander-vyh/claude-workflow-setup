@@ -44,6 +44,8 @@ LEGACY_REGISTRATIONS = {
             "b58fec6c22be3be34e68415ebfc70ecc7544b802e7cc45e9baf2da32939b95c8",
             # advisory dedupe (escapement #212)
             "9462736d321688cae99a555273c92cb5fdb043408db7823e9ded2b9c8e65af3c",
+            # dedupe invalidation on the clean path (escapement #213)
+            "515cbe42548206b27566531be91f23f9f080626edd9f8605699eb9a5333f7f2b",
         },
     },
     "beads_worktree_guard.py": {

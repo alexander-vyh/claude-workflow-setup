@@ -61,3 +61,20 @@ def already_reported(gate_name: str, session_id: str, finding: Any) -> bool:
         return False
     except OSError:
         return False
+
+
+def clear(gate_name: str, session_id: str) -> None:
+    """Forget what this gate last told this session.
+
+    Call this on the gate's *clean* path -- the turn where it found nothing. Without
+    it the stored digest outlives the condition it describes, so ``warn -> fix ->
+    reintroduce the identical weakening`` is silently suppressed the second time.
+    Suppressing a repeat is the point; suppressing a genuine reoccurrence is the
+    false negative this module must not create.
+    """
+    try:
+        state = _state_path(str(gate_name), str(session_id))
+        if state is not None:
+            state.unlink(missing_ok=True)
+    except OSError:
+        return

@@ -26,6 +26,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 try:
     from _advisory_dedupe import already_reported as _already_seen
+    from _advisory_dedupe import clear as _forget_seen
     from _gate_signal import record as _record_signal
 except ImportError:  # pragma: no cover
 
@@ -34,6 +35,9 @@ except ImportError:  # pragma: no cover
 
     def _already_seen(*_args, **_kwargs) -> bool:
         return False
+
+    def _forget_seen(*_args, **_kwargs) -> None:
+        return None
 
 
 from git_change_scope import change_sources, net_tree_scope
@@ -508,7 +512,11 @@ def main() -> int:
         return allow()
 
     issues = analyze(repo_root)
+    session_id = data.get("session_id") or data.get("sessionId") or ""
     if not issues:
+        # A clean run invalidates the memory. Leaving the old fingerprint in
+        # place would silently suppress an identical weakening reintroduced later.
+        _forget_seen("oracle_downgrade_warning_gate", str(session_id))
         _record_signal(
             gate_name="oracle_downgrade_warning_gate",
             decision="allow",
@@ -518,7 +526,6 @@ def main() -> int:
 
     brief_updated = _brief_recently_modified(repo_root)
     fingerprint = sorted((i.kind, getattr(i, "filepath", ""), str(getattr(i, "detail", ""))) for i in issues)
-    session_id = data.get("session_id") or data.get("sessionId") or ""
     if _already_seen("oracle_downgrade_warning_gate", str(session_id), fingerprint):
         _record_signal(
             gate_name="oracle_downgrade_warning_gate",
