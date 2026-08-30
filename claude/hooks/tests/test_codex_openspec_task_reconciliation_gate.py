@@ -30,10 +30,11 @@ _HOOK_PATH = Path(__file__).resolve().parents[1] / "openspec_task_reconciliation
 if not _HOOK_PATH.exists():
     pytest.fail(f"openspec_task_reconciliation_gate.py not found at {_HOOK_PATH}")
 
-_spec = importlib.util.spec_from_file_location("openspec_task_reconciliation_gate", _HOOK_PATH)
-gate = importlib.util.module_from_spec(_spec)
-sys.modules["openspec_task_reconciliation_gate"] = gate
-_spec.loader.exec_module(gate)
+# Shared loader: reusing an equivalent registration keeps every test file on one
+# module object, so mock.patch("<name>.*") cannot be redirected by import order.
+from _hook_module import load_hook
+
+gate = load_hook("openspec_task_reconciliation_gate", _HOOK_PATH)
 
 
 def _run_main(

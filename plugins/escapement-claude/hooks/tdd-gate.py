@@ -18,6 +18,10 @@ Exit codes:
   2 — deny (not used by this hook)
 """
 
+# PEP 604 annotations below are evaluated when each def executes, so without
+# this import the module raises TypeError on import under Python 3.9.
+from __future__ import annotations
+
 import json
 import os
 import re
