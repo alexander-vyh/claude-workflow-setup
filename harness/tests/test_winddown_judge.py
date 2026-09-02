@@ -79,6 +79,23 @@ def test_model_verdict_uses_configured_local_judge_contract(monkeypatch):
     ]
 
 
+def test_model_verdict_judges_request_and_terminal_response_together():
+    captured = []
+
+    def post(url, payload, timeout):
+        captured.append(payload["messages"][1]["content"])
+        return "winddown"
+
+    assert wj.model_verdict(
+        "The remaining step is to wire the credential into the supervisor.",
+        user_request="Fix the monitoring path end to end.",
+        post=post,
+    ) is True
+    [trajectory] = captured
+    assert "Fix the monitoring path end to end." in trajectory
+    assert "The remaining step is to wire the credential" in trajectory
+
+
 # ---------------------------------------------------------------------------
 # decide — judge verdict is the SOLE classifier, gated by reversible work
 #

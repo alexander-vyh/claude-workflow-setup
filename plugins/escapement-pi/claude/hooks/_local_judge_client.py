@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import json
+import pathlib
 import stat
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -24,6 +25,7 @@ MODEL_ENV = "ESCAPEMENT_LOCAL_JUDGE_MODEL"
 TIMEOUT_ENV = "ESCAPEMENT_LOCAL_JUDGE_TIMEOUT"
 API_KEY_ENV = "ESCAPEMENT_LOCAL_JUDGE_API_KEY"
 API_KEY_FILE_ENV = "ESCAPEMENT_LOCAL_JUDGE_API_KEY_FILE"
+DEFAULT_API_KEY_FILE = pathlib.Path.home() / ".claude" / "harness" / "local-judge-api-key"
 
 
 def configured_base_url() -> str:
@@ -55,8 +57,9 @@ def configured_auth_header() -> str | None:
     if environment_key:
         return f"Bearer {environment_key}"
 
-    key_path = os.environ.get(API_KEY_FILE_ENV)
-    if not key_path:
+    configured_key_path = os.environ.get(API_KEY_FILE_ENV)
+    key_path = pathlib.Path(configured_key_path) if configured_key_path else DEFAULT_API_KEY_FILE
+    if not os.path.lexists(key_path):
         return None
 
     descriptor = None

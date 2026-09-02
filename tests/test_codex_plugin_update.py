@@ -37,6 +37,14 @@ def test_updater_refreshes_plugin_migrates_legacy_and_preserves_siblings(
     shutil.copytree(ROOT / "plugins" / "escapement", plugin_source)
     prior_runtime = tmp_path / "prior-runtime"
     shutil.copytree(ROOT / "plugins" / "escapement" / "harness", prior_runtime)
+    (prior_runtime / "bin" / "verify").write_text("#!/bin/sh\nexit 0\n")
+    (prior_runtime / "bin" / "init_contract.py").write_text("# claude-only runtime\n")
+    runtime_hooks = prior_runtime.parent / "hooks"
+    runtime_hooks.mkdir()
+    shutil.copy2(
+        ROOT / "claude" / "hooks" / "_local_judge_client.py",
+        runtime_hooks / "_local_judge_client.py",
+    )
     for executable in prior_runtime.joinpath("bin").glob("*.py"):
         executable.chmod(executable.stat().st_mode | 0o111)
     harness.mkdir()
@@ -180,10 +188,34 @@ fi
     assert "plugin marketplace upgrade" not in commands
     assert "replaced recognized legacy skill" in result.stdout
     assert "Codex plugin refreshed" in result.stdout
-    assert harness.joinpath("bin").resolve() == plugin_root / "harness" / "bin"
+    assert harness.joinpath("bin").resolve() == prior_runtime / "bin"
+    assert harness.joinpath("schemas").resolve() == prior_runtime / "schemas"
+    assert harness.joinpath("bin", "verify").is_file()
+    assert harness.joinpath("bin", "init_contract.py").is_file()
+    codex_runtime = codex_home / "escapement-harness"
+    assert codex_runtime.joinpath("bin").resolve() == plugin_root / "harness" / "bin"
+    assert codex_runtime.joinpath("schemas").resolve() == plugin_root / "harness" / "schemas"
     with (home / "Library" / "LaunchAgents" / "com.escapement.continuation-supervisor.plist").open("rb") as stream:
         plist = plistlib.load(stream)
     assert plist["ProgramArguments"] == [str(harness / "bin" / "wakeup_waker.py"), "--fire"]
+
+    # An executable, runnable pre-watchdog Claude waker is not preserved as the
+    # supervisor target; the fresh Codex runtime supplies the required capability.
+    (prior_runtime / "bin" / "wakeup_waker.py").write_text(
+        "#!/bin/sh\n[ \"${1:-}\" = --help ] && exit 0\nexit 2\n"
+    )
+    (prior_runtime / "bin" / "wakeup_waker.py").chmod(0o755)
+    repaired = subprocess.run(
+        ["bash", str(UPDATER)], cwd=ROOT, env=env,
+        capture_output=True, text=True, check=False,
+    )
+    assert repaired.returncode == 0, repaired.stderr
+    with (home / "Library" / "LaunchAgents" / "com.escapement.continuation-supervisor.plist").open("rb") as stream:
+        repaired_plist = plistlib.load(stream)
+    assert repaired_plist["ProgramArguments"] == [
+        str(codex_runtime / "bin" / "wakeup_waker.py"), "--fire",
+    ]
+    assert harness.joinpath("bin").resolve() == prior_runtime / "bin"
 
 
 @pytest.mark.parametrize(

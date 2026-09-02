@@ -114,15 +114,22 @@ CODEX_HOOK_SUPPORT = {
     # Retain partial hook sources for isolated fixtures and byte-parity checks
     # without registering them against an unverified Codex payload boundary.
     "claude/hooks/root_checkout_guard.py",
+    "claude/hooks/_local_judge_client.py",
     # merge_authorization_gate.py resolves this sibling via its plugin-relative
     # path. Without it, an explicitly authorized Codex repository is denied
     # fail-closed because the policy reader cannot be imported.
     "harness/bin/repo_outcome.py",
     "harness/bin/schedule_store.py",
+    "harness/bin/session_observer.py",
+    "harness/bin/continuation_watchdog.py",
+    "harness/bin/task_session_mode.py",
     "harness/bin/thread_identity.py",
+    "harness/bin/trusted_json.py",
     "harness/bin/trusted_source.py",
     "harness/bin/wakeup_dispatch.py",
     "harness/bin/wakeup_waker.py",
+    "harness/bin/winddown_gate.py",
+    "harness/bin/winddown_judge.py",
     "harness/bin/worktree_lifecycle_supervisor.py",
     "harness/schemas/contract.schema.json",
     "harness/schemas/executions.schema.json",

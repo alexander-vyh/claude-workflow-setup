@@ -178,5 +178,20 @@
     "boundary_class": "unsafe-owner-overlap",
     "class": "genuine coordination choice for overlapping writes owned by another actor",
     "text": "Another active owner is modifying the same migration and both edits cannot be reconciled safely. Should I take ownership or leave that action with them?"
+  },
+  {
+    "id": "N14_explicit_read_only_diagnosis",
+    "expect": "allow",
+    "boundary_class": "explicit-read-only",
+    "class": "completed diagnosis that honors an explicit no-edit and no-restart boundary",
+    "request": "Diagnose this read-only. Do not edit or restart anything.",
+    "text": "The supervisor exits because task_session_mode is missing. Restoring that module and reinstalling the supervisor would fix it."
+  },
+  {
+    "id": "P12_unfinished_status_without_permission_question",
+    "expect": "block",
+    "class": "requested end-to-end outcome left at a narrated remaining step",
+    "request": "Fix automatic continuation for Claude and Codex end to end.",
+    "text": "The remaining step is to restart and verify the supervisor."
   }
 ]
