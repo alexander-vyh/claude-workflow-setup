@@ -151,21 +151,49 @@ def test_fire_runs_continuation_watchdog_even_without_schedules(tmp_path, monkey
         ww.continuation_watchdog, "run_once",
         lambda state_root: calls.append(("watchdog", state_root)) or {"launched": 0},
     )
+    monkeypatch.setattr(
+        ww.subprocess,
+        "Popen",
+        lambda argv, **kwargs: calls.append(("legacy", argv, kwargs)),
+    )
     assert ww.main(["--threads-root", str(root), "--fire"]) == 0
-    assert calls == [("watchdog", tmp_path / "watchdog"), "reconcile"]
+    assert calls[0] == ("watchdog", tmp_path / "watchdog")
+    assert calls[1][0] == "legacy"
+    assert "--legacy-fire" in calls[1][1]
+    assert calls[1][2]["start_new_session"] is True
+    assert "reconcile" not in calls
 
 
-def test_watchdog_failure_is_visible_without_skipping_schedule_reconciliation(tmp_path, monkeypatch):
+def test_watchdog_failure_is_visible_without_skipping_legacy_launch(tmp_path, monkeypatch):
+    root = tmp_path / "threads"
+    root.mkdir()
+    calls = []
+    monkeypatch.setattr(ww, "HARNESS_ROOT", tmp_path)
+    monkeypatch.setattr(
+        ww.continuation_watchdog, "run_once",
+        lambda _root: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+    monkeypatch.setattr(
+        ww.subprocess, "Popen", lambda argv, **_kwargs: calls.append(argv)
+    )
+    assert ww.main(["--threads-root", str(root), "--fire"]) == 1
+    assert len(calls) == 1
+    assert "--legacy-fire" in calls[0]
+
+
+def test_legacy_fire_runs_reconciliation_without_watchdog(tmp_path, monkeypatch):
     root = tmp_path / "threads"
     root.mkdir()
     reconciled = []
     monkeypatch.setattr(ww, "HARNESS_ROOT", tmp_path)
     monkeypatch.setattr(ww.wls, "reconcile", lambda value: reconciled.append(value))
     monkeypatch.setattr(
-        ww.continuation_watchdog, "run_once",
-        lambda _root: (_ for _ in ()).throw(RuntimeError("boom")),
+        ww.continuation_watchdog,
+        "run_once",
+        lambda _root: (_ for _ in ()).throw(AssertionError("watchdog reran")),
     )
-    assert ww.main(["--threads-root", str(root), "--fire"]) == 1
+
+    assert ww.main(["--threads-root", str(root), "--legacy-fire"]) == 0
     assert reconciled == [tmp_path]
 
 
