@@ -203,6 +203,19 @@ def main(argv=None) -> int:
     total_spawns = []
     exit_code = 0
     scheduled_ok = True
+    # Native-session continuation is the supervisor's latency-sensitive path.
+    # Run it before legacy schedule and worktree reconciliation, whose external
+    # checks can legitimately take minutes across a large retained registry.
+    if args.fire and root.resolve() == (HARNESS_ROOT / "threads").resolve():
+        try:
+            watchdog_stats = continuation_watchdog.run_once(root.parent / "watchdog")
+            print(json.dumps({"continuation_watchdog": watchdog_stats}, sort_keys=True))
+        except Exception as exc:
+            exit_code = 1
+            print(
+                f"continuation watchdog incomplete: {type(exc).__name__}",
+                file=sys.stderr,
+            )
     for sched in iter_schedule_paths(root):
         # Trust boundary: a check entry's `command` is shell-executed by the
         # launchd-detached waker. Refuse any schedule another local user could
@@ -308,18 +321,6 @@ def main(argv=None) -> int:
         except (OSError, RuntimeError, ValueError) as exc:
             exit_code = 1
             print(f"worktree reconciliation incomplete: {exc}", file=sys.stderr)
-        # Custom --threads-root is the hermetic inspection/test surface. The installed
-        # LaunchAgent uses the canonical root and owns native-session monitoring.
-        if root.resolve() == (HARNESS_ROOT / "threads").resolve():
-            try:
-                watchdog_stats = continuation_watchdog.run_once(root.parent / "watchdog")
-                print(json.dumps({"continuation_watchdog": watchdog_stats}, sort_keys=True))
-            except Exception as exc:
-                exit_code = 1
-                print(
-                    f"continuation watchdog incomplete: {type(exc).__name__}",
-                    file=sys.stderr,
-                )
         # A schedule we could not inspect is reported, not swallowed. It no
         # longer disables anything else: gating the whole pass on one untrusted
         # schedule is what silently stopped reconciliation for 17 days.
