@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# file-complexity-waiver: legacy Stop adapter; task policy is isolated in execution_stop_adapter.py, and the broader responsibility split remains owned by bead e9v.7.
+# file-complexity-waiver: 1215 lines; legacy Stop adapter; task policy is isolated in execution_stop_adapter.py, and the broader responsibility split remains owned by bead e9v.7.
 """
 Claude Code Stop-hook adapter for continuation-harness.
 

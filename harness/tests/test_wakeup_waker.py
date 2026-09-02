@@ -146,13 +146,13 @@ def test_fire_runs_continuation_watchdog_even_without_schedules(tmp_path, monkey
     root.mkdir()
     calls = []
     monkeypatch.setattr(ww, "HARNESS_ROOT", tmp_path)
-    monkeypatch.setattr(ww.wls, "reconcile", lambda _root: None)
+    monkeypatch.setattr(ww.wls, "reconcile", lambda _root: calls.append("reconcile"))
     monkeypatch.setattr(
         ww.continuation_watchdog, "run_once",
-        lambda state_root: calls.append(state_root) or {"launched": 0},
+        lambda state_root: calls.append(("watchdog", state_root)) or {"launched": 0},
     )
     assert ww.main(["--threads-root", str(root), "--fire"]) == 0
-    assert calls == [tmp_path / "watchdog"]
+    assert calls == [("watchdog", tmp_path / "watchdog"), "reconcile"]
 
 
 def test_watchdog_failure_is_visible_without_skipping_schedule_reconciliation(tmp_path, monkeypatch):
