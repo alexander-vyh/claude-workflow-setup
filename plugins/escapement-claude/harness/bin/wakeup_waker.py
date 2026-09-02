@@ -35,6 +35,7 @@ import wakeup_dispatch as wd  # noqa: E402
 import schedule_store  # noqa: E402
 import trusted_source as ts  # noqa: E402
 import worktree_lifecycle_supervisor as wls  # noqa: E402
+import continuation_watchdog  # noqa: E402
 from task_session_mode import session_repo_cwd  # noqa: E402
 from thread_identity import (  # noqa: E402
     is_actor_state_dir,
@@ -187,8 +188,15 @@ def main(argv=None) -> int:
         action="store_true",
         help="actually spawn handoffs/resumes and rewrite schedules (default: dry-run)",
     )
+    ap.add_argument(
+        "--capabilities", action="store_true",
+        help="print the installed supervisor capability contract and exit",
+    )
     ap.add_argument("--threads-root", default=str(HARNESS_ROOT / "threads"))
     args = ap.parse_args(argv)
+    if args.capabilities:
+        print("cross-host-continuation-v1")
+        return 0
 
     now = _dt.datetime.now(_dt.timezone.utc)
     root = pathlib.Path(args.threads_root)
@@ -300,6 +308,18 @@ def main(argv=None) -> int:
         except (OSError, RuntimeError, ValueError) as exc:
             exit_code = 1
             print(f"worktree reconciliation incomplete: {exc}", file=sys.stderr)
+        # Custom --threads-root is the hermetic inspection/test surface. The installed
+        # LaunchAgent uses the canonical root and owns native-session monitoring.
+        if root.resolve() == (HARNESS_ROOT / "threads").resolve():
+            try:
+                watchdog_stats = continuation_watchdog.run_once(root.parent / "watchdog")
+                print(json.dumps({"continuation_watchdog": watchdog_stats}, sort_keys=True))
+            except Exception as exc:
+                exit_code = 1
+                print(
+                    f"continuation watchdog incomplete: {type(exc).__name__}",
+                    file=sys.stderr,
+                )
         # A schedule we could not inspect is reported, not swallowed. It no
         # longer disables anything else: gating the whole pass on one untrusted
         # schedule is what silently stopped reconciliation for 17 days.

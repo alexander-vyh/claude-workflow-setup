@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# file-complexity-waiver: 1091 lines; delegated Stop policy is isolated in execution_stop_adapter.py, leaving this legacy hook with one adapter import and call. Broader split remains owned by bead e9v.7.
+# file-complexity-waiver: legacy Stop adapter; task policy is isolated in execution_stop_adapter.py, and the broader responsibility split remains owned by bead e9v.7.
 """
 Claude Code Stop-hook adapter for continuation-harness.
 
@@ -186,6 +186,103 @@ def _read_last_user_message(transcript_path: str) -> Optional[str]:
     return last_user_text
 
 
+def _read_last_human_request(transcript_path: str) -> Optional[str]:
+    """Return the latest real human request, excluding tool-result pseudo-user rows.
+
+    Current Claude transcripts identify typed/queued human prompts with ``origin``.
+    Older transcripts have no origin, so those remain valid only when they lack the
+    tool-result/source-assistant markers that identify synthetic user rows.
+    """
+    if not transcript_path:
+        return None
+    path = pathlib.Path(transcript_path)
+    if not path.exists():
+        return None
+    try:
+        raw = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    tail = raw[-_TRANSCRIPT_WINDOW:] if len(raw) > _TRANSCRIPT_WINDOW else raw
+    rows: list[dict] = []
+    for line in tail.splitlines():
+        try:
+            entry = json.loads(line)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(entry, dict):
+            continue
+        rows.append(entry)
+    assistants = [
+        row for row in rows
+        if not row.get("isSidechain")
+        and isinstance(row.get("message", row), dict)
+        and row.get("message", row).get("role") == "assistant"
+    ]
+    if assistants and isinstance(assistants[-1].get("uuid"), str):
+        by_uuid = {
+            row.get("uuid"): row for row in rows if isinstance(row.get("uuid"), str)
+        }
+        cursor: Optional[dict] = assistants[-1]
+        visited: set[str] = set()
+        while isinstance(cursor, dict):
+            if (
+                cursor.get("isMeta") is not True
+                and "toolUseResult" not in cursor
+                and not cursor.get("sourceToolAssistantUUID")
+            ):
+                origin = cursor.get("origin")
+                origin_ok = not isinstance(origin, dict) or (
+                    origin.get("kind") == "human"
+                    and origin.get("promptSource") in ("typed", "queued")
+                )
+                msg = cursor.get("message", cursor)
+                if origin_ok and isinstance(msg, dict) and msg.get("role") == "user":
+                    value = msg.get("content", [])
+                    parts = [value] if isinstance(value, str) else [
+                        block.get("text", "") if isinstance(block, dict) else block
+                        for block in value if isinstance(block, (dict, str))
+                        and (not isinstance(block, dict) or block.get("type") == "text")
+                    ]
+                    if parts:
+                        return "\n".join(parts)
+            parent_uuid = cursor.get("parentUuid")
+            if not isinstance(parent_uuid, str) or parent_uuid in visited:
+                break
+            visited.add(parent_uuid)
+            cursor = by_uuid.get(parent_uuid)
+        return None
+
+    # Legacy transcripts without UUID ancestry: retain the filtered linear fallback.
+    last_text: Optional[str] = None
+    for entry in rows:
+        if entry.get("isSidechain") or entry.get("isMeta") is True:
+            continue
+        if "toolUseResult" in entry or entry.get("sourceToolAssistantUUID"):
+            continue
+        origin = entry.get("origin")
+        if isinstance(origin, dict):
+            if origin.get("kind") != "human" or origin.get("promptSource") not in (
+                "typed", "queued",
+            ):
+                continue
+        msg = entry.get("message", entry)
+        if not isinstance(msg, dict) or msg.get("role") != "user":
+            continue
+        content = msg.get("content", [])
+        parts: list[str] = []
+        if isinstance(content, str):
+            parts.append(content)
+        elif isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    parts.append(block.get("text", ""))
+                elif isinstance(block, str):
+                    parts.append(block)
+        if parts:
+            last_text = "\n".join(parts)
+    return last_text
+
+
 def _read_last_assistant_message(transcript_path: str) -> Optional[str]:
     """Most recent ASSISTANT text from the transcript tail (mirror of the user reader).
 
@@ -245,12 +342,15 @@ _WINDDOWN_VERDICT_FRESH_SECONDS = 300
 # Fail-open on timeout means a slow/cold model yields None → allow (judge-only).
 
 
-def _text_sha(text: str) -> str:
-    """Short stable hash used to scope a cached verdict to the message it judged."""
-    return hashlib.sha256((text or "").encode("utf-8", "replace")).hexdigest()[:16]
+def _text_sha(text: str, user_request: Optional[str] = None) -> str:
+    """Short hash scoping a cached verdict to the request/response pair."""
+    material = f"{user_request or ''}\0{text or ''}"
+    return hashlib.sha256(material.encode("utf-8", "replace")).hexdigest()[:16]
 
 
-def _read_cached_winddown_verdict(thread_dir, text: Optional[str] = None) -> Optional[bool]:
+def _read_cached_winddown_verdict(
+    thread_dir, text: Optional[str] = None, user_request: Optional[str] = None,
+) -> Optional[bool]:
     """Read a cached model verdict for this session (monitor- or inline-written).
 
     {thread_dir}/winddown_verdict.json = {"verdict": bool, "ts": ISO, "text_sha"?: str}.
@@ -272,27 +372,32 @@ def _read_cached_winddown_verdict(thread_dir, text: Optional[str] = None) -> Opt
     if age > _WINDDOWN_VERDICT_FRESH_SECONDS:
         return None
     stored_sha = data.get("text_sha")
-    if stored_sha is not None and text is not None and stored_sha != _text_sha(text):
+    if stored_sha is not None and text is not None and stored_sha != _text_sha(text, user_request):
         return None  # verdict was for a different message — do not apply it here
     v = data.get("verdict")
     return v if isinstance(v, bool) else None
 
 
-def _write_winddown_verdict(thread_dir, verdict: bool, *, text: Optional[str] = None, now=None) -> None:
+def _write_winddown_verdict(
+    thread_dir, verdict: bool, *, text: Optional[str] = None,
+    user_request: Optional[str] = None, now=None,
+) -> None:
     """Persist a computed verdict so it warms the cache for the rest of the turn-window
     and is observable (and forward-compatible with a future background monitor reading
     the same file). Tags the message hash so the cache is message-scoped. Best-effort."""
     ts = (now or _dt2.datetime.now(_dt2.timezone.utc)).strftime("%Y-%m-%dT%H:%M:%SZ")
     rec = {"verdict": bool(verdict), "ts": ts}
     if text is not None:
-        rec["text_sha"] = _text_sha(text)
+        rec["text_sha"] = _text_sha(text, user_request)
     try:
         (pathlib.Path(thread_dir) / "winddown_verdict.json").write_text(json.dumps(rec))
     except OSError:
         pass
 
 
-def _compute_winddown_verdict_inline(text, thread_dir, *, judge=None, now=None) -> Optional[bool]:
+def _compute_winddown_verdict_inline(
+    text, thread_dir, *, user_request=None, judge=None, now=None,
+) -> Optional[bool]:
     """Run the local-LLM judge INLINE (bounded timeout, fail-open) and cache its result.
 
     This is what makes the model layer LIVE without a daemon: the SWE-PRM judge that was
@@ -300,13 +405,21 @@ def _compute_winddown_verdict_inline(text, thread_dir, *, judge=None, now=None) 
     slice where it runs the judge as the sole classifier. Returns the bool verdict or None on
     any error/unclear — a judge problem must NEVER block or crash the hook.
     """
-    fn = judge or (lambda t: _wj.model_verdict(t))
+    fn = judge or _wj.model_verdict
     try:
-        v = fn(text)
+        try:
+            v = fn(text, user_request=user_request)
+        except TypeError:
+            # Preserve the established one-argument injection seam used by hermetic
+            # tests and older installed adapters. The production judge accepts the
+            # request keyword.
+            v = fn(text)
     except Exception:
         return None  # fail-open
     if isinstance(v, bool):
-        _write_winddown_verdict(thread_dir, v, text=text, now=now)
+        _write_winddown_verdict(
+            thread_dir, v, text=text, user_request=user_request, now=now,
+        )
         return v
     return None
 
@@ -540,6 +653,7 @@ def _winddown_override(
     text = _read_last_assistant_message(transcript_path)
     if not text:
         return None
+    user_request = _read_last_human_request(transcript_path)
     if work_check is None:  # resolved here, not at def-time (forward ref)
         work_check = _check_bd_queue_implicit
     work_remains = work_check(cwd or "", thread_dir=thread_dir)[0] == "block"
@@ -547,13 +661,19 @@ def _winddown_override(
         # bd queue drained — but unpushed commits / dirty tracked files are also reversible
         # work the agent owns (the cake "nothing outstanding" with 4 unpushed commits).
         work_remains = _git_work_remains(cwd)
-    if not work_remains:
-        return None  # nothing reversible (bd or git) → legitimate stop; never nag, never judge
-    model_offer = _read_cached_winddown_verdict(thread_dir, text=text)
+    if not work_remains and (reason == "wakeup_registered" or not user_request):
+        # A registered wakeup is an explicit durable continuation, and a legacy
+        # transcript with no attributable human request cannot prove abandoned work.
+        return None
+    model_offer = _read_cached_winddown_verdict(
+        thread_dir, text=text, user_request=user_request,
+    )
     if model_offer is None:
         # Cache cold — consult the judge inline. There is no general regex floor in the
         # judge/rung path; only the narrow outage sentinel below can act after a None.
-        model_offer = _compute_winddown_verdict_inline(text, thread_dir, judge=judge)
+        model_offer = _compute_winddown_verdict_inline(
+            text, thread_dir, user_request=user_request, judge=judge,
+        )
     if model_offer is None:
         # Judge unavailable after inline attempt. Fail open (gate-design Rule 2: emit
         # signal so the outage is visible in the half-life review corpus, never silent).
@@ -568,7 +688,11 @@ def _winddown_override(
         if _wos.high_confidence_outage_winddown(text):
             return _wg.RECOVERY_PROMPT
         return None
-    decision, _ = _wj.decide(text, work_remains, model_offer=model_offer)
+    # A positive trajectory verdict is itself evidence that the already-requested
+    # reversible outcome remains unfinished; clean bd/git state must not bypass it.
+    decision, _ = _wj.decide(
+        text, work_remains or model_offer is True, model_offer=model_offer,
+    )
     return _wg.RECOVERY_PROMPT if decision == "block" else None
 
 

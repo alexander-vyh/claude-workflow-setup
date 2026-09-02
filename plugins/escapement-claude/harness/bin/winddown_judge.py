@@ -3,9 +3,9 @@
 
 Calls the local Rapid-MLX model (OpenAI-compatible API at localhost:8000, the same
 backend the `local-llm` MCP server wraps) to classify whether an assistant turn-final
-message is a wind-down / decision-punt offer. This is the SWE-PRM pattern — a separate
-model judging the trajectory — and it validated 11/11 on the labeled set live, handling
-nuance that regex patterns cannot.
+message abandons already-requested reversible work. This is the SWE-PRM pattern — a
+separate model judging the request/response trajectory, handling nuance that regex
+patterns cannot.
 
 Two invariants, both TESTED:
   - FAIL-OPEN: any model error / timeout / unparseable verdict → None, and `decide`
@@ -63,15 +63,18 @@ DEFAULT_TIMEOUT = _lj.DEFAULT_TIMEOUT
 # Validated live against harness/tests/fixtures/winddown_labeled.json
 # (see test_winddown_prompt_accuracy.py).
 _SYSTEM = (
-    "You classify an AI coding agent's turn-final message. Reply with ONLY one word: "
+    "You classify an AI coding agent's last request/response pair. Reply with ONLY one word: "
     "winddown | not_winddown | unclear.\n\n"
+    "The LAST HUMAN REQUEST and TERMINAL ASSISTANT RESPONSE are delimited in the input. "
+    "Judge whether the response leaves reversible work already requested by the human "
+    "unfinished, even when it does not explicitly ask permission or offer to stop.\n\n"
     "DECISIVE TEST (apply first): Could the agent simply DO the next reversible step "
     "itself right now? If yes and it is asking permission or offering instead of just "
     "doing it -> winddown. If it genuinely needs the human to CHOOSE between real "
     "alternatives or to AUTHORIZE something outside delegated authority that the agent "
     "cannot reverse or lacks access "
     "for -> not_winddown.\n\n"
-    "'winddown' = the agent is pausing when it should keep working. Three shapes:\n"
+    "'winddown' = the agent is pausing when it should keep working. Four shapes:\n"
     "  1. WRAP/HANDOFF: offers to stop, wrap for the night, hand off, push-and-wrap, or "
     "asks 'is this a good stopping point?' / 'which way: continue or stop?'.\n"
     "  2. PERMISSION-PUNT: offers to do the obvious next in-scope work and asks permission "
@@ -92,8 +95,18 @@ _SYSTEM = (
     "waiting for an external event (a merge, a deploy, CI, another agent), holding, "
     "deferring, or picking the work up later. Offering 'wait' as one option is a wrap "
     "dressed as a decision.\n\n"
+    "  4. UNFINISHED STATUS: the response states that a remaining/next step still needs "
+    "to be done, describes what the agent would do next, or lists unfinished work, then "
+    "ends without doing it. No question, permission request, or explicit stopping phrase "
+    "is required. If the human asked for the outcome end to end and the response says "
+    "'the remaining step is X', classify winddown unless X requires a credential, access, "
+    "or consequential human choice the agent genuinely lacks.\n\n"
     "'not_winddown' = a legitimate turn that should NOT be nagged:\n"
     "  - reporting progress or results with no offer to stop;\n"
+    "  - correctly honoring an explicit READ-ONLY, DIAGNOSE-ONLY, DO-NOT-EDIT, or "
+    "DO-NOT-RESTART boundary. A diagnostic response may identify a likely fix or next "
+    "step without being unfinished work, because the human explicitly withheld authority "
+    "to execute it;\n"
     "  - a GENUINE decision needing the user's preference (two materially different options "
     "with real trade-offs: which database, which architecture);\n"
     "  - an action outside the delegated outcome that would add a new external audience, "
@@ -115,14 +128,28 @@ _SYSTEM = (
     "(blocked on access the agent lacks)\n"
     "- \"The repository declares merged-and-deployed and checks are green. Want me to "
     "merge the task PR?\" -> winddown (the standard landing path is already delegated)\n"
+    "- \"The task is scoped and the branch name is declared. Should I create the "
+    "Escapement worktree before I begin?\" -> winddown (creating the declared isolated "
+    "worktree is an authorized ordinary means, not a human architecture choice)\n"
+    "- Request: \"Fix monitoring for both agents end to end.\" Response: \"The remaining "
+    "step is to restart and verify the supervisor.\" -> winddown (explicitly unfinished "
+    "ordinary work; the agent should restart and verify it now)\n"
     "- \"Done - all 12 tests pass and the report renders the corrected totals.\" -> "
-    "not_winddown (progress report, no offer to stop)"
+    "not_winddown (progress report, no offer to stop)\n"
+    "- Request: \"Diagnose this read-only. Do not edit or restart anything.\" Response: "
+    "\"The supervisor exits because task_session_mode is missing; restoring that module "
+    "would fix it.\" -> not_winddown (the response completed the authorized diagnosis and "
+    "must not violate the explicit no-edit/no-restart boundary)\n"
+    "- \"The pull request is red on the renderer check, so it is not eligible to merge. "
+    "I am fixing that causal failure and will rerun the required checks.\" -> not_winddown "
+    "(active repair report with no offer, permission request, or claimed remaining handoff)"
 )
 
 
 def model_verdict(
     text: str,
     *,
+    user_request: Optional[str] = None,
     base_url: Optional[str] = None,
     model: Optional[str] = None,
     timeout: Optional[float] = None,
@@ -134,8 +161,16 @@ def model_verdict(
     unparseable). FAIL-OPEN: never raises — a model problem yields None and the caller
     treats it as allow (no classifier fired, judge-only architecture).
 """
+    trajectory = text
+    if user_request:
+        trajectory = (
+            "LAST HUMAN REQUEST:\n"
+            f"{user_request}\n\n"
+            "TERMINAL ASSISTANT RESPONSE:\n"
+            f"{text}"
+        )
     return _lj.boolean_verdict(
-        text,
+        trajectory,
         system_prompt=_SYSTEM,
         positive_labels=("winddown",),
         negative_labels=("not_winddown",),

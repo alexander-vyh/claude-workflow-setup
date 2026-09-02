@@ -262,6 +262,15 @@ def test_real_request_uses_bearer_auth_from_mode_0600_file(monkeypatch, tmp_path
     assert _observed_auth(monkeypatch, key_file=key_file) == "Bearer file-secret"
 
 
+def test_real_request_uses_protected_default_harness_key(monkeypatch, tmp_path):
+    key_file = tmp_path / "local-judge-api-key"
+    key_file.write_text("default-file-secret\n", encoding="utf-8")
+    key_file.chmod(0o600)
+    monkeypatch.setattr(lj, "DEFAULT_API_KEY_FILE", key_file, raising=False)
+
+    assert _observed_auth(monkeypatch) == "Bearer default-file-secret"
+
+
 def test_environment_auth_takes_precedence_over_mode_0600_file(monkeypatch, tmp_path):
     key_file = tmp_path / "judge.key"
     key_file.write_text("file-secret\n", encoding="utf-8")
@@ -277,7 +286,11 @@ def test_environment_auth_takes_precedence_over_mode_0600_file(monkeypatch, tmp_
     )
 
 
-def test_real_request_is_unauthenticated_by_default(monkeypatch):
+def test_real_request_is_unauthenticated_when_default_key_is_absent(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        lj, "DEFAULT_API_KEY_FILE", tmp_path / "missing-local-judge-api-key",
+        raising=False,
+    )
     assert _observed_auth(monkeypatch) is None
 
 

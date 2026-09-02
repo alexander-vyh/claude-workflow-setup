@@ -61,6 +61,29 @@ def test_skips_sidechain_subagent_turns(tmp_path):
     assert sh._read_last_assistant_message(tp) == "real assistant message: proceeding"
 
 
+def test_reads_last_human_request_without_treating_tool_results_as_requests(tmp_path):
+    tp = _write_transcript(tmp_path, [
+        {"type": "user", "message": {"role": "user", "content": "Fix it end to end."}},
+        {
+            "type": "user",
+            "toolUseResult": {"stdout": "ok"},
+            "message": {"role": "user", "content": "tool output"},
+        },
+        _asst("The remaining step is to restart the supervisor."),
+    ])
+    assert sh._read_last_human_request(tp) == "Fix it end to end."
+
+
+def test_human_request_follows_assistant_ancestry_not_appended_fork_order(tmp_path):
+    tp = _write_transcript(tmp_path, [
+        {"type": "user", "uuid": "u1", "message": {"role": "user", "content": "Fix this branch."}},
+        {"type": "user", "uuid": "u2", "message": {"role": "user", "content": "Unrelated replay branch."}},
+        {"type": "assistant", "uuid": "a1", "parentUuid": "u1",
+         "message": {"role": "assistant", "content": "The remaining step is verification."}},
+    ])
+    assert sh._read_last_human_request(tp) == "Fix this branch."
+
+
 # ---------------------------------------------------------------------------
 # _read_cached_winddown_verdict
 # ---------------------------------------------------------------------------
@@ -101,16 +124,31 @@ def test_override_blocks_winddown_offer_with_work(tmp_path):
     # verdict so the block is driven deterministically by the judge layer's seam.
     disp = sh._winddown_override(
         "conversational", tp, "/repo", tmp_path,
-        work_check=_work_remains, judge=lambda t: True,
+        work_check=_work_remains, judge=lambda t, **_: True,
     )
     assert disp is not None
     assert "proceed" in disp.lower() and "stop" in disp.lower()  # escape path present
 
 
-def test_override_skips_when_no_reversible_work(tmp_path):
-    tp = _write_transcript(tmp_path, [_asst("want me to wrap for the night, or keep going?")])
-    disp = sh._winddown_override("conversational", tp, "/repo", tmp_path, work_check=_no_work)
-    assert disp is None  # genuinely blocked / nothing to do → legitimate stop, no nag
+def test_override_blocks_semantically_unfinished_request_even_with_clean_repo(tmp_path):
+    tp = _write_transcript(tmp_path, [
+        {"type": "user", "message": {"role": "user", "content": "Fix monitoring end to end."}},
+        _asst("The remaining step is to add the credential to the supervisor."),
+    ])
+    observed = []
+
+    def judge(text, *, user_request=None):
+        observed.append((user_request, text))
+        return True
+
+    disp = sh._winddown_override(
+        "conversational", tp, "/repo", tmp_path,
+        work_check=_no_work, judge=judge,
+    )
+    assert disp is not None
+    assert observed == [
+        ("Fix monitoring end to end.", "The remaining step is to add the credential to the supervisor.")
+    ]
 
 
 def test_override_skips_legit_question(tmp_path):
@@ -119,7 +157,7 @@ def test_override_skips_legit_question(tmp_path):
     # (model agrees it's NOT a wind-down) so the test never touches the live model.
     disp = sh._winddown_override(
         "conversational", tp, "/repo", tmp_path,
-        work_check=_work_remains, judge=lambda t: False,
+        work_check=_work_remains, judge=lambda t, **_: False,
     )
     assert disp is None  # not a wind-down offer → don't block
 

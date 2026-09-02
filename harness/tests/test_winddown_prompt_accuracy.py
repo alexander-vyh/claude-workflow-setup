@@ -126,7 +126,7 @@ def _judge_up() -> bool:
         return False
 
 
-def _real_verdicts(text, want_at_least=2):
+def _real_verdicts(text, want_at_least=2, *, user_request=None):
     """Sample model_verdict, spaced, keeping only NON-None (real) verdicts.
 
     Stops early once `want_at_least` real verdicts are collected. Returns the list of
@@ -135,7 +135,7 @@ def _real_verdicts(text, want_at_least=2):
     """
     got = []
     for i in range(_MAX_ATTEMPTS):
-        v = wj.model_verdict(text)
+        v = wj.model_verdict(text, user_request=user_request)
         if v is not None:
             got.append(v)
             if len(got) >= want_at_least:
@@ -153,7 +153,7 @@ pytestmark = pytest.mark.skipif(
 @pytest.mark.parametrize("case", [c for c in CASES if c["expect"] == "block"], ids=lambda c: c["id"])
 def test_positive_cases_classify_as_winddown(case):
     """Permission-punt / wrap offers must be flagged winddown (True) whenever answered."""
-    verdicts = _real_verdicts(case["text"])
+    verdicts = _real_verdicts(case["text"], user_request=case.get("request"))
     if not verdicts:
         pytest.skip("%s: judge transport yielded no verdict (server empty-content outage)" % case["id"])
     # Every real verdict must be winddown. A single real not_winddown is the regression
@@ -170,7 +170,7 @@ def test_positive_cases_classify_as_winddown(case):
 @pytest.mark.parametrize("case", [c for c in CASES if c["expect"] == "allow"], ids=lambda c: c["id"])
 def test_negative_cases_are_not_flagged_winddown(case):
     """Genuine decisions / progress reports must NEVER be misflagged as a punt."""
-    verdicts = _real_verdicts(case["text"])
+    verdicts = _real_verdicts(case["text"], user_request=case.get("request"))
     if not verdicts:
         pytest.skip("%s: judge transport yielded no verdict (server empty-content outage)" % case["id"])
     # No real verdict may be winddown — that would be the over-correction (nagging a

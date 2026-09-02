@@ -106,11 +106,13 @@ for relative in sorted(relative_paths):
 PY
 chmod +x "$plugin_root/bin/escapement-worktree" "$plugin_root/harness/bin/"*.py
 
-# Codex and Claude share one host-neutral Escapement supervisor state root.
-# Only the code links move when the installed host package changes.
+# Codex and Claude share one host-neutral Escapement supervisor STATE root, but
+# their runtime packages are not interchangeable.  In particular, the Codex
+# package is intentionally smaller and must never replace Claude's `bin` link.
 HARNESS_HOME="${CONTINUATION_HARNESS_HOME:-$HOME/.claude/harness}"
-mkdir -p "$HARNESS_HOME"
-for stable in "$HARNESS_HOME/bin" "$HARNESS_HOME/schemas"; do
+CODEX_RUNTIME_HOME="${ESCAPEMENT_CODEX_RUNTIME_HOME:-$CODEX_STATE_HOME/escapement-harness}"
+mkdir -p "$HARNESS_HOME" "$CODEX_RUNTIME_HOME"
+for stable in "$CODEX_RUNTIME_HOME/bin" "$CODEX_RUNTIME_HOME/schemas"; do
   if [[ -e "$stable" && ! -L "$stable" ]]; then
     echo "FATAL: refusing to replace non-symlink Escapement runtime path: $stable" >&2
     exit 1
@@ -130,14 +132,21 @@ finally:
     os.close(directory)
 PY
 }
-ln -sfn "$plugin_root/harness/bin" "$HARNESS_HOME/.bin.next"
-promote_runtime_link "$HARNESS_HOME/.bin.next" "$HARNESS_HOME/bin"
-ln -sfn "$plugin_root/harness/schemas" "$HARNESS_HOME/.schemas.next"
-promote_runtime_link "$HARNESS_HOME/.schemas.next" "$HARNESS_HOME/schemas"
+ln -sfn "$plugin_root/harness/bin" "$CODEX_RUNTIME_HOME/.bin.next"
+promote_runtime_link "$CODEX_RUNTIME_HOME/.bin.next" "$CODEX_RUNTIME_HOME/bin"
+ln -sfn "$plugin_root/harness/schemas" "$CODEX_RUNTIME_HOME/.schemas.next"
+promote_runtime_link "$CODEX_RUNTIME_HOME/.schemas.next" "$CODEX_RUNTIME_HOME/schemas"
 mkdir -p "$HARNESS_HOME/worktrees"
-chmod 700 "$HARNESS_HOME" "$HARNESS_HOME/worktrees"
+chmod 700 "$HARNESS_HOME" "$HARNESS_HOME/worktrees" "$CODEX_RUNTIME_HOME"
 if [[ "${ESCAPEMENT_SKIP_SUPERVISOR_INSTALL:-0}" != "1" ]]; then
-  bash "$REPO_DIR/scripts/continuation-supervisor-install.sh"
+  shared_waker="$HARNESS_HOME/bin/wakeup_waker.py"
+  if [[ -x "$shared_waker" ]] \
+    && [[ "$("$shared_waker" --capabilities 2>/dev/null)" == "cross-host-continuation-v1" ]]; then
+    bash "$REPO_DIR/scripts/continuation-supervisor-install.sh"
+  else
+    ESCAPEMENT_SUPERVISOR_WAKER="$CODEX_RUNTIME_HOME/bin/wakeup_waker.py" \
+      bash "$REPO_DIR/scripts/continuation-supervisor-install.sh"
+  fi
 fi
 
 source_skill="$plugin_root/skills/beads-execution/SKILL.md"

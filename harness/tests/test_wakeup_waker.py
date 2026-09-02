@@ -136,6 +136,39 @@ def test_empty_schedule():
     assert ww.plan([], NOW, run_cmd=_runner(0)) == ([], [])
 
 
+def test_capability_probe_names_cross_host_continuation(capsys):
+    assert ww.main(["--capabilities"]) == 0
+    assert capsys.readouterr().out.strip() == "cross-host-continuation-v1"
+
+
+def test_fire_runs_continuation_watchdog_even_without_schedules(tmp_path, monkeypatch):
+    root = tmp_path / "threads"
+    root.mkdir()
+    calls = []
+    monkeypatch.setattr(ww, "HARNESS_ROOT", tmp_path)
+    monkeypatch.setattr(ww.wls, "reconcile", lambda _root: None)
+    monkeypatch.setattr(
+        ww.continuation_watchdog, "run_once",
+        lambda state_root: calls.append(state_root) or {"launched": 0},
+    )
+    assert ww.main(["--threads-root", str(root), "--fire"]) == 0
+    assert calls == [tmp_path / "watchdog"]
+
+
+def test_watchdog_failure_is_visible_without_skipping_schedule_reconciliation(tmp_path, monkeypatch):
+    root = tmp_path / "threads"
+    root.mkdir()
+    reconciled = []
+    monkeypatch.setattr(ww, "HARNESS_ROOT", tmp_path)
+    monkeypatch.setattr(ww.wls, "reconcile", lambda value: reconciled.append(value))
+    monkeypatch.setattr(
+        ww.continuation_watchdog, "run_once",
+        lambda _root: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+    assert ww.main(["--threads-root", str(root), "--fire"]) == 1
+    assert reconciled == [tmp_path]
+
+
 # --- dry-run contract -----------------------------------------------------
 
 
@@ -303,4 +336,3 @@ def test_fire_skips_locked_schedule_to_avoid_duplicate_wakers(
 
 
 # --- public --fire supervisor boundary -----------------------------------
-
