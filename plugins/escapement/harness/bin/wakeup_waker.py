@@ -188,6 +188,7 @@ def main(argv=None) -> int:
         action="store_true",
         help="actually spawn handoffs/resumes and rewrite schedules (default: dry-run)",
     )
+    ap.add_argument("--legacy-fire", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument(
         "--capabilities", action="store_true",
         help="print the installed supervisor capability contract and exit",
@@ -203,10 +204,14 @@ def main(argv=None) -> int:
     total_spawns = []
     exit_code = 0
     scheduled_ok = True
-    # Native-session continuation is the supervisor's latency-sensitive path.
-    # Run it before legacy schedule and worktree reconciliation, whose external
-    # checks can legitimately take minutes across a large retained registry.
-    if args.fire and root.resolve() == (HARNESS_ROOT / "threads").resolve():
+    canonical_root = root.resolve() == (HARNESS_ROOT / "threads").resolve()
+    if args.fire and args.legacy_fire:
+        ap.error("--fire and --legacy-fire are mutually exclusive")
+
+    # Keep native-session monitoring independent from legacy reconciliation.
+    # The latter may legitimately take minutes across a retained worktree
+    # registry; launchd must still get a fresh watchdog pass every minute.
+    if args.fire and canonical_root:
         try:
             watchdog_stats = continuation_watchdog.run_once(root.parent / "watchdog")
             print(json.dumps({"continuation_watchdog": watchdog_stats}, sort_keys=True))
@@ -216,6 +221,29 @@ def main(argv=None) -> int:
                 f"continuation watchdog incomplete: {type(exc).__name__}",
                 file=sys.stderr,
             )
+        try:
+            subprocess.Popen(
+                [
+                    sys.executable,
+                    str(pathlib.Path(__file__).resolve()),
+                    "--legacy-fire",
+                    "--threads-root",
+                    str(root),
+                ],
+                start_new_session=True,
+            )
+        except OSError as exc:
+            print(f"legacy reconciliation launch failed: {exc}", file=sys.stderr)
+            return 1
+        return exit_code
+
+    fire = args.fire or args.legacy_fire
+    legacy_lock = None
+    if args.legacy_fire:
+        legacy_lock = schedule_store.try_lock(root.parent / "legacy-fire.json")
+        if legacy_lock is None:
+            print("legacy reconciliation already running")
+            return 0
     for sched in iter_schedule_paths(root):
         # Trust boundary: a check entry's `command` is shell-executed by the
         # launchd-detached waker. Refuse any schedule another local user could
@@ -228,7 +256,7 @@ def main(argv=None) -> int:
             )
             continue
         lock_file = None
-        if args.fire:
+        if fire:
             lock_file = _try_lock(sched)
             if lock_file is None:
                 scheduled_ok = False
@@ -264,9 +292,9 @@ def main(argv=None) -> int:
                     raise
 
             kept, spawns = plan(
-                entries, now, run_cmd=run_check if args.fire else _dry_run_runner
+                entries, now, run_cmd=run_check if fire else _dry_run_runner
             )
-            if args.fire:
+            if fire:
                 schedule_writable = True
                 if context_failed:
                     scheduled_ok = False
@@ -315,7 +343,7 @@ def main(argv=None) -> int:
         finally:
             if lock_file is not None:
                 lock_file.close()
-    if args.fire:
+    if fire:
         try:
             wls.reconcile(root.parent)
         except (OSError, RuntimeError, ValueError) as exc:
@@ -328,10 +356,12 @@ def main(argv=None) -> int:
             exit_code = 1
             print("scheduled-work inspection was incomplete", file=sys.stderr)
     for s in total_spawns:
-        print(json.dumps({"would_spawn" if not args.fire else "spawned": s}))
+        print(json.dumps({"would_spawn" if not fire else "spawned": s}))
     print(
-        f"{'FIRED' if args.fire else 'DRY-RUN'}: {len(total_spawns)} spawn(s) planned"
+        f"{'FIRED' if fire else 'DRY-RUN'}: {len(total_spawns)} spawn(s) planned"
     )
+    if legacy_lock is not None:
+        legacy_lock.close()
     return exit_code
 
 
