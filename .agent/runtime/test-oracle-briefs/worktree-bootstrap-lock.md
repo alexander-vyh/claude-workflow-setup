@@ -61,6 +61,10 @@ public JSON observations determine the outcome.
   directory descriptors. Inspection, locking, detachment, and restoration use
   those descriptors so a later parent rename or symlink cannot redirect a
   rollback into another directory.
+- Replacement controls retain the original inode under a separate name before
+  creating the replacement. They must not rely on `unlink` followed by create,
+  because filesystems may immediately reuse the inode and make the negative
+  control inert.
 - Preserve the existing standard-library-only Python runtime, public create and
   finish contracts, source resolution, Beads verification, guarded rollback,
   and generated Claude/Codex parity.
