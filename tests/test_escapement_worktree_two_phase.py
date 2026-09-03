@@ -1839,7 +1839,8 @@ def test_recovery_preserves_same_sha_ref_replaced_before_recovery(
         pending["branch_ref_inode"],
     )
     assert (loose_ref.stat().st_dev, loose_ref.stat().st_ino) == recorded_identity
-    loose_ref.unlink()
+    original_ref = tmp_path / "original-created-ref"
+    os.rename(loose_ref, original_ref)
     loose_ref.write_text(f"{source}\n", encoding="utf-8")
     replacement_identity = (loose_ref.stat().st_dev, loose_ref.stat().st_ino)
     assert replacement_identity != recorded_identity
@@ -2507,7 +2508,8 @@ os.fsync = watched_fsync
 
     if replace_lock:
         original_identity = (lock_path.stat().st_dev, lock_path.stat().st_ino)
-        lock_path.unlink()
+        original_lock = tmp_path / "original-branch-lock"
+        os.rename(lock_path, original_lock)
         lock_path.write_bytes(lock_content)
         lock_path.chmod(0o600)
         replacement_identity = (lock_path.stat().st_dev, lock_path.stat().st_ino)
@@ -2784,7 +2786,8 @@ os.unlink = blocked_unlink
         original_identity = (private_claim.stat().st_dev, private_claim.stat().st_ino)
         content = private_claim.read_bytes()
         mode = private_claim.stat().st_mode & 0o777
-        private_claim.unlink()
+        original_claim = tmp_path / "original-private-lock-claim"
+        os.rename(private_claim, original_claim)
         private_claim.write_bytes(content)
         private_claim.chmod(mode)
         replacement_identity = (
@@ -3227,7 +3230,8 @@ os.link = guarded_link
     if replace_lock:
         original = packed_lock.stat()
         original_identity = (original.st_dev, original.st_ino)
-        packed_lock.unlink()
+        original_lock = tmp_path / "original-packed-lock"
+        os.rename(packed_lock, original_lock)
         packed_lock.write_bytes(lock_content)
         packed_lock.chmod(original.st_mode & 0o777)
         replacement = packed_lock.stat()
