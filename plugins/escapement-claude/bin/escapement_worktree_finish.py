@@ -21,6 +21,7 @@ from escapement_worktree_root import (
     unresolved_root_sync,
 )
 from escapement_worktree_registry import (
+    CREATION_PHASES,
     LifecycleEntry,
     LifecycleEntryMissing,
     delete_lifecycle,
@@ -198,6 +199,12 @@ def finish_lifecycle(lifecycle_id: str) -> dict[str, str]:
             }
         value = _value(entry)
         phase = value.get("phase", "created")
+        if phase in CREATION_PHASES:
+            return {
+                "lifecycle_id": lifecycle_id,
+                "reason": "bootstrap-incomplete",
+                "status": "pending",
+            }
         approved = value.get("approved_head_sha")
         if phase in {"approved", "worktree_removed", "ref_deleted"} and isinstance(approved, str):
             ctx = resolve_repository(entry.repository)

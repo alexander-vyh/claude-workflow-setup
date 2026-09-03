@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Create repository-owned Git worktrees as a verified transaction."""
+# file-complexity-waiver: one public create transaction; recovery is extracted
 
 from __future__ import annotations
 
@@ -7,6 +8,7 @@ import argparse
 import json
 import os
 import re
+import secrets
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -17,15 +19,16 @@ from escapement_worktree_bootstrap import (
     resolve_bootstrap_contract,
     run_bootstrap,
 )
+from escapement_worktree_allocate_ref import allocate_branch_ref
 from escapement_worktree_cleanup import SemanticConflict, github_repository
 from escapement_worktree_git import (
     CreationIdentity,
     RepositoryContext,
     ResolvedSource,
     WorktreeError,
+    bind_creation_token,
     capture_creation_identity,
     git,
-    registered_branch_owners,
     repository_transaction_lock,
     resolve_default_source,
     resolve_explicit_source,
@@ -34,6 +37,11 @@ from escapement_worktree_git import (
     target_owned_by_creation,
 )
 from escapement_worktree_finish import finish_lifecycle
+from escapement_worktree_recovery import (
+    abort_creation_locked,
+    creation_error,
+    recover_lifecycle,
+)
 from escapement_worktree_registry import (
     ensure_registry,
     lifecycle_exists,
@@ -242,203 +250,190 @@ def verify_created_worktree(
     return True
 
 
-def rollback_created_artifacts(
+def verify_final_creation(
     ctx: RepositoryContext,
+    request: WorktreeRequest,
     target: Path,
-    branch: str,
-    expected_sha: str,
-    creation_identity: CreationIdentity | None = None,
-) -> list[str]:
-    residue: list[str] = []
-    if target.exists() or target.is_symlink():
-        try:
-            owned, reason = target_owned_by_creation(
-                ctx,
-                target,
-                branch,
-                expected_sha,
-                creation_identity,
+    source: ResolvedSource,
+    root_beads: dict[str, str] | None,
+    creation_identity: CreationIdentity,
+    creation_token: str,
+) -> bool:
+    beads_verified = verify_created_worktree(
+        ctx, request, target, source, root_beads
+    )
+    owned, ownership_reason = target_owned_by_creation(
+        ctx,
+        target,
+        request.branch,
+        source.sha,
+        creation_identity,
+        creation_token,
+    )
+    if not owned:
+        if "HEAD does not match" in ownership_reason:
+            raise WorktreeError(
+                f"created worktree HEAD mismatch: {ownership_reason}"
             )
-        except WorktreeError as error:
-            owned, reason = False, str(error)
-        if owned:
-            removed = git(
-                ctx,
-                "worktree",
-                "remove",
-                "--force",
-                str(target),
-                check=False,
-            )
-            if removed.returncode:
-                detail = removed.stderr.strip() or removed.stdout.strip()
-                residue.append(f"failed to remove worktree {target}: {detail}")
-        else:
-            residue.append(f"preserved unowned target {target}: {reason}")
-
-    branch_ref = f"refs/heads/{branch}"
-    try:
-        current = git(
-            ctx,
-            "rev-parse",
-            "--verify",
-            f"{branch_ref}^{{commit}}",
-            check=False,
+        raise WorktreeError(
+            "created worktree identity changed during final verification: "
+            f"{ownership_reason}"
         )
-        if current.returncode != 0:
-            presence = git(
-                ctx,
-                "show-ref",
-                "--verify",
-                "--quiet",
-                branch_ref,
-                check=False,
-            )
-            if presence.returncode == 1:
-                return residue
-            detail = current.stderr.strip() or current.stdout.strip()
-            detail = detail or f"rev-parse exited {current.returncode}"
-            if presence.returncode not in {0, 1}:
-                presence_detail = presence.stderr.strip() or presence.stdout.strip()
-                presence_detail = presence_detail or (
-                    f"show-ref exited {presence.returncode}"
-                )
-                detail = f"{detail}; absence check failed: {presence_detail}"
-            residue.append(f"failed to inspect branch {branch_ref}: {detail}")
-            return residue
-        current_sha = current.stdout.strip()
-        if current_sha != expected_sha:
-            residue.append(
-                "refused to delete moved branch "
-                f"{branch_ref}: expected {expected_sha}, found {current_sha}"
-            )
-        else:
-            owners = registered_branch_owners(ctx, branch_ref)
-            if owners:
-                residue.append(
-                    f"refused to delete registered branch {branch_ref}: "
-                    f"owned by worktree {owners[0]!r}"
-                )
-                return residue
-            deleted = git(
-                ctx,
-                "update-ref",
-                "-d",
-                branch_ref,
-                expected_sha,
-                check=False,
-            )
-            if deleted.returncode:
-                detail = deleted.stderr.strip() or deleted.stdout.strip()
-                residue.append(f"failed to delete branch {branch_ref}: {detail}")
-    except WorktreeError as error:
-        residue.append(f"failed to inspect branch {branch_ref}: {error}")
-    return residue
+    return beads_verified
 
 
 def create_worktree(request: WorktreeRequest) -> CreationResult:
     ctx = resolve_repository(request.repo)
     ensure_registry()
-    with lifecycle_lock(request.name), repository_transaction_lock(ctx):
-        if lifecycle_exists(request.name):
-            raise WorktreeError(f"lifecycle receipt already exists: {request.name}")
-        target = validate_request(ctx, request)
-        source = (
-            resolve_explicit_source(ctx, request.source)
-            if request.source is not None
-            else resolve_default_source(ctx)
-        )
-        root_sync = (
-            synchronize_resolved_default(ctx, source)
-            if source.kind == "remote-default"
-            else RootSyncResult(
-                repo=ctx.primary,
-                branch="",
-                previous_sha="",
-                target_sha="",
-                status="ineligible",
-                reason="explicit-source",
-            )
-        )
-        bootstrap = resolve_bootstrap_contract(ctx, source)
-        root_beads = beads_context(ctx.primary)
-        branch_created = False
+    with lifecycle_lock(request.name):
         creation_identity: CreationIdentity | None = None
+        branch_created = False
         try:
-            git(
-                ctx,
-                "update-ref",
-                f"refs/heads/{request.branch}",
-                source.sha,
-                "",
-            )
-            branch_created = True
-            git(
-                ctx,
-                "worktree",
-                "add",
-                str(target),
-                request.branch,
-            )
-            creation_identity = capture_creation_identity(target)
-            beads_verified = verify_created_worktree(
-                ctx, request, target, source, root_beads
-            )
-            if bootstrap is not None:
-                run_bootstrap(bootstrap, target)
-                beads_verified = verify_created_worktree(
-                    ctx, request, target, source, root_beads
+            with repository_transaction_lock(ctx):
+                if lifecycle_exists(request.name):
+                    raise WorktreeError(
+                        f"lifecycle receipt already exists: {request.name}"
+                    )
+                target = validate_request(ctx, request)
+                source = (
+                    resolve_explicit_source(ctx, request.source)
+                    if request.source is not None
+                    else resolve_default_source(ctx)
                 )
-            origin_url = git(ctx, "config", "--get", "remote.origin.url").stdout.strip()
-            try:
-                origin = f"github.com/{github_repository(origin_url)}"
-            except SemanticConflict:
-                origin = origin_url
-            write_lifecycle(
-                request.name,
-                {
+                root_sync = (
+                    synchronize_resolved_default(ctx, source)
+                    if source.kind == "remote-default"
+                    else RootSyncResult(
+                        repo=ctx.primary,
+                        branch="",
+                        previous_sha="",
+                        target_sha="",
+                        status="ineligible",
+                        reason="explicit-source",
+                    )
+                )
+                bootstrap = resolve_bootstrap_contract(ctx, source)
+                root_beads = beads_context(ctx.primary)
+                origin_url = git(
+                    ctx, "config", "--get", "remote.origin.url"
+                ).stdout.strip()
+                try:
+                    origin = f"github.com/{github_repository(origin_url)}"
+                except SemanticConflict:
+                    origin = origin_url
+                receipt: dict[str, object] = {
                     "schema_version": 1,
                     "lifecycle_id": request.name,
                     "repository": str(ctx.primary),
                     "common_directory": str(ctx.common_dir),
                     "origin": origin,
-                    "worktree": str(target.resolve(strict=True)),
+                    "worktree": str(target),
                     "branch_ref": f"refs/heads/{request.branch}",
                     "source_sha": source.sha,
-                    "phase": "created",
+                    "phase": "allocating",
+                    "creation_token": secrets.token_hex(32),
+                    "branch_allocated": False,
+                    "branch_allocation_state": "unstarted",
                     "finish_requested": False,
                     "approved_head_sha": None,
                     "last_reason": None,
-                },
-            )
-        except (WorktreeError, OSError) as error:
-            failure = (
-                error
-                if isinstance(error, WorktreeError)
-                else WorktreeError(f"worktree operation failed: {error}")
-            )
-            receipt_retained = lifecycle_exists(request.name)
-            if receipt_retained:
-                raise WorktreeError(
-                    f"{failure}; durable lifecycle receipt retained with worktree "
-                    "for recovery"
-                ) from None
-            residue = (
-                rollback_created_artifacts(
-                    ctx,
-                    target,
-                    request.branch,
-                    source.sha,
-                    creation_identity,
-                )
-                if branch_created
-                else []
-            )
-            if residue:
-                raise WorktreeError(
-                    f"{failure}; rollback residue: {'; '.join(residue)}"
-                ) from None
-            raise failure from None
+                }
+                write_lifecycle(request.name, receipt)
+                try:
+                    allocate_branch_ref(
+                        ctx,
+                        request.name,
+                        request.branch,
+                        source.sha,
+                        receipt,
+                    )
+                    branch_created = True
+                    git(
+                        ctx,
+                        "worktree",
+                        "add",
+                        str(target),
+                        request.branch,
+                    )
+                    creation_identity = capture_creation_identity(target)
+                    bind_creation_token(
+                        creation_identity, str(receipt["creation_token"])
+                    )
+                    if bootstrap is not None:
+                        beads_verified = verify_created_worktree(
+                            ctx, request, target, source, root_beads
+                        )
+                        receipt.update(phase="bootstrap_pending")
+                    else:
+                        beads_verified = verify_final_creation(
+                            ctx,
+                            request,
+                            target,
+                            source,
+                            root_beads,
+                            creation_identity,
+                            str(receipt["creation_token"]),
+                        )
+                        receipt.update(phase="created")
+                    write_lifecycle(request.name, receipt)
+                except (WorktreeError, OSError) as error:
+                    branch_created = branch_created or receipt.get(
+                        "branch_allocation_state"
+                    ) in {"prepared", "committed"}
+                    residue = abort_creation_locked(
+                        ctx,
+                        request.name,
+                        target,
+                        request.branch,
+                        source.sha,
+                        receipt,
+                        creation_identity,
+                        branch_created=branch_created,
+                    )
+                    raise creation_error(error, residue) from None
+
+            if bootstrap is not None:
+                try:
+                    run_bootstrap(bootstrap, target)
+                except (WorktreeError, OSError) as error:
+                    with repository_transaction_lock(ctx):
+                        residue = abort_creation_locked(
+                            ctx,
+                            request.name,
+                            target,
+                            request.branch,
+                            source.sha,
+                            receipt,
+                            creation_identity,
+                            branch_created=branch_created,
+                        )
+                    raise creation_error(error, residue) from None
+
+                with repository_transaction_lock(ctx):
+                    try:
+                        beads_verified = verify_final_creation(
+                            ctx,
+                            request,
+                            target,
+                            source,
+                            root_beads,
+                            creation_identity,
+                            str(receipt["creation_token"]),
+                        )
+                        receipt.update(phase="created", last_reason=None)
+                        write_lifecycle(request.name, receipt)
+                    except (WorktreeError, OSError) as error:
+                        residue = abort_creation_locked(
+                            ctx,
+                            request.name,
+                            target,
+                            request.branch,
+                            source.sha,
+                            receipt,
+                            creation_identity,
+                            branch_created=branch_created,
+                        )
+                        raise creation_error(error, residue) from None
         finally:
             if creation_identity is not None:
                 os.close(creation_identity.descriptor)
@@ -464,6 +459,8 @@ def _parser() -> argparse.ArgumentParser:
     create.add_argument("--source")
     finish = commands.add_parser("finish")
     finish.add_argument("--lifecycle-id", required=True)
+    recover = commands.add_parser("recover")
+    recover.add_argument("--lifecycle-id", required=True)
     sync_root = commands.add_parser("sync-root")
     sync_root.add_argument("--repo", type=Path, required=True)
     return parser
@@ -478,6 +475,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 1 if root_result.status == "ineligible" else 0
         if args.command == "finish":
             print(json.dumps(finish_lifecycle(args.lifecycle_id), sort_keys=True))
+            return 0
+        if args.command == "recover":
+            print(json.dumps(recover_lifecycle(args.lifecycle_id), sort_keys=True))
             return 0
         result = create_worktree(
             WorktreeRequest(

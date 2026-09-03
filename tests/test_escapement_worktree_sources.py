@@ -49,6 +49,8 @@ from pathlib import Path
 
 real_git = os.environ["REAL_GIT"]
 args = sys.argv[1:]
+if "update-ref" in args and "--stdin" in args:
+    os.execv(real_git, [real_git, *args])
 result = subprocess.run([real_git, *args], capture_output=True, check=False)
 if "ls-remote" in args and args[-1] == "HEAD":
     counter_path = Path(os.environ["RACE_COUNTER"])

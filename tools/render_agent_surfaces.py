@@ -99,12 +99,17 @@ SHARED_RUNTIME_SUPPORT = {
     "bin/escapement-worktree",
     "bin/escapement_worktree.py",
     "bin/escapement_worktree_activity.py",
+    "bin/escapement_worktree_allocate_ref.py",
     "bin/escapement_worktree_bootstrap.py",
     "bin/escapement_worktree_cleanup.py",
     "bin/escapement_worktree_finish.py",
     "bin/escapement_worktree_git.py",
     "bin/escapement_worktree_github.py",
     "bin/escapement_worktree_registry.py",
+    "bin/escapement_worktree_recovery.py",
+    "bin/escapement_worktree_rollback_fs.py",
+    "bin/escapement_worktree_rollback_lock.py",
+    "bin/escapement_worktree_rollback_ref.py",
     "bin/escapement_worktree_root.py",
 }
 CODEX_HOOK_SUPPORT = {
