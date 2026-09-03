@@ -16,6 +16,22 @@ from pathlib import Path
 from escapement_worktree_git import OBJECT_ID_RE, WorktreeError
 
 LIFECYCLE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+CREATION_PHASES = frozenset(
+    {
+        "allocating",
+        "bootstrap_pending",
+        "bootstrap_failed",
+        "rollback_claimed",
+        "rollback_worktree_removed",
+        "rollback_ref_claimed",
+        "rollback_ref_detached",
+        "rollback_ref_restoring",
+        "rollback_ref_removed",
+    }
+)
+LIFECYCLE_PHASES = CREATION_PHASES | frozenset(
+    {"created", "requested", "approved", "worktree_removed", "ref_deleted"}
+)
 
 
 class LifecycleEntryMissing(WorktreeError):
@@ -31,6 +47,8 @@ class LifecycleEntry:
     worktree: Path
     branch_ref: str
     source_sha: str
+    phase: str
+    creation_token: str | None
     raw: bytes
 
 
@@ -115,7 +133,7 @@ def delete_lifecycle(lifecycle_id: str) -> None:
 
 
 @contextmanager
-def lifecycle_lock(lifecycle_id: str) -> Iterator[None]:
+def lifecycle_lock(lifecycle_id: str, *, blocking: bool = True) -> Iterator[bool]:
     root = ensure_registry()
     validate_lifecycle_id(lifecycle_id)
     lock_path = root / f".{lifecycle_id}.lock"
@@ -141,8 +159,13 @@ def lifecycle_lock(lifecycle_id: str) -> Iterator[None]:
             os.close(descriptor)
         raise
     with stream:
-        fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
-        yield
+        operation = fcntl.LOCK_EX if blocking else fcntl.LOCK_EX | fcntl.LOCK_NB
+        try:
+            fcntl.flock(stream.fileno(), operation)
+        except BlockingIOError:
+            yield False
+            return
+        yield True
 
 
 def _trusted_directory(path: Path) -> Path:
@@ -218,6 +241,17 @@ def load_lifecycle(lifecycle_id: str, *, expected_raw: bytes | None = None) -> L
         raise WorktreeError("lifecycle entry branch ref is invalid")
     if not OBJECT_ID_RE.fullmatch(value["source_sha"]):
         raise WorktreeError("lifecycle entry source SHA is invalid")
+    phase = value.get("phase", "created")
+    if not isinstance(phase, str) or phase not in LIFECYCLE_PHASES:
+        raise WorktreeError("lifecycle entry phase is invalid")
+    creation_token = value.get("creation_token")
+    if creation_token is not None and (
+        not isinstance(creation_token, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", creation_token)
+    ):
+        raise WorktreeError("lifecycle entry creation token is invalid")
+    if phase in CREATION_PHASES and creation_token is None:
+        raise WorktreeError("incomplete lifecycle entry has no creation token")
     return LifecycleEntry(
         lifecycle_id=lifecycle_id,
         repository=repository,
@@ -226,5 +260,7 @@ def load_lifecycle(lifecycle_id: str, *, expected_raw: bytes | None = None) -> L
         worktree=worktree,
         branch_ref=branch_ref,
         source_sha=value["source_sha"].lower(),
+        phase=phase,
+        creation_token=creation_token,
         raw=raw,
     )

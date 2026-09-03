@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import fcntl
 import re
+import stat
 import subprocess
 from collections.abc import Mapping, Sequence
 from collections.abc import Iterator
@@ -14,6 +15,7 @@ from pathlib import Path
 from typing import Literal
 
 OBJECT_ID_RE = re.compile(r"^[0-9a-fA-F]{40}(?:[0-9a-fA-F]{24})?$")
+CREATION_TOKEN_FILE = "escapement-creation-owner"
 
 
 @dataclass(frozen=True)
@@ -117,12 +119,94 @@ def _admin_metadata(target: Path) -> tuple[Path, int, int]:
 
 def capture_creation_identity(target: Path) -> CreationIdentity:
     admin_dir, device, inode = _admin_metadata(target)
+    descriptor = os.open(
+        admin_dir,
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0),
+    )
+    metadata = os.fstat(descriptor)
+    if metadata.st_dev != device or metadata.st_ino != inode:
+        os.close(descriptor)
+        raise WorktreeError("Git administrative creation instance changed")
     return CreationIdentity(
         admin_dir=admin_dir,
         device=device,
         inode=inode,
-        descriptor=os.open(admin_dir, os.O_RDONLY),
+        descriptor=descriptor,
     )
+
+
+def bind_creation_token(identity: CreationIdentity, token: str) -> None:
+    """Durably bind a receipt token to the exact Git admin directory."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(
+            CREATION_TOKEN_FILE,
+            flags,
+            0o600,
+            dir_fd=identity.descriptor,
+        )
+        os.write(descriptor, f"{token}\n".encode())
+        os.fsync(descriptor)
+        os.fsync(identity.descriptor)
+    except OSError as error:
+        raise WorktreeError(
+            f"creation ownership token could not be persisted: {error}"
+        ) from error
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def admin_token_matches(admin_dir: Path, expected_token: str) -> bool:
+    """Return whether an exact Git administrative directory owns the receipt."""
+    try:
+        directory = os.open(
+            admin_dir,
+            os.O_RDONLY
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+        )
+    except OSError:
+        return False
+    descriptor: int | None = None
+    try:
+        directory_metadata = os.fstat(directory)
+        if not stat.S_ISDIR(directory_metadata.st_mode):
+            return False
+        descriptor = os.open(
+            CREATION_TOKEN_FILE,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=directory,
+        )
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            return False
+        if metadata.st_uid != os.getuid() or metadata.st_mode & 0o077:
+            return False
+        with os.fdopen(descriptor, "rb", closefd=False) as stream:
+            observed = stream.read(129)
+        return observed == f"{expected_token}\n".encode()
+    except OSError:
+        return False
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        os.close(directory)
+
+
+def creation_token_matches(target: Path, expected_token: str) -> bool:
+    """Return whether the target's current Git admin instance owns the receipt."""
+    try:
+        admin_dir, device, inode = _admin_metadata(target)
+        metadata = admin_dir.stat()
+    except (OSError, WorktreeError):
+        return False
+    if metadata.st_dev != device or metadata.st_ino != inode:
+        return False
+    return admin_token_matches(admin_dir, expected_token)
 
 
 def target_owned_by_creation(
@@ -131,6 +215,7 @@ def target_owned_by_creation(
     branch: str,
     expected_sha: str,
     creation_identity: CreationIdentity | None,
+    creation_token: str | None = None,
 ) -> tuple[bool, str]:
     if target.is_symlink():
         return False, "target is a symlink"
@@ -157,6 +242,10 @@ def target_owned_by_creation(
             or inode != creation_identity.inode
         ):
             return False, "Git administrative creation instance was replaced"
+    if creation_token is not None and not creation_token_matches(
+        target, creation_token
+    ):
+        return False, "Git administrative creation token does not match"
     try:
         target_path = target.resolve(strict=True)
         top_path = Path(top.stdout.strip()).resolve(strict=True)

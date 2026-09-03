@@ -9,6 +9,19 @@ import pathlib
 import subprocess
 
 
+CREATION_PHASES = {
+    "allocating",
+    "bootstrap_pending",
+    "bootstrap_failed",
+    "rollback_claimed",
+    "rollback_worktree_removed",
+    "rollback_ref_claimed",
+    "rollback_ref_detached",
+    "rollback_ref_restoring",
+    "rollback_ref_removed",
+}
+
+
 def reconcile(
     harness_root: pathlib.Path, *, cli: pathlib.Path | None = None
 ) -> dict[str, object]:
@@ -27,8 +40,19 @@ def reconcile(
         if receipt.is_symlink() or not receipt.is_file() or receipt.suffix != ".json":
             raise RuntimeError(f"invalid lifecycle registry entry: {receipt.name}")
         lifecycle_id = receipt.stem
+        try:
+            value = json.loads(receipt.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise RuntimeError(
+                f"worktree lifecycle receipt is malformed: {receipt.name}: {error}"
+            ) from error
+        if not isinstance(value, dict):
+            raise RuntimeError(
+                f"worktree lifecycle receipt is malformed: {receipt.name}"
+            )
+        command = "recover" if value.get("phase") in CREATION_PHASES else "finish"
         result = subprocess.run(
-            [str(cli), "finish", "--lifecycle-id", lifecycle_id],
+            [str(cli), command, "--lifecycle-id", lifecycle_id],
             env={**os.environ, "CONTINUATION_HARNESS_HOME": str(harness_root)},
             text=True,
             capture_output=True,

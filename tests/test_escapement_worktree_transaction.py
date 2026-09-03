@@ -1,4 +1,5 @@
 """End-to-end transaction and rollback controls for Escapement worktrees."""
+# file-complexity-waiver: one public transaction fixture matrix and its failure boundaries
 
 from __future__ import annotations
 
@@ -416,23 +417,18 @@ if mode == "cleanup" and (
     raise SystemExit(43)
 if mode == "external-branch":
     marker = Path(os.environ["EXTERNAL_BRANCH_MARKER"])
-    if "worktree" in args and "add" in args and "-b" in args and not marker.exists():
-        branch = args[args.index("-b") + 1]
-        source = args[-1]
+    if "update-ref" in args and not marker.exists():
         subprocess.run(
             [
                 os.environ["REAL_GIT"],
                 "-C",
                 args[args.index("-C") + 1],
                 "update-ref",
-                f"refs/heads/{branch}",
-                source,
+                os.environ["EXTERNAL_BRANCH_REF"],
+                os.environ["EXTERNAL_BRANCH_SHA"],
             ],
             check=True,
         )
-        marker.touch()
-    elif "update-ref" in args and args[-1] == "" and not marker.exists():
-        subprocess.run([os.environ["REAL_GIT"], *args[:-1]], check=True)
         marker.touch()
 if (
     mode == "branch-inspection"
@@ -441,6 +437,8 @@ if (
 ):
     print("simulated rollback branch inspection failure", file=sys.stderr)
     raise SystemExit(74)
+if mode == "add-fails" and "worktree" in args and "add" in args:
+    raise SystemExit(42)
 result = subprocess.run([os.environ["REAL_GIT"], *args])
 if mode == "partial" and "worktree" in args and "add" in args:
     raise SystemExit(42)
@@ -478,6 +476,8 @@ import sys
 from pathlib import Path
 
 args = sys.argv[1:]
+if "update-ref" in args and "--stdin" in args:
+    os.execv(os.environ["REAL_GIT"], [os.environ["REAL_GIT"], *args])
 result = subprocess.run(
     [os.environ["REAL_GIT"], *args],
     text=True,
@@ -528,7 +528,9 @@ raise SystemExit(result.returncode)
     }
 
 
-def test_partial_git_creation_failure_is_inspected_and_cleaned(tmp_path: Path) -> None:
+def test_partial_git_creation_failure_preserves_the_unbound_worktree(
+    tmp_path: Path,
+) -> None:
     scenario = make_remote_scenario(tmp_path)
     result = run_cli(
         scenario.primary,
@@ -542,7 +544,8 @@ def test_partial_git_creation_failure_is_inspected_and_cleaned(tmp_path: Path) -
         env=_git_proxy(tmp_path, "partial"),
     )
     assert result.returncode != 0
-    assert not (scenario.primary / ".worktrees" / "partial").exists()
+    target = scenario.primary / ".worktrees" / "partial"
+    assert target.exists()
     assert (
         git(
             scenario.primary,
@@ -552,8 +555,47 @@ def test_partial_git_creation_failure_is_inspected_and_cleaned(tmp_path: Path) -
             "refs/heads/feature/partial",
             check=False,
         ).returncode
-        != 0
+        == 0
     )
+    receipt = json.loads(
+        (scenario.primary.parent / "harness/worktrees/partial.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert receipt["phase"] == "bootstrap_failed"
+    assert receipt["last_reason"] == "creation-instance-mismatch"
+
+
+def test_worktree_add_failure_before_creation_cleans_the_owned_branch(
+    tmp_path: Path,
+) -> None:
+    scenario = make_remote_scenario(tmp_path)
+    target = scenario.primary / ".worktrees" / "add-fails"
+    branch_ref = "refs/heads/feature/add-fails"
+
+    result = run_cli(
+        scenario.primary,
+        "create",
+        "--repo",
+        str(scenario.primary),
+        "--name",
+        "add-fails",
+        "--branch",
+        "feature/add-fails",
+        env=_git_proxy(tmp_path, "add-fails"),
+    )
+
+    assert result.returncode != 0
+    assert not target.exists()
+    assert git(
+        scenario.primary,
+        "show-ref",
+        "--verify",
+        "--quiet",
+        branch_ref,
+        check=False,
+    ).returncode == 1
+    assert not (scenario.primary.parent / "harness/worktrees/add-fails.json").exists()
 
 
 def test_same_sha_branch_created_by_another_writer_survives_failed_creation(
@@ -564,6 +606,12 @@ def test_same_sha_branch_created_by_another_writer_survives_failed_creation(
     branch = "feature/external-winner"
     branch_ref = f"refs/heads/{branch}"
     env = _git_proxy(tmp_path, "external-branch")
+    env.update(
+        {
+            "EXTERNAL_BRANCH_REF": branch_ref,
+            "EXTERNAL_BRANCH_SHA": scenario.remote_head_sha,
+        }
+    )
 
     result = run_cli(
         scenario.primary,
@@ -586,12 +634,27 @@ def test_same_sha_branch_created_by_another_writer_survives_failed_creation(
 def test_cleanup_failure_reports_exact_residue(tmp_path: Path) -> None:
     scenario = make_remote_scenario(tmp_path)
     target = scenario.primary / ".worktrees" / "cleanup-fails"
-    git_env = _git_proxy(tmp_path, "cleanup")
     beads_env = _beads_env(tmp_path, scenario, mismatch=target)
-    env = {**git_env, **beads_env}
-    env["PATH"] = (
-        f"{git_env['PATH'].split(os.pathsep, 1)[0]}{os.pathsep}{beads_env['PATH']}"
+    fault_dir = tmp_path / "cleanup-fault"
+    fault_dir.mkdir()
+    (fault_dir / "sitecustomize.py").write_text(
+        """import shutil
+
+real_rmtree = shutil.rmtree
+
+def fail_rollback_cleanup(path, *args, **kwargs):
+    if "escapement-worktree-rollbacks" in str(path):
+        raise OSError("simulated exact rollback cleanup failure")
+    return real_rmtree(path, *args, **kwargs)
+
+shutil.rmtree = fail_rollback_cleanup
+""",
+        encoding="utf-8",
     )
+    env = {
+        **beads_env,
+        "PYTHONPATH": f"{fault_dir}{os.pathsep}{os.environ.get('PYTHONPATH', '')}",
+    }
     result = run_cli(
         scenario.primary,
         "create",
@@ -604,9 +667,24 @@ def test_cleanup_failure_reports_exact_residue(tmp_path: Path) -> None:
         env=env,
     )
     assert result.returncode != 0
-    assert str(target) in result.stderr
-    assert "refs/heads/feature/cleanup-fails" in result.stderr
-    assert target.exists()
+    assert "simulated exact rollback cleanup failure" in result.stderr
+    assert ".escapement-rollback-" in result.stderr
+    assert not target.exists()
+    receipt = json.loads(
+        (scenario.primary.parent / "harness/worktrees/cleanup-fails.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert receipt["phase"] == "rollback_claimed"
+    common_dir = Path(
+        git(
+            scenario.primary,
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-common-dir",
+        ).stdout.strip()
+    )
+    assert list((common_dir / "escapement-worktree-rollbacks").glob("*/worktree"))
     assert (
         git(
             scenario.primary,
@@ -670,12 +748,48 @@ def test_branch_inspection_failure_reports_surviving_ref_residue(
     target = scenario.primary / ".worktrees" / "branch-inspection-residue"
     branch = "feature/branch-inspection-residue"
     branch_ref = f"refs/heads/{branch}"
-    git_env = _git_proxy(tmp_path, "branch-inspection", inspection_ref=branch_ref)
     beads_env = _beads_env(tmp_path, scenario, mismatch=target)
-    env = {**git_env, **beads_env}
-    env["PATH"] = (
-        f"{git_env['PATH'].split(os.pathsep, 1)[0]}{os.pathsep}{beads_env['PATH']}"
+    common_dir = Path(
+        git(
+            scenario.primary,
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-common-dir",
+        ).stdout.strip()
     )
+    watched_ref = common_dir / branch_ref
+    fault_dir = tmp_path / "branch-inspection-fault"
+    fault_dir.mkdir()
+    (fault_dir / "sitecustomize.py").write_text(
+        """import os
+
+real_open = os.open
+
+def fail_ref_inspection(path, flags, *args, **kwargs):
+    candidate = os.fspath(path)
+    watched = os.environ["WATCHED_REF"]
+    if (
+        (
+            (os.path.isabs(candidate) and os.path.abspath(candidate) == watched)
+            or (
+                not os.path.isabs(candidate)
+                and os.path.basename(candidate) == os.path.basename(watched)
+            )
+        )
+        and flags & os.O_ACCMODE == os.O_RDONLY
+    ):
+        raise PermissionError("simulated rollback branch inspection failure")
+    return real_open(path, flags, *args, **kwargs)
+
+os.open = fail_ref_inspection
+""",
+        encoding="utf-8",
+    )
+    env = {
+        **beads_env,
+        "PYTHONPATH": f"{fault_dir}{os.pathsep}{os.environ.get('PYTHONPATH', '')}",
+        "WATCHED_REF": str(watched_ref),
+    }
 
     result = run_cli(
         scenario.primary,
